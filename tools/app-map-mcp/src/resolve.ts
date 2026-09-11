@@ -30,8 +30,17 @@
  *
  * Layer: map (imports types + tree + signature).
  */
-import type { AnyTree, DriverTarget, ElementDef, ElementId, FindElementResult, Fingerprint, LoadedMap, Locator, ResolveResult, ScreenId, TreeNode } from './types.ts';
-import { NotImplementedError } from './errors.ts';
+import type { AnyTree, DriverTarget, ElementDef, ElementId, FindElementResult, Fingerprint, LoadedMap, Locator, ResolveHit, ResolveMiss, ResolveResult, ScreenId, TreeNode } from './types.ts';
+import { DEGRADED_THRESHOLD, DEFAULT_LOCATOR_WEIGHTS, LOCATOR_STRATEGIES, REDACTED, isGateId } from './types.ts';
+import { AppMapError, ERROR_CODES } from './errors.ts';
+import { centerOf, labelOf, nodeAtPath, parentOf, pathOf, screenRoot, siblingIndex, walk } from './tree.ts';
+import { gateSignatureMatches, roleLabelMatches } from './signature.ts';
+import { formatFindElement } from './format.ts';
+
+/** 03 §6: a disambiguated hit keeps 90 % of the locator weight */
+export const DISAMBIGUATION_FACTOR = 0.9;
+export const MISS_CANDIDATES_MAX = 3;
+export const FIND_ELEMENT_ALTERNATIVES_MAX = 5;
 
 export interface ResolveOptions {
   /** exclude nodes under matched gate dialogs (default true) */
@@ -40,26 +49,254 @@ export interface ResolveOptions {
   gatesPresent?: readonly string[];
 }
 
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
+}
+
+function subtreeSet(node: TreeNode): Set<TreeNode> {
+  const set = new Set<TreeNode>();
+  walk(node, (n) => { set.add(n); });
+  return set;
+}
+
+/** the element belongs to a gate file (or is a gate dismiss control): resolve it against the whole tree */
+function isGateElement(map: LoadedMap, element: ElementDef): boolean {
+  if (isGateId(element.id) || /^gate\./.test(element.id)) return true;
+  const refs = map.elements.get(element.id) ?? [];
+  return refs.length > 0 && refs.every((r) => map.gates.has(r.screen));
+}
+
+/**
+ * Nodes under an `alert`/`sheet` (other than the screen root itself) whose subtree satisfies the
+ * signature of a gate that is present — those never satisfy a screen element (header).
+ */
+function gateDialogNodes(map: LoadedMap, tree: AnyTree, root: TreeNode, opts: ResolveOptions): Set<TreeNode> {
+  const excluded = new Set<TreeNode>();
+  const present = opts.gatesPresent !== undefined
+    ? opts.gatesPresent.map((id) => map.gates.get(id)).filter((g): g is NonNullable<typeof g> => g !== undefined)
+    : Array.from(map.gates.values()).filter((g) => gateSignatureMatches(tree, g));
+  if (present.length === 0) return excluded;
+  walk(tree, (n) => {
+    if (n === root || (n.role !== 'alert' && n.role !== 'sheet')) return undefined;
+    const sub: AnyTree = { ...tree, root: n } as AnyTree;
+    if (present.some((g) => gateSignatureMatches(sub, g))) {
+      for (const x of subtreeSet(n)) excluded.add(x);
+      return false;
+    }
+    return undefined;
+  });
+  return excluded;
+}
+
+function weightOf(locator: Locator): number {
+  const w = locator.weight;
+  if (typeof w === 'number' && Number.isFinite(w)) return Math.max(0, Math.min(1, w));
+  return DEFAULT_LOCATOR_WEIGHTS[locator.strategy] ?? 0;
+}
+
 export function resolve(map: LoadedMap, element: ElementDef, tree: AnyTree, opts: ResolveOptions = {}): ResolveResult {
-  void map; void element; void tree; void opts;
-  throw new NotImplementedError('resolve.resolve');
+  if (!element || typeof element !== 'object' || typeof element.id !== 'string') {
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, 'resolve: element definition is missing an id', 'pass an ElementDef from a loaded screen file');
+  }
+  if (!tree || typeof tree !== 'object' || !tree.root) {
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, 'resolve: tree has no root', 'pass a normalized tree (tree.normalizeTree)');
+  }
+  const gateElement = isGateElement(map, element);
+  // gate controls live beside the marker container (pilot alerts), so they search the whole tree
+  const scope = gateElement ? tree.root : screenRoot(tree);
+  const excludeGates = !gateElement && (opts.excludeGates ?? true);
+  const excluded = excludeGates ? gateDialogNodes(map, tree, scope, opts) : new Set<TreeNode>();
+
+  const locators = Array.isArray(element.locators) ? element.locators : [];
+  const tried: ResolveMiss['tried'] = [];
+  for (const locator of locators) {
+    if (!locator || typeof locator !== 'object' || !(LOCATOR_STRATEGIES as readonly string[]).includes(locator.strategy)) continue;
+    let matches = queryLocator(tree, locator, scope);
+    if (excluded.size > 0) matches = matches.filter((n) => !excluded.has(n));
+    tried.push({ strategy: locator.strategy, matches: matches.length });
+    const weight = weightOf(locator);
+    if (matches.length === 1) {
+      return hit(tree, element, matches[0]!, locator, weight, false);
+    }
+    if (matches.length > 1 && (locator.strategy === 'a11y_id' || locator.strategy === 'role_label')) {
+      // 03 §6: fingerprint disambiguation, confidence × 0.9
+      const picked = disambiguate(tree, matches, element.fingerprint);
+      if (picked !== undefined) return hit(tree, element, picked, locator, round4(weight * DISAMBIGUATION_FACTOR), true);
+    }
+  }
+  return miss(tree, element, scope, excluded, tried);
+}
+
+function hit(tree: AnyTree, element: ElementDef, node: TreeNode, locator: Locator, confidence: number, disambiguated: boolean): ResolveHit {
+  return {
+    status: 'hit',
+    element: element.id,
+    node,
+    path: safePath(tree, node),
+    strategy: locator.strategy,
+    locator,
+    confidence,
+    // 02 §5.2: a hit below the threshold proceeds but is a degraded match (heal proposal)
+    degraded: confidence < DEGRADED_THRESHOLD,
+    disambiguated,
+    target: targetFor(tree, node, locator.strategy),
+  };
+}
+
+function safePath(tree: AnyTree, node: TreeNode): string {
+  try {
+    return pathOf(tree, node);
+  } catch {
+    return '';
+  }
+}
+
+function miss(tree: AnyTree, element: ElementDef, scope: TreeNode, excluded: Set<TreeNode>, tried: ResolveMiss['tried']): ResolveMiss {
+  const candidates: ResolveMiss['candidates'] = [];
+  walk(scope, (n) => {
+    if (candidates.length >= MISS_CANDIDATES_MAX) return false;
+    if (excluded.has(n)) return false;
+    if (n.role !== element.role) return undefined;
+    const label = labelOf(n);
+    const id = n.a11y_id;
+    if (label === undefined && id === undefined) return undefined;
+    const c: ResolveMiss['candidates'][number] = { path: safePath(tree, n), role: n.role };
+    if (label !== undefined) c.label = label;
+    if (id !== undefined) c.a11y_id = id;
+    candidates.push(c);
+    return undefined;
+  });
+  return { status: 'miss', element: element.id, tried, candidates };
+}
+
+function contains(node: TreeNode, p: { x: number; y: number }): boolean {
+  const b = node.bbox_norm;
+  if (!b) return false;
+  return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
 }
 
 /** All nodes matching one locator (see semantics above). */
 export function queryLocator(tree: AnyTree, locator: Locator, scope?: TreeNode): TreeNode[] {
-  void tree; void locator; void scope;
-  throw new NotImplementedError('resolve.queryLocator');
+  if (!tree || !tree.root || !locator || typeof locator !== 'object') return [];
+  const root = scope ?? screenRoot(tree);
+  const out: TreeNode[] = [];
+  switch (locator.strategy) {
+    case 'a11y_id': {
+      const value = locator.value;
+      if (typeof value !== 'string' || value === '' || value === REDACTED) return [];
+      walk(root, (n) => { if (n.a11y_id === value) out.push(n); });
+      return out;
+    }
+    case 'role_label': {
+      const value = locator.value;
+      if (!value || typeof value !== 'object' || typeof value.role !== 'string') return [];
+      walk(root, (n) => { if (roleLabelMatches(n, value)) out.push(n); });
+      return out;
+    }
+    case 'text': {
+      const value = locator.value;
+      if (typeof value !== 'string' || value === '') return [];
+      walk(root, (n) => { if (labelOf(n) === value) out.push(n); });
+      return out;
+    }
+    case 'path': {
+      if (typeof locator.value !== 'string') return [];
+      const node = nodeAtPath(tree, locator.value);
+      if (node === undefined) return [];
+      // a path only counts inside the requested scope
+      if (root !== tree.root && !subtreeSet(root).has(node)) return [];
+      return [node];
+    }
+    case 'geometry': {
+      const p = locator.value;
+      if (!p || typeof p !== 'object' || typeof p.x !== 'number' || typeof p.y !== 'number') return [];
+      let best: TreeNode[] = [];
+      let bestArea = Number.POSITIVE_INFINITY;
+      walk(root, (n) => {
+        if (!contains(n, p)) return undefined;
+        const area = n.bbox_norm.w * n.bbox_norm.h;
+        if (area < bestArea - 1e-9) { bestArea = area; best = [n]; }
+        else if (Math.abs(area - bestArea) <= 1e-9) best.push(n);
+        return undefined;
+      });
+      return best;
+    }
+    default:
+      return [];
+  }
+}
+
+function centreDistance(node: TreeNode, fp: NonNullable<Fingerprint['bbox_norm']>): number {
+  const c = centerOf(node);
+  const fx = fp.x + fp.w / 2;
+  const fy = fp.y + fp.h / 2;
+  return Math.hypot(c.x - fx, c.y - fy);
 }
 
 /** Pick one of `matches` using the stored fingerprint; `undefined` when still ambiguous. */
 export function disambiguate(tree: AnyTree, matches: readonly TreeNode[], fingerprint: Fingerprint | undefined): TreeNode | undefined {
-  void tree; void matches; void fingerprint;
-  throw new NotImplementedError('resolve.disambiguate');
+  if (!Array.isArray(matches) || matches.length === 0) return undefined;
+  if (matches.length === 1) return matches[0];
+  if (!fingerprint || typeof fingerprint !== 'object') return undefined;
+  let pool: TreeNode[] = [...matches];
+  // 1. same parent role and same index among all siblings (02 §5.3)
+  if (fingerprint.sibling_index !== undefined || fingerprint.parent_role !== undefined) {
+    const filtered = pool.filter((n) => {
+      if (fingerprint.parent_role !== undefined) {
+        const parent = parentOf(tree, n);
+        if (parent === undefined || parent.role !== fingerprint.parent_role) return false;
+      }
+      if (fingerprint.sibling_index !== undefined && siblingIndex(tree, n) !== fingerprint.sibling_index) return false;
+      return true;
+    });
+    if (filtered.length === 1) return filtered[0];
+    if (filtered.length > 1) pool = filtered;
+  }
+  // 2. nearest bbox centre; an exact tie stays ambiguous
+  const bb = fingerprint.bbox_norm;
+  if (bb && typeof bb.x === 'number' && typeof bb.y === 'number' && typeof bb.w === 'number' && typeof bb.h === 'number') {
+    let best: TreeNode | undefined;
+    let bestD = Number.POSITIVE_INFINITY;
+    let tie = false;
+    for (const n of pool) {
+      const d = centreDistance(n, bb);
+      if (d < bestD - 1e-9) { best = n; bestD = d; tie = false; }
+      else if (Math.abs(d - bestD) <= 1e-9) tie = true;
+    }
+    return tie ? undefined : best;
+  }
+  return undefined;
 }
 
 export function targetFor(tree: AnyTree, node: TreeNode, viaStrategy: Locator['strategy']): DriverTarget {
-  void tree; void node; void viaStrategy;
-  throw new NotImplementedError('resolve.targetFor');
+  void tree;
+  if (typeof node.a11y_id === 'string' && node.a11y_id !== '' && node.a11y_id !== REDACTED) return { by: 'id', id: node.a11y_id };
+  if (typeof node.label === 'string' && node.label !== '' && node.label !== REDACTED) return { by: 'role_label', role: node.role, label: node.label };
+  if (viaStrategy === 'text') {
+    const text = labelOf(node);
+    if (typeof text === 'string' && text !== '' && text !== REDACTED) return { by: 'text', text };
+  }
+  const c = centerOf(node);
+  return { by: 'point', x: c.x, y: c.y };
+}
+
+function norm(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** the segments between the feature and the kind: `invoice.add.button` → `add`, `a.b.c.d` → `b c` */
+function middleSegment(id: string): string {
+  const parts = id.split('.');
+  if (parts.length <= 2) return parts[parts.length - 1] ?? id;
+  return parts.slice(1, -1).join(' ');
+}
+
+function screenOrGate(map: LoadedMap, screenId: ScreenId) {
+  const file = map.screens.get(screenId) ?? map.gates.get(screenId);
+  if (file === undefined) {
+    throw new AppMapError(ERROR_CODES.NOT_FOUND, `screen ${JSON.stringify(screenId)} is not in the map`, 'call summary for the list of screens, or identify_screen to find the current one');
+  }
+  return file;
 }
 
 /**
@@ -68,8 +305,44 @@ export function targetFor(tree: AnyTree, node: TreeNode, viaStrategy: Locator['s
  * alternatives for the miss payload.
  */
 export function findElementDef(map: LoadedMap, screenId: ScreenId, query: { element_id?: ElementId; intent?: string }): { element?: ElementDef; candidates: ElementDef[] } {
-  void map; void screenId; void query;
-  throw new NotImplementedError('resolve.findElementDef');
+  const file = screenOrGate(map, screenId);
+  const elements = Array.isArray(file.elements) ? file.elements : [];
+  const q = query ?? {};
+  if (typeof q.element_id === 'string' && q.element_id !== '') {
+    const element = elements.find((e) => e.id === q.element_id);
+    if (element) return { element, candidates: [] };
+    // alternatives: same feature prefix first, then the rest, ≤5
+    const feature = q.element_id.split('.')[0] ?? '';
+    const same = elements.filter((e) => e.id.split('.')[0] === feature);
+    const rest = elements.filter((e) => !same.includes(e));
+    return { candidates: [...same, ...rest].slice(0, FIND_ELEMENT_ALTERNATIVES_MAX) };
+  }
+  if (typeof q.intent === 'string' && q.intent.trim() !== '') {
+    const exact = elements.filter((e) => e.intent === q.intent);
+    if (exact.length === 1) return { element: exact[0], candidates: [] };
+    if (exact.length > 1) return { candidates: exact.slice(0, FIND_ELEMENT_ALTERNATIVES_MAX) };
+    const needle = norm(q.intent);
+    if (needle === '') return { candidates: elements.slice(0, FIND_ELEMENT_ALTERNATIVES_MAX) };
+    const loose = elements.filter((e) => {
+      const hay = [e.intent, e.label, middleSegment(e.id)].filter((x): x is string => typeof x === 'string').map(norm);
+      return hay.some((h) => h.includes(needle));
+    });
+    if (loose.length === 1) return { element: loose[0], candidates: [] };
+    if (loose.length > 1) return { candidates: loose.slice(0, FIND_ELEMENT_ALTERNATIVES_MAX) };
+    return { candidates: elements.slice(0, FIND_ELEMENT_ALTERNATIVES_MAX) };
+  }
+  throw new AppMapError(ERROR_CODES.BAD_INPUT, 'find_element needs element_id or intent', 'pass {screen_id, element_id} or {screen_id, intent}');
+}
+
+/** the driver target a locator describes without a tree (static `find_element`) */
+function staticTarget(element: ElementDef, locator: Locator): DriverTarget {
+  switch (locator.strategy) {
+    case 'a11y_id': return { by: 'id', id: locator.value };
+    case 'role_label': return { by: 'role_label', role: locator.value.role, label: locator.value.label ?? element.label ?? locator.value.label_regex ?? '' };
+    case 'text': return { by: 'text', text: locator.value };
+    case 'geometry': return { by: 'point', x: locator.value.x, y: locator.value.y };
+    default: return element.label !== undefined ? { by: 'role_label', role: element.role, label: element.label } : { by: 'text', text: element.id };
+  }
 }
 
 /**
@@ -78,6 +351,33 @@ export function findElementDef(map: LoadedMap, screenId: ScreenId, query: { elem
  * weight and `degraded: false`. Output text ≤120 tokens (format.ts formatFindElement).
  */
 export function findElement(map: LoadedMap, screenId: ScreenId, query: { element_id?: ElementId; intent?: string }, tree?: AnyTree): FindElementResult {
-  void map; void screenId; void query; void tree;
-  throw new NotImplementedError('resolve.findElement');
+  const { element, candidates } = findElementDef(map, screenId, query);
+  const compact = (list: ElementDef[]) => list.map((e) => ({ id: e.id, ...(e.intent !== undefined ? { intent: e.intent } : {}), ...(e.label !== undefined ? { label: e.label } : {}) }));
+  if (element === undefined) {
+    const partial = { found: false as const, screen_id: screenId, candidates: compact(candidates), text: '' };
+    return { ...partial, text: formatFindElement(partial) };
+  }
+  if (tree !== undefined) {
+    const r = resolve(map, element, tree);
+    if (r.status === 'hit') {
+      const { node: _node, ...hitNoNode } = r;
+      void _node;
+      const partial = { found: true as const, screen_id: screenId, element: element.id, hit: hitNoNode, text: '' };
+      return { ...partial, text: formatFindElement(partial) };
+    }
+    const partial = { found: false as const, screen_id: screenId, element: element.id, miss: r, candidates: compact(candidates), text: '' };
+    return { ...partial, text: formatFindElement(partial) };
+  }
+  const top = (Array.isArray(element.locators) ? element.locators : [])[0];
+  if (top === undefined) {
+    const partial = { found: false as const, screen_id: screenId, element: element.id, candidates: compact(candidates), text: '' };
+    return { ...partial, text: formatFindElement(partial) };
+  }
+  const weight = weightOf(top);
+  const hitNoNode: Omit<ResolveHit, 'node'> = {
+    status: 'hit', element: element.id, path: '', strategy: top.strategy, locator: top, confidence: weight,
+    degraded: false, disambiguated: false, target: staticTarget(element, top),
+  };
+  const partial = { found: true as const, screen_id: screenId, element: element.id, hit: hitNoNode, text: '' };
+  return { ...partial, text: formatFindElement(partial) };
 }

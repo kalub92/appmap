@@ -18,10 +18,16 @@
  *  5. keep `role`, `a11y_id`, `bbox_norm`, `enabled`, `focused`, `selected`, `children`;
  *     set `scrubbed: true`, `scrub_hits`.
  *
- * Layer: tree (imports types only). Pure.
+ * The tree-level `route` keeps its key (an identification signal) and loses its query string
+ * when the query hits the deny list; `viewport`, `build`, `app_id` and `captured_at` are copied
+ * as they are.
+ *
+ * Layer: tree (imports types/errors + tree.ts for `compactJson`). Pure.
  */
-import type { IdsRegistry, ScrubPolicy, ScrubbedTree, Tree } from './types.ts';
-import { NotImplementedError } from './errors.ts';
+import type { IdsRegistry, ScrubPolicy, ScrubbedTree, Tree, TreeNode } from './types.ts';
+import { REDACTED, STATIC_LABEL_ROLES, markerOfScreen } from './types.ts';
+import { AppMapError, ERROR_CODES } from './errors.ts';
+import { compactJson } from './tree.ts';
 
 /**
  * 07 §2.3.4 deny list. Order matters only for reporting. Each pattern is tested with `.test`
@@ -36,35 +42,175 @@ export const PII_PATTERNS: readonly RegExp[] = [
   /\b\d{3}-\d{2}-\d{4}\b/, // SSN-like
 ];
 
+const STATIC_ROLE_SET: ReadonlySet<string> = new Set(STATIC_LABEL_ROLES);
+
 /**
  * Build the policy from the registry and the static string table (`.local/strings.<platform>.txt`
  * ∪ labels/titles declared in screen files, i.e. `LoadedMap.staticLabels`).
+ *
+ * Gate dismiss controls (`ids.gates[].dismiss`, architecture.md decision 2) count as registered
+ * static ids. An element with `label_regex` is in `labelRegexById` only (its label survives
+ * solely through the regex, rule a'); one whose regex does not compile is treated as dynamic
+ * (label dropped, id still registered — the safe direction for a privacy filter; validate rule
+ * 1 reports it).
  */
 export function buildScrubPolicy(ids: IdsRegistry, staticLabels: ReadonlySet<string>, opts: { piiPatterns?: readonly RegExp[] } = {}): ScrubPolicy {
-  void ids; void staticLabels; void opts;
-  throw new NotImplementedError('scrub.buildScrubPolicy');
+  const staticIds = new Set<string>();
+  const dynamicIds = new Set<string>();
+  const labelRegexById = new Map<string, RegExp>();
+  const markers = new Set<string>();
+  const elements = Array.isArray(ids?.elements) ? ids.elements : [];
+  for (const el of elements) {
+    if (!el || typeof el.id !== 'string') continue;
+    if (el.dynamic === true) {
+      dynamicIds.add(el.id); // rule 2 wins over any label_regex
+      continue;
+    }
+    if (typeof el.label_regex === 'string' && el.label_regex !== '') {
+      // a computed label (07 §9) survives only when it matches — never via rule (a)
+      try {
+        labelRegexById.set(el.id, new RegExp(el.label_regex));
+      } catch {
+        dynamicIds.add(el.id); // invalid user regex: keep the id registered, drop its label
+      }
+      continue;
+    }
+    staticIds.add(el.id);
+  }
+  const gates = Array.isArray(ids?.gates) ? ids.gates : [];
+  for (const g of gates) {
+    if (g && typeof g.dismiss === 'string' && g.dismiss !== '') staticIds.add(g.dismiss);
+  }
+  const screens = Array.isArray(ids?.screens) ? ids.screens : [];
+  for (const s of screens) {
+    if (s && typeof s.id === 'string' && s.id !== '') markers.add(markerOfScreen(s.id));
+  }
+  return {
+    staticIds,
+    dynamicIds,
+    labelRegexById,
+    markers,
+    staticLabels: new Set(staticLabels),
+    piiPatterns: opts.piiPatterns ?? PII_PATTERNS,
+  };
+}
+
+function isRegisteredId(id: string, policy: ScrubPolicy): boolean {
+  return policy.staticIds.has(id) || policy.dynamicIds.has(id) || policy.markers.has(id) || policy.labelRegexById.has(id);
+}
+
+/** rule 3 — may this label survive on this node? */
+function labelAllowed(node: TreeNode, label: string, policy: ScrubPolicy): boolean {
+  const id = node.a11y_id;
+  if (id !== undefined) {
+    if (policy.staticIds.has(id)) return true; // (a)
+    const re = policy.labelRegexById.get(id);
+    if (re !== undefined && safeTest(re, label)) return true; // (a')
+  }
+  return STATIC_ROLE_SET.has(node.role) && policy.staticLabels.has(label); // (b)
+}
+
+/** `.test` with a reset `lastIndex` so a caller-supplied `g`/`y` pattern cannot go stateful. */
+function safeTest(re: RegExp, s: string): boolean {
+  if (re.global || re.sticky) re.lastIndex = 0;
+  const hit = re.test(s);
+  if (re.global || re.sticky) re.lastIndex = 0;
+  return hit;
+}
+
+interface Counter { hits: number }
+
+function scrubNode(node: TreeNode, policy: ScrubPolicy, inDynamic: boolean, counter: Counter): TreeNode {
+  const id = typeof node.a11y_id === 'string' && node.a11y_id !== '' ? node.a11y_id : undefined;
+  const dynamic = inDynamic || (id !== undefined && policy.dynamicIds.has(id));
+  const b = node.bbox_norm ?? { x: 0, y: 0, w: 0, h: 0 };
+  const out: TreeNode = { role: node.role, bbox_norm: { x: b.x, y: b.y, w: b.w, h: b.h }, children: [] };
+
+  if (id !== undefined) {
+    if (isRegisteredId(id, policy)) out.a11y_id = id;
+    else {
+      // rule 4 on unregistered ids (resource-ids / testTags can embed row data)
+      const r = redactString(id, policy.piiPatterns);
+      if (r.hit) counter.hits++;
+      out.a11y_id = r.value;
+    }
+  }
+  // rule 1: `value` and `text` are never copied. rules 2 + 3 + 4 on `label`:
+  if (!dynamic && typeof node.label === 'string' && labelAllowed(node, node.label, policy)) {
+    const r = redactString(node.label, policy.piiPatterns);
+    if (r.hit) counter.hits++;
+    out.label = r.value;
+  }
+  // rule 5: flags
+  if (typeof node.enabled === 'boolean') out.enabled = node.enabled;
+  if (typeof node.focused === 'boolean') out.focused = node.focused;
+  if (typeof node.selected === 'boolean') out.selected = node.selected;
+  const kids = Array.isArray(node.children) ? node.children : [];
+  for (const k of kids) {
+    if (k && typeof k === 'object') out.children.push(scrubNode(k, policy, dynamic, counter));
+  }
+  return out;
 }
 
 /** The ONLY place a `ScrubbedTree` is minted (the compile-time brand is applied by one cast here). */
 export function scrub(tree: Tree, policy: ScrubPolicy): ScrubbedTree {
-  void tree; void policy;
-  throw new NotImplementedError('scrub.scrub');
+  if (!tree || typeof tree !== 'object' || !tree.root || typeof tree.root !== 'object') {
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, 'scrub: tree has no root node', 'normalize the snapshot with tree.normalizeTree first');
+  }
+  if (!policy || !policy.staticIds || !policy.dynamicIds || !policy.piiPatterns) {
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, 'scrub: invalid policy', 'build it with buildScrubPolicy(ids, staticLabels)');
+  }
+  const counter: Counter = { hits: 0 };
+  const root = scrubNode(tree.root, policy, false, counter);
+  const out: Record<string, unknown> = { schema_version: 1, platform: tree.platform, source: tree.source };
+  if (tree.viewport !== undefined) out['viewport'] = { w: tree.viewport.w, h: tree.viewport.h };
+  if (tree.captured_at !== undefined) out['captured_at'] = tree.captured_at;
+  if (typeof tree.route === 'string') {
+    // the route is an identification signal (03 §5.3): only its query can carry data, so a hit
+    // there drops the query (`routeKey`) instead of the whole string
+    const q = tree.route.indexOf('?');
+    if (q >= 0 && redactString(tree.route.slice(q + 1), policy.piiPatterns).hit) {
+      counter.hits++;
+      out['route'] = tree.route.slice(0, q);
+    } else {
+      out['route'] = tree.route;
+    }
+  }
+  if (tree.build !== undefined) out['build'] = tree.build;
+  if (tree.app_id !== undefined) out['app_id'] = tree.app_id;
+  out['root'] = root;
+  out['scrubbed'] = true;
+  out['scrub_hits'] = counter.hits;
+  // The `[SCRUBBED]` symbol never exists at runtime (types.ts); this is the single cast that mints it.
+  return out as unknown as ScrubbedTree;
 }
 
 /** `[redacted]` when any pattern hits; pure. */
 export function redactString(s: string, patterns: readonly RegExp[] = PII_PATTERNS): { value: string; hit: boolean } {
-  void s; void patterns;
-  throw new NotImplementedError('scrub.redactString');
+  if (typeof s !== 'string') return { value: '', hit: false };
+  for (const p of patterns) {
+    if (safeTest(p, s)) return { value: REDACTED, hit: true };
+  }
+  return { value: s, hit: false };
 }
 
 /** Every substring of `text` that a pattern matches, with the pattern index — validate rule 8 (02 §10.8). */
 export function findForbiddenContent(text: string, patterns: readonly RegExp[] = PII_PATTERNS): Array<{ match: string; pattern: number }> {
-  void text; void patterns;
-  throw new NotImplementedError('scrub.findForbiddenContent');
+  const out: Array<{ match: string; pattern: number }> = [];
+  if (typeof text !== 'string' || text === '') return out;
+  for (let i = 0; i < patterns.length; i++) {
+    const p = patterns[i]!;
+    const flags = p.flags.includes('g') ? p.flags : `${p.flags}g`;
+    const g = new RegExp(p.source, flags);
+    for (const m of text.matchAll(g)) {
+      if (m[0] === '') break; // never spin on an empty match
+      out.push({ match: m[0], pattern: i });
+    }
+  }
+  return out;
 }
 
 /** Bytes of `compactJson(tree)` — the `perception_bytes` contribution of one observation (08 §2). */
 export function perceptionBytes(tree: ScrubbedTree): number {
-  void tree;
-  throw new NotImplementedError('scrub.perceptionBytes');
+  return Buffer.byteLength(compactJson(tree), 'utf8');
 }
