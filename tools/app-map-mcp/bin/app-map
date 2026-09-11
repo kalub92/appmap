@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# app-map CLI shim. Prefers the built dist/; falls back to running TypeScript source
+# directly (Node ≥ 22.18 type stripping) so hooks work on a fresh clone before `npm run build`.
+DIR=$(cd "$(dirname "$0")" && pwd)
+if [ -f "$DIR/../dist/cli.js" ]; then
+  exec node --disable-warning=ExperimentalWarning "$DIR/../dist/cli.js" "$@"
+else
+  exec node --disable-warning=ExperimentalWarning "$DIR/../src/cli.ts" "$@"
+fi

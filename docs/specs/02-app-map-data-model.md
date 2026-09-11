@@ -1,0 +1,227 @@
+# 02 — App-Map Data Model
+
+Status: draft v0.1 · Depends on: 01 (ids) · Consumed by: 03, 04, 05, 06
+
+## 1. Purpose
+
+Define exactly what is stored, where, in what shape, and how it survives a shared repo: many developers, many branches, many builds.
+
+## 2. Principles
+
+1. One file per entity: `screens/<screen_id>.yaml` (screen + its elements + outgoing edges), `recipes/<recipe_id>.yaml`. Two developers exploring different screens never touch the same file.
+2. **Durable fields only in git.** Structure, locators, status, provenance, `last_verified_build`. Counters, timings, and per-session state live in `app-map/.local/cache.sqlite` (git-ignored). `app-map export` writes durable fields deterministically.
+3. Deterministic serialization: fixed key order per schema, lists sorted by `id`, block style, 2-space indent, LF, no trailing timestamps except `manifest.generated_at`. `app-map export` twice in a row produces no diff.
+4. Structure only (07 §2). A YAML file never contains a screenshot path, a field value, cell text, or a user identifier.
+5. Every file validates against `app-map/schema/<type>.schema.json`.
+
+## 3. Manifest
+
+```yaml
+# app-map/ios/manifest.yaml
+schema_version: 1
+app_id: com.example.app
+platform: ios                      # ios | android
+deep_link_scheme: appmap
+build:                             # last build the map was exported against
+  version: "2026.9.1"
+  build_number: "4412"
+  git_sha: a1b2c3d
+generated_at: 2026-09-10T00:00:00Z
+generator: app-map-mcp@0.1.0
+```
+
+## 4. Screens
+
+### 4.1 Schema
+
+```yaml
+# app-map/ios/screens/invoice_list.yaml
+id: invoice_list
+kind: screen                        # screen | gate
+title: Invoices                     # static nav title; optional
+deep_link: appmap://invoice_list    # or `none`
+signature:
+  marker: screen.invoice_list       # strongest signal (01 R3)
+  route: appmap://invoice_list
+  nav_class: InvoiceListView        # SwiftUI view / VC / Activity / Fragment
+  required_ids: [invoice.list.table, invoice.add.button]
+  structural_hash: sha1:9f2c1e…     # see §4.4
+dynamic_regions: [invoice.list.table]
+gates: [gate.push_permission]       # gates observed on entry to this screen
+variants:
+  - id: new_invoices_ui
+    when: {flag: new_invoices_ui, value: true}
+    required_ids: [invoice.list.collection, invoice.add.button]
+    structural_hash: sha1:77ab0d…
+elements:
+  - id: invoice.add.button
+    role: button
+    label: New Invoice              # static UI copy only; never data
+    intent: open_new_invoice
+    intent_critical: false
+    locators:                       # ranked; weights are defaults from §5.2
+      - {strategy: a11y_id, value: invoice.add.button, weight: 1.0}
+      - {strategy: role_label, value: {role: button, label: New Invoice}, weight: 0.6}
+      - {strategy: text, value: New Invoice, weight: 0.3}
+      - {strategy: path, value: navigationBar/button[1], weight: 0.25}
+      - {strategy: geometry, value: {x: 0.92, y: 0.08}, weight: 0.1}   # normalized to screen size
+    fingerprint: {role: button, label_norm: new invoice, parent_role: navigationBar, sibling_index: 1}
+    status: verified                # candidate | verified | healed_pending_review
+    last_verified_build: "4412"
+  - id: invoice.list.table
+    role: list
+    dynamic: true
+    locators:
+      - {strategy: a11y_id, value: invoice.list.table, weight: 1.0}
+    status: verified
+    last_verified_build: "4412"
+edges:
+  - action: {type: tap, element: invoice.add.button}
+    to: invoice_new
+    preconditions: [{auth: logged_in}]
+    postconditions: [{screen: invoice_new}]
+    status: verified
+    last_verified_build: "4412"
+meta:
+  sources: [router_export, exploration]
+  status: verified
+  last_verified_build: "4412"
+```
+
+### 4.2 Gates
+
+A gate is a screen with `kind: gate`, a `dismiss` edge, and no deep link. OS dialogs that cannot carry your ids use a `role_label` signature:
+
+```yaml
+id: gate.push_permission
+kind: gate
+signature:
+  marker: none
+  required_labels: [{role: button, label_regex: "^(Allow|Don.t Allow)$"}]
+elements:
+  - id: gate.push_permission.deny
+    role: button
+    locators:
+      - {strategy: role_label, value: {role: button, label_regex: "^Don.t Allow$"}, weight: 0.8}
+edges:
+  - action: {type: tap, element: gate.push_permission.deny}
+    to: _previous                   # returns to whatever was underneath
+```
+
+### 4.3 Variants
+
+Feature flags, A/B arms, auth state. A variant overrides `required_ids`/`structural_hash` when its `when` condition holds. Conditions the server can evaluate: `flag` (from fixture or a debug endpoint), `auth`, `platform_version`. Unknown conditions are treated as "any variant may match" and the best-scoring one wins.
+
+### 4.4 Structural hash
+
+`sha1` over the sorted list of `(role, a11y_id)` pairs for nodes that have an id, excluding anything under a `dynamic_regions` id. Text is never hashed. Two builds with the same ids in the same roles produce the same hash even if layout, copy, or data changed.
+
+## 5. Elements and locators
+
+### 5.1 Strategies
+
+| strategy | value | iOS | Android | default weight |
+|---|---|---|---|---|
+| `a11y_id` | id string | accessibilityIdentifier | resource-id / testTag | 1.0 |
+| `role_label` | `{role, label \| label_regex}` | traits + label | class + content-desc/text | 0.6 |
+| `text` | visible text | label/value | text | 0.3 |
+| `path` | `parentRole/childRole[i]/…` from screen root | yes | yes | 0.25 |
+| `geometry` | normalized `{x, y}` | yes | yes | 0.1 |
+
+`text` is the first thing to break under copy edits and localization; it exists only as a fallback and is never the sole locator on a committed element.
+
+### 5.2 Resolution contract
+
+The server tries strategies in order; the first **unique** match wins and its weight becomes the match confidence. A hit on a strategy with weight < 0.6 is a *degraded match* and triggers a heal proposal (04 §7) even though the step proceeds. No unique match on any strategy is a *miss*.
+
+### 5.3 Fingerprint
+
+Stored at verification time and used only for heal scoring: `role`, `label_norm` (lowercased, punctuation stripped), `parent_role`, `sibling_index`, `bbox_norm`. Never contains values.
+
+## 6. Recipes
+
+```yaml
+# app-map/ios/recipes/create_invoice.yaml
+id: create_invoice
+version: 3
+platform: ios
+description: Create an invoice for a client with an amount and save it
+matches:                             # case-insensitive regex, tried in order
+  - "(create|new|make)( an?)? invoice"
+  - "bill (a |the )?(client|customer)"
+params:
+  - {name: amount, type: money, required: true}
+  - {name: client, type: string, required: true}
+preconditions: [{auth: logged_in}]
+entry:
+  deep_link: appmap://invoice_new?fixture=logged_in
+  fallback_path: [invoice_list, invoice_new]        # screen ids; edges resolved at run time
+steps:
+  - {id: s1, action: tap,   element: invoice.amount.field,  expect: {focused: invoice.amount.field}}
+  - {id: s2, action: type,  element: invoice.amount.field,  text: "{amount}"}
+  - {id: s3, action: tap,   element: invoice.client.picker, expect: {screen: client_picker}}
+  - {id: s4, action: select, list: client.picker.list, match: {text: "{client}"}, expect: {screen: invoice_new}}
+  - {id: s5, action: tap,   element: invoice.save.button,   expect: {screen: invoice_detail}, intent_critical: true}
+verify: {screen: invoice_detail, visible: [invoice.detail.amount.text]}
+status: verified                     # candidate | verified | ci_gate | retired
+provenance:
+  compiled_from: traj_2026-09-01_0007
+  compiled_by: app-map-mcp@0.1.0
+  reviewed_by: caleb
+last_verified_build: "4412"
+```
+
+Step actions: `tap`, `type`, `select`, `swipe`, `open_link`, `wait_for`, `dismiss_gate`. `expect` conditions: `screen`, `focused`, `visible`, `not_visible`, `text_present` (static copy only). Every step with an `expect` is a verification point; steps without one inherit "screen unchanged".
+
+Status lifecycle (04 §8): `candidate` on compile → `verified` after ≥3 successful replays across ≥2 sessions → `ci_gate` after ≥95% replay success across ≥3 builds → `retired` when a screen it depends on is removed.
+
+## 7. Local-only data
+
+Never committed. Retention: 14 days, then deleted by the server on start.
+
+```jsonl
+// app-map/.local/trajectories/<session>.jsonl — one observation per driver tool call
+{"ts":"2026-09-10T17:02:11Z","session":"…","seq":12,"task":"create invoice for $50 for Acme",
+ "tool":"mcp__argent__tap","input":{"id":"invoice.add.button"},
+ "screen_before":"invoice_list","screen_after":"invoice_new",
+ "signature_after":{"marker":"screen.invoice_new","structural_hash":"sha1:…","required_present":1.0},
+ "snapshot":{"…scrubbed compact tree…"},"ok":true,"latency_ms":420}
+```
+
+```jsonl
+// app-map/.local/events.jsonl — metrics feed (08 §2)
+{"ts":"…","kind":"recipe_run","recipe":"create_invoice","mode":"headless","ok":true,"steps":5,"heals":0,"ms":6100}
+```
+
+SQLite (`cache.sqlite`, WAL mode) holds the loaded map plus volatile counters: per-element `hits`, `misses`, `heals`; per-recipe `runs`, `replay_success`, `fallbacks`; per-screen `last_seen`. Schema is an implementation detail of 03, regenerable from YAML + logs.
+
+## 8. Versioning, migration, decay
+
+- `last_verified_build` is the build number of the last successful verification. On a new build, confidence decays: `confidence = base × 0.9^(builds_since_verified)`, floor 0.2. Decay is computed, not stored.
+- A renamed id is a migration: `app-map migrate-id <old> <new>` rewrites every reference across screens, recipes, and `ids.yaml` in one commit.
+- A screen removed from the router export is marked `status: retired` (not deleted) for one release, then deleted; recipes depending on it become `retired`.
+- `schema_version` bumps require a migration script under `tools/app-map-mcp/migrations/`.
+
+## 9. Merge rules
+
+- Per-entity files make most merges trivial. When both sides edit the same screen file, the conflict is real and a human resolves it; `app-map validate` must pass before merge.
+- Optional (phase 2): `.gitattributes` line `app-map/**/*.yaml merge=app-map-yaml` with a semantic 3-way merge driver (`app-map merge-driver`) that merges per key and per `id`-keyed list item and conflicts only on same-key changes. Requires a one-time `git config` per developer; GitHub's web merge ignores it, so CI validation remains the backstop.
+- Never merge `.local/` — it is ignored.
+
+## 10. Validation rules (`app-map validate`)
+
+1. Every file validates against its JSON Schema.
+2. Every element id, screen id, gate id exists in `ids.yaml`.
+3. Every edge `to`, every recipe `entry.fallback_path` entry, every `expect.screen` references an existing screen.
+4. Every committed element has ≥2 locators and an `a11y_id` locator unless `role_label` is the only possible strategy (OS gates).
+5. No `text` strategy stands alone.
+6. `intent_critical` elements in `ids.yaml` and screen files agree.
+7. Serialization is canonical (re-export produces no diff).
+8. No forbidden content: regex sweep for emails, phone numbers, 16-digit numbers, currency values inside `elements[].label` or any `text` field; any hit fails validation.
+
+## 11. Acceptance criteria
+
+- [ ] JSON Schemas for manifest, screen, recipe, ids, router-export exist and are used by `app-map validate`.
+- [ ] Hand-written pilot files (login, invoice_list, invoice_new, invoice_detail, client_picker, one gate, `create_invoice`) validate.
+- [ ] `app-map export` is idempotent on the pilot files.
+- [ ] A branch that adds `screens/client_picker.yaml` merges into a branch that edits `screens/invoice_list.yaml` with no conflict.
