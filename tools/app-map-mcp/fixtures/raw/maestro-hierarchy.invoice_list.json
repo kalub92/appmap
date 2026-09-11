@@ -1,0 +1,902 @@
+{
+  "_note": "best-effort `maestro hierarchy` JSON shape; the real output nests {attributes, children} — verify at implementation time. resource-id carries the a11y id on both platforms.",
+  "elements": [
+    {
+      "attributes": {
+        "resource-id": "",
+        "text": "",
+        "accessibilityText": "Invoices",
+        "hintText": "",
+        "class": "android.widget.FrameLayout",
+        "bounds": "[0,0][390,844]",
+        "enabled": "true",
+        "focused": "false",
+        "selected": "false",
+        "checked": "false",
+        "clickable": "false"
+      },
+      "children": [
+        {
+          "attributes": {
+            "resource-id": "",
+            "text": "",
+            "accessibilityText": "",
+            "hintText": "",
+            "class": "android.widget.FrameLayout",
+            "bounds": "[0,0][390,844]",
+            "enabled": "true",
+            "focused": "false",
+            "selected": "false",
+            "checked": "false",
+            "clickable": "false"
+          },
+          "children": [
+            {
+              "attributes": {
+                "resource-id": "",
+                "text": "",
+                "accessibilityText": "status bar",
+                "hintText": "",
+                "class": "android.view.View",
+                "bounds": "[0,0][390,47]",
+                "enabled": "true",
+                "focused": "false",
+                "selected": "false",
+                "checked": "false",
+                "clickable": "false"
+              },
+              "children": [
+                {
+                  "attributes": {
+                    "resource-id": "",
+                    "text": "9:41",
+                    "accessibilityText": "9:41",
+                    "hintText": "",
+                    "class": "android.widget.TextView",
+                    "bounds": "[24,14][64,34]",
+                    "enabled": "true",
+                    "focused": "false",
+                    "selected": "false",
+                    "checked": "false",
+                    "clickable": "false"
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "attributes": {
+                "resource-id": "screen.invoice_list",
+                "text": "",
+                "accessibilityText": "",
+                "hintText": "",
+                "class": "android.view.ViewGroup",
+                "bounds": "[0,47][390,844]",
+                "enabled": "true",
+                "focused": "false",
+                "selected": "false",
+                "checked": "false",
+                "clickable": "false"
+              },
+              "children": [
+                {
+                  "attributes": {
+                    "resource-id": "",
+                    "text": "",
+                    "accessibilityText": "Invoices",
+                    "hintText": "",
+                    "class": "androidx.compose.ui.platform.ComposeView",
+                    "bounds": "[0,47][390,91]",
+                    "enabled": "true",
+                    "focused": "false",
+                    "selected": "false",
+                    "checked": "false",
+                    "clickable": "false"
+                  },
+                  "children": [
+                    {
+                      "attributes": {
+                        "resource-id": "invoice.filter.button",
+                        "text": "Filter",
+                        "accessibilityText": "Filter",
+                        "hintText": "",
+                        "class": "android.widget.Button",
+                        "bounds": "[16,51][76,87]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": []
+                    },
+                    {
+                      "attributes": {
+                        "resource-id": "invoice.add.button",
+                        "text": "New Invoice",
+                        "accessibilityText": "New Invoice",
+                        "hintText": "",
+                        "class": "android.widget.Button",
+                        "bounds": "[280,51][380,87]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "attributes": {
+                    "resource-id": "",
+                    "text": "Invoices",
+                    "accessibilityText": "Invoices",
+                    "hintText": "",
+                    "class": "android.widget.TextView",
+                    "bounds": "[20,96][220,137]",
+                    "enabled": "true",
+                    "focused": "false",
+                    "selected": "false",
+                    "checked": "false",
+                    "clickable": "false"
+                  },
+                  "children": []
+                },
+                {
+                  "attributes": {
+                    "resource-id": "",
+                    "text": "",
+                    "accessibilityText": "segments",
+                    "hintText": "",
+                    "class": "android.view.ViewGroup",
+                    "bounds": "[16,145][374,181]",
+                    "enabled": "true",
+                    "focused": "false",
+                    "selected": "false",
+                    "checked": "false",
+                    "clickable": "false"
+                  },
+                  "children": [
+                    {
+                      "attributes": {
+                        "resource-id": "",
+                        "text": "All",
+                        "accessibilityText": "All",
+                        "hintText": "",
+                        "class": "android.widget.Button",
+                        "bounds": "[16,145][106,181]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "true",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": []
+                    },
+                    {
+                      "attributes": {
+                        "resource-id": "",
+                        "text": "Draft",
+                        "accessibilityText": "Draft",
+                        "hintText": "",
+                        "class": "android.widget.Button",
+                        "bounds": "[106,145][196,181]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": []
+                    },
+                    {
+                      "attributes": {
+                        "resource-id": "",
+                        "text": "Sent",
+                        "accessibilityText": "Sent",
+                        "hintText": "",
+                        "class": "android.widget.Button",
+                        "bounds": "[196,145][286,181]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": []
+                    },
+                    {
+                      "attributes": {
+                        "resource-id": "",
+                        "text": "Paid",
+                        "accessibilityText": "Paid",
+                        "hintText": "",
+                        "class": "android.widget.Button",
+                        "bounds": "[286,145][374,181]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "attributes": {
+                    "resource-id": "invoice.list.table",
+                    "text": "",
+                    "accessibilityText": "",
+                    "hintText": "",
+                    "class": "androidx.recyclerview.widget.RecyclerView",
+                    "bounds": "[0,190][390,761]",
+                    "enabled": "true",
+                    "focused": "false",
+                    "selected": "false",
+                    "checked": "false",
+                    "clickable": "false"
+                  },
+                  "children": [
+                    {
+                      "attributes": {
+                        "resource-id": "invoice.list.cell",
+                        "text": "",
+                        "accessibilityText": "Acme Corp, $1,250.00, Paid",
+                        "hintText": "",
+                        "class": "android.view.ViewGroup",
+                        "bounds": "[0,190][390,262]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": [
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Acme Corp",
+                            "accessibilityText": "Acme Corp",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[20,202][220,222]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "$1,250.00",
+                            "accessibilityText": "$1,250.00",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[240,202][350,222]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Paid",
+                            "accessibilityText": "Paid",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[20,230][100,246]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "",
+                            "accessibilityText": "chevron",
+                            "hintText": "",
+                            "class": "android.widget.ImageView",
+                            "bounds": "[360,216][372,236]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "attributes": {
+                        "resource-id": "invoice.list.cell",
+                        "text": "",
+                        "accessibilityText": "Globex LLC, $480.00, Sent",
+                        "hintText": "",
+                        "class": "android.view.ViewGroup",
+                        "bounds": "[0,262][390,334]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": [
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Globex LLC",
+                            "accessibilityText": "Globex LLC",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[20,274][220,294]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "$480.00",
+                            "accessibilityText": "$480.00",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[240,274][350,294]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Sent",
+                            "accessibilityText": "Sent",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[20,302][100,318]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "",
+                            "accessibilityText": "chevron",
+                            "hintText": "",
+                            "class": "android.widget.ImageView",
+                            "bounds": "[360,288][372,308]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "attributes": {
+                        "resource-id": "invoice.list.cell",
+                        "text": "",
+                        "accessibilityText": "Initech, $3,200.00, Overdue",
+                        "hintText": "",
+                        "class": "android.view.ViewGroup",
+                        "bounds": "[0,334][390,406]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": [
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Initech",
+                            "accessibilityText": "Initech",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[20,346][220,366]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "$3,200.00",
+                            "accessibilityText": "$3,200.00",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[240,346][350,366]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Overdue",
+                            "accessibilityText": "Overdue",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[20,374][100,390]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "",
+                            "accessibilityText": "chevron",
+                            "hintText": "",
+                            "class": "android.widget.ImageView",
+                            "bounds": "[360,360][372,380]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "attributes": {
+                        "resource-id": "invoice.list.cell",
+                        "text": "",
+                        "accessibilityText": "Umbrella Co, $95.50, Draft",
+                        "hintText": "",
+                        "class": "android.view.ViewGroup",
+                        "bounds": "[0,406][390,478]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": [
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Umbrella Co",
+                            "accessibilityText": "Umbrella Co",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[20,418][220,438]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "$95.50",
+                            "accessibilityText": "$95.50",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[240,418][350,438]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Draft",
+                            "accessibilityText": "Draft",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[20,446][100,462]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "",
+                            "accessibilityText": "chevron",
+                            "hintText": "",
+                            "class": "android.widget.ImageView",
+                            "bounds": "[360,432][372,452]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "attributes": {
+                        "resource-id": "invoice.list.cell",
+                        "text": "",
+                        "accessibilityText": "Hooli, $12,000.00, Sent",
+                        "hintText": "",
+                        "class": "android.view.ViewGroup",
+                        "bounds": "[0,478][390,550]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": [
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Hooli",
+                            "accessibilityText": "Hooli",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[20,490][220,510]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "$12,000.00",
+                            "accessibilityText": "$12,000.00",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[240,490][350,510]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Sent",
+                            "accessibilityText": "Sent",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[20,518][100,534]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "",
+                            "accessibilityText": "chevron",
+                            "hintText": "",
+                            "class": "android.widget.ImageView",
+                            "bounds": "[360,504][372,524]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "attributes": {
+                        "resource-id": "invoice.list.cell",
+                        "text": "",
+                        "accessibilityText": "Stark Industries, $760.25, Paid",
+                        "hintText": "",
+                        "class": "android.view.ViewGroup",
+                        "bounds": "[0,550][390,622]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": [
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Stark Industries",
+                            "accessibilityText": "Stark Industries",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[20,562][220,582]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "$760.25",
+                            "accessibilityText": "$760.25",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[240,562][350,582]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Paid",
+                            "accessibilityText": "Paid",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[20,590][100,606]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "",
+                            "accessibilityText": "chevron",
+                            "hintText": "",
+                            "class": "android.widget.ImageView",
+                            "bounds": "[360,576][372,596]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "attributes": {
+                    "resource-id": "",
+                    "text": "",
+                    "accessibilityText": "",
+                    "hintText": "",
+                    "class": "android.view.ViewGroup",
+                    "bounds": "[0,761][390,844]",
+                    "enabled": "true",
+                    "focused": "false",
+                    "selected": "false",
+                    "checked": "false",
+                    "clickable": "false"
+                  },
+                  "children": [
+                    {
+                      "attributes": {
+                        "resource-id": "nav.invoices.tab",
+                        "text": "Invoices",
+                        "accessibilityText": "Invoices",
+                        "hintText": "",
+                        "class": "android.widget.Button",
+                        "bounds": "[0,761][130,844]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "true",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": [
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "",
+                            "accessibilityText": "",
+                            "hintText": "",
+                            "class": "android.widget.ImageView",
+                            "bounds": "[51,768][79,796]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Invoices",
+                            "accessibilityText": "Invoices",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[41,800][89,814]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "attributes": {
+                        "resource-id": "nav.clients.tab",
+                        "text": "Clients",
+                        "accessibilityText": "Clients",
+                        "hintText": "",
+                        "class": "android.widget.Button",
+                        "bounds": "[130,761][260,844]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": [
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "",
+                            "accessibilityText": "",
+                            "hintText": "",
+                            "class": "android.widget.ImageView",
+                            "bounds": "[181,768][209,796]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Clients",
+                            "accessibilityText": "Clients",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[171,800][219,814]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "attributes": {
+                        "resource-id": "nav.settings.tab",
+                        "text": "Settings",
+                        "accessibilityText": "Settings",
+                        "hintText": "",
+                        "class": "android.widget.Button",
+                        "bounds": "[260,761][390,844]",
+                        "enabled": "true",
+                        "focused": "false",
+                        "selected": "false",
+                        "checked": "false",
+                        "clickable": "true"
+                      },
+                      "children": [
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "",
+                            "accessibilityText": "",
+                            "hintText": "",
+                            "class": "android.widget.ImageView",
+                            "bounds": "[311,768][339,796]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        },
+                        {
+                          "attributes": {
+                            "resource-id": "",
+                            "text": "Settings",
+                            "accessibilityText": "Settings",
+                            "hintText": "",
+                            "class": "android.widget.TextView",
+                            "bounds": "[301,800][349,814]",
+                            "enabled": "true",
+                            "focused": "false",
+                            "selected": "false",
+                            "checked": "false",
+                            "clickable": "false"
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

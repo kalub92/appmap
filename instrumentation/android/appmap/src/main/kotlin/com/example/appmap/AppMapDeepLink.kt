@@ -20,8 +20,8 @@ object AppMapDeepLink {
     const val SCHEME = "appmap"
     private const val TAG = "app-map"
 
-    /** Screen ids are bare snake_case names (01 R2); the marker is `screen.<id>`. */
-    private val SCREEN_ID = Regex("^[a-z0-9]+(_[a-z0-9]+)*$")
+    /** Screen ids are bare snake_case names (01 R2; app-map/schema/ids.schema.json); the marker is `screen.<id>`. */
+    private val SCREEN_ID = Regex("^[a-z][a-z0-9_]*$")
 
     /** The app's real router (01 R5). Installed from Application.onCreate in debug builds. */
     fun interface Router {

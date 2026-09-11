@@ -1,0 +1,12 @@
+{
+  "session_id": "sess_2026-09-10_0007",
+  "transcript_path": "/Users/dev/.claude/projects/-Users-dev-app/sess_2026-09-10_0007.jsonl",
+  "cwd": "/Users/dev/app",
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "mcp__argent__tap",
+  "tool_use_id": "toolu_01AbCdEg",
+  "tool_input": {
+    "id": "invoice.send.button"
+  },
+  "error": "element not found: invoice.send.button"
+}

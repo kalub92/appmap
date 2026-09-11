@@ -42,6 +42,7 @@ public final class AppMapRouterRegistry {
         let id: String
         let route: String
         let viewType: String
+        let title: String?
         let edges: [AppMapEdge]
     }
 
@@ -53,15 +54,16 @@ public final class AppMapRouterRegistry {
     public init() {}
 
     /// Registers a screen. Call at module load or first appearance; re-registering replaces.
-    public func register(id: String, route: String, viewType: Any.Type, staticEdges: [AppMapEdge] = []) {
-        register(id: id, route: route, viewTypeName: String(describing: viewType), staticEdges: staticEdges)
+    /// `route` is the screen's deep link (`appmap://<id>`) or `"none"`; `title` is the static nav title.
+    public func register(id: String, route: String, viewType: Any.Type, title: String? = nil, staticEdges: [AppMapEdge] = []) {
+        register(id: id, route: route, viewTypeName: String(describing: viewType), title: title, staticEdges: staticEdges)
     }
 
-    public func register(id: String, route: String, viewTypeName: String, staticEdges: [AppMapEdge] = []) {
+    public func register(id: String, route: String, viewTypeName: String, title: String? = nil, staticEdges: [AppMapEdge] = []) {
         #if APP_MAP_DEBUG
         lock.lock()
         defer { lock.unlock() }
-        screens[id] = Screen(id: id, route: route, viewType: viewTypeName, edges: staticEdges)
+        screens[id] = Screen(id: id, route: route, viewType: viewTypeName, title: title, edges: staticEdges)
         #endif
     }
 
@@ -102,7 +104,7 @@ public final class AppMapRouterRegistry {
         lock.lock()
         let screenList = screens.values
             .sorted { $0.id < $1.id }
-            .map { AppMapRouterExport.Screen(id: $0.id, route: $0.route, viewType: $0.viewType, edges: $0.edges) }
+            .map { AppMapRouterExport.Screen(id: $0.id, route: $0.route, viewType: $0.viewType, title: $0.title, edges: $0.edges) }
         let gateList = gates
             .sorted { $0.key < $1.key }
             .map { AppMapRouterExport.Gate(id: $0.key, dismiss: $0.value) }
@@ -136,17 +138,23 @@ public struct AppMapBuildInfo: Codable, Equatable, Sendable {
         self.gitSha = gitSha
     }
 
-    /// `CFBundleShortVersionString` / `CFBundleVersion`, plus the git sha from the Info.plist key
-    /// `AppMapGitSHA` (set by the build script) or the `APP_MAP_GIT_SHA` environment variable.
+    /// Placeholder that still satisfies the schema's hex pattern when no sha was wired up.
+    public static let unknownGitSha = "0000000"
+
+    /// `CFBundleShortVersionString` / `CFBundleVersion`, plus the git sha from the `APP_MAP_GIT_SHA`
+    /// environment variable (scripts/app-map/router-export.sh passes it via `SIMCTL_CHILD_`) or the
+    /// Info.plist key `AppMapGitSHA` set by the build script. Falls back to `unknownGitSha` with a log line.
     public static func current(
         bundle: Bundle = .main,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> AppMapBuildInfo {
         let info = bundle.infoDictionary ?? [:]
+        let sha = environment["APP_MAP_GIT_SHA"] ?? info["AppMapGitSHA"] as? String
+        if sha == nil { AppMapLog.error("git sha unknown; set APP_MAP_GIT_SHA or Info.plist AppMapGitSHA (01 R6)") }
         return AppMapBuildInfo(
             version: info["CFBundleShortVersionString"] as? String ?? "0",
             buildNumber: info["CFBundleVersion"] as? String ?? "0",
-            gitSha: environment["APP_MAP_GIT_SHA"] ?? info["AppMapGitSHA"] as? String ?? "unknown"
+            gitSha: sha ?? unknownGitSha
         )
     }
 }
@@ -157,6 +165,7 @@ public struct AppMapRouterExport: Codable, Equatable {
         public let id: String
         public let route: String
         public let viewType: String
+        public let title: String?      // omitted from JSON when nil
         public let edges: [AppMapEdge]
     }
 

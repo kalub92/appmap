@@ -1,0 +1,659 @@
+{
+  "_note": "best-effort XCUITest-like shape as returned by an Argent snapshot tool; src/tree.ts normalizes it. Field names unverified against the real driver.",
+  "platform": "ios",
+  "udid": "00000000-0000-0000-0000-000000000000",
+  "bundle_id": "com.example.app",
+  "build_number": "4412",
+  "screen": {
+    "width": 390,
+    "height": 844,
+    "scale": 3
+  },
+  "root": {
+    "type": "Application",
+    "label": "Invoices",
+    "frame": {
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 844
+    },
+    "children": [
+      {
+        "type": "Window",
+        "frame": {
+          "x": 0,
+          "y": 0,
+          "width": 390,
+          "height": 844
+        },
+        "children": [
+          {
+            "type": "Other",
+            "label": "status bar",
+            "frame": {
+              "x": 0,
+              "y": 0,
+              "width": 390,
+              "height": 47
+            },
+            "children": [
+              {
+                "type": "StaticText",
+                "label": "9:41",
+                "frame": {
+                  "x": 24,
+                  "y": 14,
+                  "width": 40,
+                  "height": 20
+                },
+                "children": []
+              }
+            ]
+          },
+          {
+            "type": "Other",
+            "identifier": "screen.invoice_list",
+            "frame": {
+              "x": 0,
+              "y": 47,
+              "width": 390,
+              "height": 797
+            },
+            "children": [
+              {
+                "type": "NavigationBar",
+                "label": "Invoices",
+                "frame": {
+                  "x": 0,
+                  "y": 47,
+                  "width": 390,
+                  "height": 44
+                },
+                "children": [
+                  {
+                    "type": "Button",
+                    "identifier": "invoice.filter.button",
+                    "label": "Filter",
+                    "enabled": true,
+                    "frame": {
+                      "x": 16,
+                      "y": 51,
+                      "width": 60,
+                      "height": 36
+                    },
+                    "children": []
+                  },
+                  {
+                    "type": "Button",
+                    "identifier": "invoice.add.button",
+                    "label": "New Invoice",
+                    "enabled": true,
+                    "frame": {
+                      "x": 280,
+                      "y": 51,
+                      "width": 100,
+                      "height": 36
+                    },
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "type": "StaticText",
+                "label": "Invoices",
+                "frame": {
+                  "x": 20,
+                  "y": 96,
+                  "width": 200,
+                  "height": 41
+                },
+                "children": []
+              },
+              {
+                "type": "Other",
+                "label": "segments",
+                "frame": {
+                  "x": 16,
+                  "y": 145,
+                  "width": 358,
+                  "height": 36
+                },
+                "children": [
+                  {
+                    "type": "Button",
+                    "label": "All",
+                    "selected": true,
+                    "frame": {
+                      "x": 16,
+                      "y": 145,
+                      "width": 90,
+                      "height": 36
+                    },
+                    "children": []
+                  },
+                  {
+                    "type": "Button",
+                    "label": "Draft",
+                    "selected": false,
+                    "frame": {
+                      "x": 106,
+                      "y": 145,
+                      "width": 90,
+                      "height": 36
+                    },
+                    "children": []
+                  },
+                  {
+                    "type": "Button",
+                    "label": "Sent",
+                    "selected": false,
+                    "frame": {
+                      "x": 196,
+                      "y": 145,
+                      "width": 90,
+                      "height": 36
+                    },
+                    "children": []
+                  },
+                  {
+                    "type": "Button",
+                    "label": "Paid",
+                    "selected": false,
+                    "frame": {
+                      "x": 286,
+                      "y": 145,
+                      "width": 88,
+                      "height": 36
+                    },
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "type": "Table",
+                "identifier": "invoice.list.table",
+                "enabled": true,
+                "frame": {
+                  "x": 0,
+                  "y": 190,
+                  "width": 390,
+                  "height": 571
+                },
+                "children": [
+                  {
+                    "type": "Cell",
+                    "identifier": "invoice.list.cell",
+                    "label": "Acme Corp, $1,250.00, Paid",
+                    "enabled": true,
+                    "frame": {
+                      "x": 0,
+                      "y": 190,
+                      "width": 390,
+                      "height": 72
+                    },
+                    "children": [
+                      {
+                        "type": "StaticText",
+                        "label": "Acme Corp",
+                        "frame": {
+                          "x": 20,
+                          "y": 202,
+                          "width": 200,
+                          "height": 20
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "$1,250.00",
+                        "frame": {
+                          "x": 240,
+                          "y": 202,
+                          "width": 110,
+                          "height": 20
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "Paid",
+                        "frame": {
+                          "x": 20,
+                          "y": 230,
+                          "width": 80,
+                          "height": 16
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "Image",
+                        "label": "chevron",
+                        "frame": {
+                          "x": 360,
+                          "y": 216,
+                          "width": 12,
+                          "height": 20
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "type": "Cell",
+                    "identifier": "invoice.list.cell",
+                    "label": "Globex LLC, $480.00, Sent",
+                    "enabled": true,
+                    "frame": {
+                      "x": 0,
+                      "y": 262,
+                      "width": 390,
+                      "height": 72
+                    },
+                    "children": [
+                      {
+                        "type": "StaticText",
+                        "label": "Globex LLC",
+                        "frame": {
+                          "x": 20,
+                          "y": 274,
+                          "width": 200,
+                          "height": 20
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "$480.00",
+                        "frame": {
+                          "x": 240,
+                          "y": 274,
+                          "width": 110,
+                          "height": 20
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "Sent",
+                        "frame": {
+                          "x": 20,
+                          "y": 302,
+                          "width": 80,
+                          "height": 16
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "Image",
+                        "label": "chevron",
+                        "frame": {
+                          "x": 360,
+                          "y": 288,
+                          "width": 12,
+                          "height": 20
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "type": "Cell",
+                    "identifier": "invoice.list.cell",
+                    "label": "Initech, $3,200.00, Overdue",
+                    "enabled": true,
+                    "frame": {
+                      "x": 0,
+                      "y": 334,
+                      "width": 390,
+                      "height": 72
+                    },
+                    "children": [
+                      {
+                        "type": "StaticText",
+                        "label": "Initech",
+                        "frame": {
+                          "x": 20,
+                          "y": 346,
+                          "width": 200,
+                          "height": 20
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "$3,200.00",
+                        "frame": {
+                          "x": 240,
+                          "y": 346,
+                          "width": 110,
+                          "height": 20
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "Overdue",
+                        "frame": {
+                          "x": 20,
+                          "y": 374,
+                          "width": 80,
+                          "height": 16
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "Image",
+                        "label": "chevron",
+                        "frame": {
+                          "x": 360,
+                          "y": 360,
+                          "width": 12,
+                          "height": 20
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "type": "Cell",
+                    "identifier": "invoice.list.cell",
+                    "label": "Umbrella Co, $95.50, Draft",
+                    "enabled": true,
+                    "frame": {
+                      "x": 0,
+                      "y": 406,
+                      "width": 390,
+                      "height": 72
+                    },
+                    "children": [
+                      {
+                        "type": "StaticText",
+                        "label": "Umbrella Co",
+                        "frame": {
+                          "x": 20,
+                          "y": 418,
+                          "width": 200,
+                          "height": 20
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "$95.50",
+                        "frame": {
+                          "x": 240,
+                          "y": 418,
+                          "width": 110,
+                          "height": 20
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "Draft",
+                        "frame": {
+                          "x": 20,
+                          "y": 446,
+                          "width": 80,
+                          "height": 16
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "Image",
+                        "label": "chevron",
+                        "frame": {
+                          "x": 360,
+                          "y": 432,
+                          "width": 12,
+                          "height": 20
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "type": "Cell",
+                    "identifier": "invoice.list.cell",
+                    "label": "Hooli, $12,000.00, Sent",
+                    "enabled": true,
+                    "frame": {
+                      "x": 0,
+                      "y": 478,
+                      "width": 390,
+                      "height": 72
+                    },
+                    "children": [
+                      {
+                        "type": "StaticText",
+                        "label": "Hooli",
+                        "frame": {
+                          "x": 20,
+                          "y": 490,
+                          "width": 200,
+                          "height": 20
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "$12,000.00",
+                        "frame": {
+                          "x": 240,
+                          "y": 490,
+                          "width": 110,
+                          "height": 20
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "Sent",
+                        "frame": {
+                          "x": 20,
+                          "y": 518,
+                          "width": 80,
+                          "height": 16
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "Image",
+                        "label": "chevron",
+                        "frame": {
+                          "x": 360,
+                          "y": 504,
+                          "width": 12,
+                          "height": 20
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "type": "Cell",
+                    "identifier": "invoice.list.cell",
+                    "label": "Stark Industries, $760.25, Paid",
+                    "enabled": true,
+                    "frame": {
+                      "x": 0,
+                      "y": 550,
+                      "width": 390,
+                      "height": 72
+                    },
+                    "children": [
+                      {
+                        "type": "StaticText",
+                        "label": "Stark Industries",
+                        "frame": {
+                          "x": 20,
+                          "y": 562,
+                          "width": 200,
+                          "height": 20
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "$760.25",
+                        "frame": {
+                          "x": 240,
+                          "y": 562,
+                          "width": 110,
+                          "height": 20
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "Paid",
+                        "frame": {
+                          "x": 20,
+                          "y": 590,
+                          "width": 80,
+                          "height": 16
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "Image",
+                        "label": "chevron",
+                        "frame": {
+                          "x": 360,
+                          "y": 576,
+                          "width": 12,
+                          "height": 20
+                        },
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "TabBar",
+                "frame": {
+                  "x": 0,
+                  "y": 761,
+                  "width": 390,
+                  "height": 83
+                },
+                "children": [
+                  {
+                    "type": "Button",
+                    "identifier": "nav.invoices.tab",
+                    "label": "Invoices",
+                    "enabled": true,
+                    "selected": true,
+                    "frame": {
+                      "x": 0,
+                      "y": 761,
+                      "width": 130,
+                      "height": 83
+                    },
+                    "children": [
+                      {
+                        "type": "Image",
+                        "frame": {
+                          "x": 51,
+                          "y": 768,
+                          "width": 28,
+                          "height": 28
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "Invoices",
+                        "frame": {
+                          "x": 41,
+                          "y": 800,
+                          "width": 48,
+                          "height": 14
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "type": "Button",
+                    "identifier": "nav.clients.tab",
+                    "label": "Clients",
+                    "enabled": true,
+                    "selected": false,
+                    "frame": {
+                      "x": 130,
+                      "y": 761,
+                      "width": 130,
+                      "height": 83
+                    },
+                    "children": [
+                      {
+                        "type": "Image",
+                        "frame": {
+                          "x": 181,
+                          "y": 768,
+                          "width": 28,
+                          "height": 28
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "Clients",
+                        "frame": {
+                          "x": 171,
+                          "y": 800,
+                          "width": 48,
+                          "height": 14
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "type": "Button",
+                    "identifier": "nav.settings.tab",
+                    "label": "Settings",
+                    "enabled": true,
+                    "selected": false,
+                    "frame": {
+                      "x": 260,
+                      "y": 761,
+                      "width": 130,
+                      "height": 83
+                    },
+                    "children": [
+                      {
+                        "type": "Image",
+                        "frame": {
+                          "x": 311,
+                          "y": 768,
+                          "width": 28,
+                          "height": 28
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": "StaticText",
+                        "label": "Settings",
+                        "frame": {
+                          "x": 301,
+                          "y": 800,
+                          "width": 48,
+                          "height": 14
+                        },
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

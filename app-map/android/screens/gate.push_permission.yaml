@@ -1,0 +1,40 @@
+id: gate.push_permission
+kind: gate
+title: Notifications permission
+deep_link: none
+signature:
+  marker: none
+  required_labels:
+    - role: button
+      label_regex: ^(Allow|Don.t allow|Deny)$
+elements:
+  - id: gate.push_permission.deny
+    role: button
+    intent: dismiss_push_permission
+    intent_critical: false
+    locators:
+      - strategy: role_label
+        value:
+          role: button
+          label_regex: ^(Don.t allow|Deny)$
+        weight: 0.8
+    fingerprint:
+      role: button
+      label_norm: dont allow
+      parent_role: alert
+      sibling_index: 2
+    status: verified
+    last_verified_build: "4412"
+edges:
+  - action:
+      type: tap
+      element: gate.push_permission.deny
+    to: _previous
+    status: verified
+    last_verified_build: "4412"
+meta:
+  sources:
+    - exploration
+    - manual
+  status: verified
+  last_verified_build: "4412"

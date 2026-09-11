@@ -1,0 +1,10 @@
+schema_version: 1
+app_id: com.example.app
+platform: android
+deep_link_scheme: appmap
+build:
+  version: 2026.9.1
+  build_number: "4412"
+  git_sha: a1b2c3d
+generated_at: 2026-09-10T00:00:00Z
+generator: app-map-mcp@0.1.0

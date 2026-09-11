@@ -24,8 +24,8 @@ public struct AppMapRoute: Equatable, Sendable {
 
 public enum AppMapDeepLink {
     public static let scheme = "appmap"
-    /// Screen ids are bare snake_case names (01 R2); the marker is `screen.<id>`.
-    private static let screenIDPattern = "^[a-z0-9]+(_[a-z0-9]+)*$"
+    /// Screen ids are bare snake_case names (01 R2; app-map/schema/ids.schema.json); the marker is `screen.<id>`.
+    private static let screenIDPattern = "^[a-z][a-z0-9_]*$"
 
     public static func parse(_ url: URL) -> AppMapRoute? {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://app-map.local/schema/events.schema.json",
   "title": "app-map event (one JSON line)",
-  "description": "08 §2 — app-map/.local/events.jsonl; each line validates against this schema",
+  "description": "08 §2 — app-map/.local/events.jsonl; each line is one event and validates against this schema. `ts` is RFC 3339 UTC; `platform` and `session` are optional on every kind.",
   "type": "object",
   "oneOf": [
     {
@@ -63,6 +63,10 @@
         "ms": {
           "type": "integer",
           "minimum": 0
+        },
+        "build": {
+          "type": "string",
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$"
         }
       },
       "required": [
@@ -143,6 +147,13 @@
           "description": "build number as a string (02 §8)"
         },
         "run_id": {
+          "type": "string"
+        },
+        "fallback_step": {
+          "type": "string",
+          "pattern": "^s[0-9]+$"
+        },
+        "fallback_reason": {
           "type": "string"
         }
       },
@@ -229,6 +240,9 @@
         },
         "intent_critical": {
           "type": "boolean"
+        },
+        "run_id": {
+          "type": "string"
         }
       },
       "required": [
@@ -297,6 +311,14 @@
           "items": {
             "type": "string"
           }
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 3,
+          "description": "top-3 candidate screens when screen is unknown"
         }
       },
       "required": [
@@ -354,6 +376,9 @@
           "type": "string",
           "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
           "description": "build number as a string (02 §8)"
+        },
+        "ci_gate_referenced": {
+          "type": "boolean"
         }
       },
       "required": [

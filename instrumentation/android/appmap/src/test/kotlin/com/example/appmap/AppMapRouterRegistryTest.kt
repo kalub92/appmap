@@ -19,7 +19,8 @@ class AppMapRouterRegistryTest {
         AppMapRouterRegistry.register("invoice_new", "appmap://invoice_new", "InvoiceNewScreen")
         AppMapRouterRegistry.register(
             "invoice_list", "appmap://invoice_list", InvoiceListScreen::class.java,
-            listOf(AppMapEdge.tap("invoice.add.button", to = "invoice_new")),
+            title = "Invoices",
+            staticEdges = listOf(AppMapEdge.tap("invoice.add.button", to = "invoice_new")),
         )
         AppMapRouterRegistry.registerGate("gate.push_permission", "gate.push_permission.deny")
     }
@@ -47,6 +48,8 @@ class AppMapRouterRegistryTest {
         assertEquals("invoice_list", invoiceList.getString("id"))
         assertEquals("appmap://invoice_list", invoiceList.getString("route"))
         assertEquals("InvoiceListScreen", invoiceList.getString("view_type"))
+        assertEquals("Invoices", invoiceList.getString("title"))
+        assertFalse("nil title is omitted", screens.getJSONObject(1).has("title"))
         val edges = invoiceList.getJSONArray("edges")
         assertEquals(1, edges.length())
         val edge = edges.getJSONObject(0)

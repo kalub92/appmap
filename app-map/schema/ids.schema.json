@@ -59,7 +59,9 @@
             "$ref": "#/definitions/gateId"
           },
           "dismiss": {
-            "$ref": "#/definitions/elementId"
+            "type": "string",
+            "pattern": "^gate\\.[a-z0-9_]+\\.[a-z0-9_]+$",
+            "description": "01 R2: gate.<name>.<verb> — the dismiss control; registered here, not under elements"
           }
         },
         "required": [
@@ -75,7 +77,9 @@
         "additionalProperties": false,
         "properties": {
           "id": {
-            "$ref": "#/definitions/elementId"
+            "type": "string",
+            "pattern": "^(?!screen\\.|gate\\.)[a-z0-9]+(\\.[a-z0-9_]+){2,}$",
+            "description": "01 R2: <feature>.<name>.<kind> (three or more segments); screen. and gate. prefixes are reserved"
           },
           "kind": {
             "type": "string",

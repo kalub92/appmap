@@ -1,0 +1,277 @@
+id: invoice_list
+kind: screen
+title: Invoices
+deep_link: appmap://invoice_list
+signature:
+  marker: screen.invoice_list
+  route: appmap://invoice_list
+  nav_class: InvoiceListView
+  required_ids:
+    - invoice.add.button
+    - invoice.list.table
+  structural_hash: sha1:262365d418093134bfe9b089192ab10fe3575007
+dynamic_regions:
+  - invoice.list.table
+gates:
+  - gate.push_permission
+variants:
+  - id: new_invoices_ui
+    when:
+      flag: new_invoices_ui
+      value: true
+    required_ids:
+      - invoice.add.button
+      - invoice.list.collection
+    structural_hash: sha1:5b4f1a1248e62318577a669a261e799283ecc621
+elements:
+  - id: invoice.add.button
+    role: button
+    label: New Invoice
+    intent: open_new_invoice
+    intent_critical: false
+    locators:
+      - strategy: a11y_id
+        value: invoice.add.button
+        weight: 1
+      - strategy: role_label
+        value:
+          role: button
+          label: New Invoice
+        weight: 0.6
+      - strategy: text
+        value: New Invoice
+        weight: 0.3
+      - strategy: path
+        value: navigationBar/button[1]
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.8461
+          y: 0.0818
+        weight: 0.1
+    fingerprint:
+      role: button
+      label_norm: new invoice
+      parent_role: navigationBar
+      sibling_index: 1
+      bbox_norm:
+        x: 0.7179
+        y: 0.0604
+        w: 0.2564
+        h: 0.0427
+    status: verified
+    last_verified_build: "4412"
+  - id: invoice.filter.button
+    role: button
+    label: Filter
+    intent: filter_invoices
+    intent_critical: false
+    locators:
+      - strategy: a11y_id
+        value: invoice.filter.button
+        weight: 1
+      - strategy: role_label
+        value:
+          role: button
+          label: Filter
+        weight: 0.6
+      - strategy: text
+        value: Filter
+        weight: 0.3
+      - strategy: path
+        value: navigationBar/button[0]
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.1179
+          y: 0.0818
+        weight: 0.1
+    fingerprint:
+      role: button
+      label_norm: filter
+      parent_role: navigationBar
+      sibling_index: 0
+      bbox_norm:
+        x: 0.041
+        y: 0.0604
+        w: 0.1538
+        h: 0.0427
+    status: verified
+    last_verified_build: "4412"
+  - id: invoice.list.cell
+    role: cell
+    dynamic: true
+    locators:
+      - strategy: a11y_id
+        value: invoice.list.cell
+        weight: 1
+      - strategy: path
+        value: list/cell[0]
+        weight: 0.25
+    fingerprint:
+      role: cell
+      parent_role: list
+      sibling_index: 0
+      bbox_norm:
+        x: 0
+        y: 0.2251
+        w: 1
+        h: 0.0853
+    status: verified
+    last_verified_build: "4412"
+  - id: invoice.list.table
+    role: list
+    dynamic: true
+    locators:
+      - strategy: a11y_id
+        value: invoice.list.table
+        weight: 1
+      - strategy: path
+        value: list
+        weight: 0.25
+    fingerprint:
+      role: list
+      parent_role: container
+      sibling_index: 3
+      bbox_norm:
+        x: 0
+        y: 0.2251
+        w: 1
+        h: 0.6765
+    status: verified
+    last_verified_build: "4412"
+  - id: nav.clients.tab
+    role: tab
+    label: Clients
+    intent: show_clients
+    locators:
+      - strategy: a11y_id
+        value: nav.clients.tab
+        weight: 1
+      - strategy: role_label
+        value:
+          role: tab
+          label: Clients
+        weight: 0.6
+      - strategy: text
+        value: Clients
+        weight: 0.3
+      - strategy: path
+        value: tabBar/tab[1]
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.5
+          y: 0.9509
+        weight: 0.1
+    fingerprint:
+      role: tab
+      label_norm: clients
+      parent_role: tabBar
+      sibling_index: 1
+      bbox_norm:
+        x: 0.3333
+        y: 0.9017
+        w: 0.3333
+        h: 0.0983
+    status: verified
+    last_verified_build: "4412"
+  - id: nav.invoices.tab
+    role: tab
+    label: Invoices
+    intent: show_invoices
+    locators:
+      - strategy: a11y_id
+        value: nav.invoices.tab
+        weight: 1
+      - strategy: role_label
+        value:
+          role: tab
+          label: Invoices
+        weight: 0.6
+      - strategy: text
+        value: Invoices
+        weight: 0.3
+      - strategy: path
+        value: tabBar/tab[0]
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.1667
+          y: 0.9509
+        weight: 0.1
+    fingerprint:
+      role: tab
+      label_norm: invoices
+      parent_role: tabBar
+      sibling_index: 0
+      bbox_norm:
+        x: 0
+        y: 0.9017
+        w: 0.3333
+        h: 0.0983
+    status: verified
+    last_verified_build: "4412"
+  - id: nav.settings.tab
+    role: tab
+    label: Settings
+    intent: show_settings
+    locators:
+      - strategy: a11y_id
+        value: nav.settings.tab
+        weight: 1
+      - strategy: role_label
+        value:
+          role: tab
+          label: Settings
+        weight: 0.6
+      - strategy: text
+        value: Settings
+        weight: 0.3
+      - strategy: path
+        value: tabBar/tab[2]
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.8334
+          y: 0.9509
+        weight: 0.1
+    fingerprint:
+      role: tab
+      label_norm: settings
+      parent_role: tabBar
+      sibling_index: 2
+      bbox_norm:
+        x: 0.6667
+        y: 0.9017
+        w: 0.3333
+        h: 0.0983
+    status: verified
+    last_verified_build: "4412"
+edges:
+  - action:
+      type: tap
+      element: invoice.add.button
+    to: invoice_new
+    preconditions:
+      - auth: logged_in
+    postconditions:
+      - screen: invoice_new
+    status: verified
+    last_verified_build: "4412"
+  - action:
+      type: tap
+      element: invoice.list.cell
+    to: invoice_detail
+    preconditions:
+      - auth: logged_in
+    postconditions:
+      - screen: invoice_detail
+    status: verified
+    last_verified_build: "4412"
+meta:
+  sources:
+    - exploration
+    - router_export
+  status: verified
+  last_verified_build: "4412"

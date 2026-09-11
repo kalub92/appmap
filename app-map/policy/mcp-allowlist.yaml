@@ -1,0 +1,24 @@
+schema_version: 1
+servers:
+  - name: app-map
+    source: in-repo
+    transport: stdio
+    command: node
+    args:
+      - tools/app-map-mcp/dist/index.js
+    version: 0.1.0
+    reviewer: caleb
+    reviewed_at: 2026-09-10
+    notes: In-repo stdio server; lockfile-pinned dependencies, no network egress (07 §5).
+  - name: argent
+    source: npm
+    transport: stdio
+    command: npx
+    args:
+      - -y
+      - "@swmansion/argent@0.25.0"
+    package: "@swmansion/argent"
+    version: 0.25.0
+    reviewer: caleb
+    reviewed_at: 2026-09-10
+    notes: Simulator driver. Proprietary simulator-server/ax-service binaries; security review sign-off recorded here, re-review on every bump (07 §5). Vendoring tracked.

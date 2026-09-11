@@ -1,0 +1,231 @@
+id: login
+kind: screen
+title: Sign In
+deep_link: appmap://login
+signature:
+  marker: screen.login
+  route: appmap://login
+  nav_class: LoginScreen
+  required_ids:
+    - login.email.field
+    - login.password.field
+    - login.submit.button
+  structural_hash: sha1:a5b571a142707b355150bad9586b5a338643d1cd
+gates:
+  - gate.biometric_prompt
+elements:
+  - id: login.biometric.button
+    role: button
+    label: Sign in with Face ID
+    intent: sign_in_biometric
+    intent_critical: false
+    locators:
+      - strategy: a11y_id
+        value: login.biometric.button
+        weight: 1
+      - strategy: role_label
+        value:
+          role: button
+          label: Sign in with Face ID
+        weight: 0.6
+      - strategy: text
+        value: Sign in with Face ID
+        weight: 0.3
+      - strategy: path
+        value: button[1]
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.4734
+          y: 0.6852
+        weight: 0.1
+    fingerprint:
+      role: button
+      label_norm: sign in with face id
+      parent_role: container
+      sibling_index: 5
+      bbox_norm:
+        x: 0.0583
+        y: 0.6579
+        w: 0.8301
+        h: 0.0546
+    status: verified
+    last_verified_build: "4412"
+  - id: login.email.field
+    role: field
+    label: Email
+    intent: enter_email
+    locators:
+      - strategy: a11y_id
+        value: login.email.field
+        weight: 1
+      - strategy: role_label
+        value:
+          role: field
+          label: Email
+        weight: 0.6
+      - strategy: path
+        value: container[0]/field
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.4734
+          y: 0.376
+        weight: 0.1
+    fingerprint:
+      role: field
+      label_norm: email
+      parent_role: container
+      sibling_index: 1
+      bbox_norm:
+        x: 0.0583
+        y: 0.3519
+        w: 0.8301
+        h: 0.0481
+    status: verified
+    last_verified_build: "4412"
+  - id: login.error.text
+    role: staticText
+    dynamic: true
+    locators:
+      - strategy: a11y_id
+        value: login.error.text
+        weight: 1
+      - strategy: path
+        value: container[0]/staticText[2]
+        weight: 0.25
+    fingerprint:
+      role: staticText
+      parent_role: container
+      sibling_index: 4
+      bbox_norm:
+        x: 0.0583
+        y: 0.494
+        w: 0.8301
+        h: 0.0197
+    status: verified
+    last_verified_build: "4412"
+  - id: login.forgot.link
+    role: link
+    label: Forgot password?
+    intent: forgot_password
+    locators:
+      - strategy: a11y_id
+        value: login.forgot.link
+        weight: 1
+      - strategy: role_label
+        value:
+          role: link
+          label: Forgot password?
+        weight: 0.6
+      - strategy: text
+        value: Forgot password?
+        weight: 0.3
+      - strategy: path
+        value: container[0]/link
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.2282
+          y: 0.5312
+        weight: 0.1
+    fingerprint:
+      role: link
+      label_norm: forgot password
+      parent_role: container
+      sibling_index: 5
+      bbox_norm:
+        x: 0.0583
+        y: 0.5202
+        w: 0.3398
+        h: 0.0219
+    status: verified
+    last_verified_build: "4412"
+  - id: login.password.field
+    role: secureField
+    label: Password
+    intent: enter_password
+    locators:
+      - strategy: a11y_id
+        value: login.password.field
+        weight: 1
+      - strategy: role_label
+        value:
+          role: secureField
+          label: Password
+        weight: 0.6
+      - strategy: path
+        value: container[0]/secureField
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.4734
+          y: 0.4634
+        weight: 0.1
+    fingerprint:
+      role: secureField
+      label_norm: password
+      parent_role: container
+      sibling_index: 3
+      bbox_norm:
+        x: 0.0583
+        y: 0.4393
+        w: 0.8301
+        h: 0.0481
+    status: verified
+    last_verified_build: "4412"
+  - id: login.submit.button
+    role: button
+    label: Sign In
+    intent: sign_in
+    intent_critical: false
+    locators:
+      - strategy: a11y_id
+        value: login.submit.button
+        weight: 1
+      - strategy: role_label
+        value:
+          role: button
+          label: Sign In
+        weight: 0.6
+      - strategy: text
+        value: Sign In
+        weight: 0.3
+      - strategy: path
+        value: button[0]
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.4734
+          y: 0.6175
+        weight: 0.1
+    fingerprint:
+      role: button
+      label_norm: sign in
+      parent_role: container
+      sibling_index: 4
+      bbox_norm:
+        x: 0.0583
+        y: 0.5902
+        w: 0.8301
+        h: 0.0546
+    status: verified
+    last_verified_build: "4412"
+edges:
+  - action:
+      type: tap
+      element: login.submit.button
+    to: invoice_list
+    preconditions:
+      - auth: logged_out
+    postconditions:
+      - screen: invoice_list
+      - auth: logged_in
+    status: verified
+    last_verified_build: "4412"
+meta:
+  sources:
+    - exploration
+    - router_export
+  status: verified
+  last_verified_build: "4412"

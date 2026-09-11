@@ -26,9 +26,10 @@ const DEFAULTS = {
   android: resolve(REPO_ROOT, 'instrumentation/android/appmap/src/main/kotlin/com/example/appmap/AppMapId.kt'),
 };
 
-// 01 R2
+// 01 R2, patterns identical to app-map/schema/ids.schema.json
 const ID_RE = /^[a-z0-9]+(\.[a-z0-9_]+)+$/;
-const SCREEN_RE = /^[a-z0-9]+(_[a-z0-9]+)*$/;
+const SCREEN_RE = /^[a-z][a-z0-9_]*$/;
+const GATE_RE = /^gate\.[a-z0-9_]+$/;
 const KINDS = new Set(['button', 'field', 'list', 'cell', 'toggle', 'tab', 'picker', 'link', 'text', 'sheet']);
 const SWIFT_KEYWORDS = new Set([
   'associatedtype', 'class', 'deinit', 'enum', 'extension', 'fileprivate', 'func', 'import', 'init', 'inout',
@@ -108,7 +109,7 @@ function loadRegistry(path) {
   const screens = list('screens').map((s, i) => {
     const where = `screens[${i}]`;
     if (!s || typeof s !== 'object' || typeof s.id !== 'string') { err(`${where}: needs a string id`); return null; }
-    if (!SCREEN_RE.test(s.id)) err(`${where}: screen id "${s.id}" must be snake_case ([a-z0-9]+(_[a-z0-9]+)*)`);
+    if (!SCREEN_RE.test(s.id)) err(`${where}: screen id "${s.id}" must be snake_case (${SCREEN_RE})`);
     const marker = `screen.${s.id}`;
     if (!ID_RE.test(marker)) err(`${where}: marker "${marker}" violates ${ID_RE}`);
     claim(marker, where);
@@ -118,8 +119,7 @@ function loadRegistry(path) {
   const gates = list('gates').map((g, i) => {
     const where = `gates[${i}]`;
     if (!g || typeof g !== 'object' || typeof g.id !== 'string') { err(`${where}: needs a string id`); return null; }
-    if (!ID_RE.test(g.id)) err(`${where}: gate id "${g.id}" violates ${ID_RE}`);
-    if (!g.id.startsWith('gate.')) err(`${where}: gate id "${g.id}" must start with "gate."`);
+    if (!GATE_RE.test(g.id)) err(`${where}: gate id "${g.id}" must be gate.<name> (${GATE_RE})`);
     claim(g.id, where);
     if (typeof g.dismiss !== 'string') err(`${where}: gate "${g.id}" needs a string dismiss id`);
     else {
@@ -135,7 +135,7 @@ function loadRegistry(path) {
     if (!e || typeof e !== 'object' || typeof e.id !== 'string') { err(`${where}: needs a string id`); return null; }
     if (!ID_RE.test(e.id)) err(`${where}: element id "${e.id}" violates ${ID_RE}`);
     if (e.id.startsWith('screen.') || e.id.startsWith('gate.')) err(`${where}: element id "${e.id}" uses a reserved prefix`);
-    if (e.id.split('.').length < 3) err(`${where}: element id "${e.id}" should be <feature>.<name>.<kind>`);
+    if (e.id.split('.').length < 3) console.error(`gen-ids: warning: ${where}: element id "${e.id}" should be <feature>.<name>.<kind> (01 R2)`);
     if (typeof e.kind !== 'string' || !KINDS.has(e.kind)) err(`${where}: "${e.id}" kind must be one of ${[...KINDS].join(', ')}`);
     for (const flag of ['intent_critical', 'dynamic']) {
       if (flag in e && typeof e[flag] !== 'boolean') err(`${where}: "${e.id}".${flag} must be boolean`);

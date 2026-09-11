@@ -15,6 +15,7 @@ final class AppMapRouterRegistryTests: XCTestCase {
             id: "invoice_list",
             route: "appmap://invoice_list",
             viewType: InvoiceListView.self,
+            title: "Invoices",
             staticEdges: [.tap("invoice.add.button", to: "invoice_new")]
         )
         registry.registerGate(id: "gate.push_permission", dismiss: "gate.push_permission.deny")
@@ -42,6 +43,8 @@ final class AppMapRouterRegistryTests: XCTestCase {
         let invoiceList = screens[0]
         XCTAssertEqual(invoiceList["route"] as? String, "appmap://invoice_list")
         XCTAssertEqual(invoiceList["view_type"] as? String, "InvoiceListView")
+        XCTAssertEqual(invoiceList["title"] as? String, "Invoices")
+        XCTAssertNil(screens[1]["title"], "nil title is omitted, not null")
         let edges = try XCTUnwrap(invoiceList["edges"] as? [[String: Any]])
         XCTAssertEqual(edges.count, 1)
         let action = try XCTUnwrap(edges[0]["action"] as? [String: Any])

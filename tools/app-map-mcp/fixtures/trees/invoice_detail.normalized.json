@@ -1,0 +1,378 @@
+{
+  "schema_version": 1,
+  "platform": "ios",
+  "source": "normalized",
+  "viewport": {
+    "w": 390,
+    "h": 844
+  },
+  "root": {
+    "role": "application",
+    "label": "Invoices",
+    "bbox_norm": {
+      "x": 0,
+      "y": 0,
+      "w": 1,
+      "h": 1
+    },
+    "children": [
+      {
+        "role": "window",
+        "bbox_norm": {
+          "x": 0,
+          "y": 0,
+          "w": 1,
+          "h": 1
+        },
+        "children": [
+          {
+            "role": "other",
+            "label": "status bar",
+            "bbox_norm": {
+              "x": 0,
+              "y": 0,
+              "w": 1,
+              "h": 0.0557
+            },
+            "children": [
+              {
+                "role": "staticText",
+                "label": "9:41",
+                "bbox_norm": {
+                  "x": 0.0615,
+                  "y": 0.0166,
+                  "w": 0.1026,
+                  "h": 0.0237
+                },
+                "children": []
+              }
+            ]
+          },
+          {
+            "role": "container",
+            "a11y_id": "screen.invoice_detail",
+            "bbox_norm": {
+              "x": 0,
+              "y": 0.0557,
+              "w": 1,
+              "h": 0.9443
+            },
+            "children": [
+              {
+                "role": "navigationBar",
+                "label": "Invoice",
+                "bbox_norm": {
+                  "x": 0,
+                  "y": 0.0557,
+                  "w": 1,
+                  "h": 0.0521
+                },
+                "children": [
+                  {
+                    "role": "button",
+                    "a11y_id": "invoice.detail.back.button",
+                    "label": "Invoices",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0.0205,
+                      "y": 0.0604,
+                      "w": 0.2308,
+                      "h": 0.0427
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "staticText",
+                    "label": "Invoice",
+                    "bbox_norm": {
+                      "x": 0.4103,
+                      "y": 0.0687,
+                      "w": 0.1795,
+                      "h": 0.0261
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "button",
+                    "a11y_id": "invoice.detail.edit.button",
+                    "label": "Edit",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0.8205,
+                      "y": 0.0604,
+                      "w": 0.1538,
+                      "h": 0.0427
+                    },
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "role": "scrollView",
+                "bbox_norm": {
+                  "x": 0,
+                  "y": 0.1078,
+                  "w": 1,
+                  "h": 0.7938
+                },
+                "children": [
+                  {
+                    "role": "container",
+                    "label": "header",
+                    "bbox_norm": {
+                      "x": 0.041,
+                      "y": 0.1303,
+                      "w": 0.9179,
+                      "h": 0.1422
+                    },
+                    "children": [
+                      {
+                        "role": "staticText",
+                        "a11y_id": "invoice.detail.amount.text",
+                        "label": "$50.00",
+                        "bbox_norm": {
+                          "x": 0.0821,
+                          "y": 0.1398,
+                          "w": 0.5128,
+                          "h": 0.0474
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "a11y_id": "invoice.detail.client.text",
+                        "label": "Acme Corp",
+                        "bbox_norm": {
+                          "x": 0.0821,
+                          "y": 0.1919,
+                          "w": 0.5128,
+                          "h": 0.0261
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "a11y_id": "invoice.detail.status.text",
+                        "label": "Draft",
+                        "bbox_norm": {
+                          "x": 0.0821,
+                          "y": 0.2251,
+                          "w": 0.2051,
+                          "h": 0.0213
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "Status",
+                        "bbox_norm": {
+                          "x": 0.7179,
+                          "y": 0.2251,
+                          "w": 0.1538,
+                          "h": 0.0213
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "role": "staticText",
+                    "label": "Line items",
+                    "bbox_norm": {
+                      "x": 0.0821,
+                      "y": 0.2962,
+                      "w": 0.3077,
+                      "h": 0.0213
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "list",
+                    "a11y_id": "invoice.detail.items.list",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0,
+                      "y": 0.3246,
+                      "w": 1,
+                      "h": 0.237
+                    },
+                    "children": [
+                      {
+                        "role": "cell",
+                        "a11y_id": "invoice.detail.item.cell",
+                        "label": "Consulting, $25.00",
+                        "enabled": true,
+                        "bbox_norm": {
+                          "x": 0,
+                          "y": 0.3246,
+                          "w": 1,
+                          "h": 0.0711
+                        },
+                        "children": [
+                          {
+                            "role": "staticText",
+                            "label": "Consulting",
+                            "bbox_norm": {
+                              "x": 0.0821,
+                              "y": 0.3483,
+                              "w": 0.5128,
+                              "h": 0.0237
+                            },
+                            "children": []
+                          },
+                          {
+                            "role": "staticText",
+                            "label": "$25.00",
+                            "bbox_norm": {
+                              "x": 0.7179,
+                              "y": 0.3483,
+                              "w": 0.2051,
+                              "h": 0.0237
+                            },
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "role": "cell",
+                        "a11y_id": "invoice.detail.item.cell",
+                        "label": "Design review, $15.00",
+                        "enabled": true,
+                        "bbox_norm": {
+                          "x": 0,
+                          "y": 0.3957,
+                          "w": 1,
+                          "h": 0.0711
+                        },
+                        "children": [
+                          {
+                            "role": "staticText",
+                            "label": "Design review",
+                            "bbox_norm": {
+                              "x": 0.0821,
+                              "y": 0.4194,
+                              "w": 0.5128,
+                              "h": 0.0237
+                            },
+                            "children": []
+                          },
+                          {
+                            "role": "staticText",
+                            "label": "$15.00",
+                            "bbox_norm": {
+                              "x": 0.7179,
+                              "y": 0.4194,
+                              "w": 0.2051,
+                              "h": 0.0237
+                            },
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "role": "cell",
+                        "a11y_id": "invoice.detail.item.cell",
+                        "label": "Travel, $10.00",
+                        "enabled": true,
+                        "bbox_norm": {
+                          "x": 0,
+                          "y": 0.4668,
+                          "w": 1,
+                          "h": 0.0711
+                        },
+                        "children": [
+                          {
+                            "role": "staticText",
+                            "label": "Travel",
+                            "bbox_norm": {
+                              "x": 0.0821,
+                              "y": 0.4905,
+                              "w": 0.5128,
+                              "h": 0.0237
+                            },
+                            "children": []
+                          },
+                          {
+                            "role": "staticText",
+                            "label": "$10.00",
+                            "bbox_norm": {
+                              "x": 0.7179,
+                              "y": 0.4905,
+                              "w": 0.2051,
+                              "h": 0.0237
+                            },
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "button",
+                    "a11y_id": "invoice.detail.send.button",
+                    "label": "Send Invoice",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0.0615,
+                      "y": 0.6161,
+                      "w": 0.8769,
+                      "h": 0.0592
+                    },
+                    "children": [
+                      {
+                        "role": "staticText",
+                        "label": "Send Invoice",
+                        "bbox_norm": {
+                          "x": 0.359,
+                          "y": 0.6339,
+                          "w": 0.2821,
+                          "h": 0.0237
+                        },
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "toolbar",
+                "bbox_norm": {
+                  "x": 0,
+                  "y": 0.9017,
+                  "w": 1,
+                  "h": 0.0983
+                },
+                "children": [
+                  {
+                    "role": "button",
+                    "label": "Share",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0.1026,
+                      "y": 0.9123,
+                      "w": 0.2051,
+                      "h": 0.0521
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "button",
+                    "label": "Delete",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0.6923,
+                      "y": 0.9123,
+                      "w": 0.2051,
+                      "h": 0.0521
+                    },
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

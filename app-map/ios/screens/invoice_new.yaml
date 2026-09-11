@@ -1,0 +1,251 @@
+id: invoice_new
+kind: screen
+title: New Invoice
+deep_link: appmap://invoice_new
+signature:
+  marker: screen.invoice_new
+  route: appmap://invoice_new
+  nav_class: InvoiceNewView
+  required_ids:
+    - invoice.amount.field
+    - invoice.client.picker
+    - invoice.save.button
+  structural_hash: sha1:9b303347a68d11f0b284d4108ccc902445de396f
+elements:
+  - id: invoice.amount.field
+    role: field
+    label: Amount
+    intent: enter_amount
+    locators:
+      - strategy: a11y_id
+        value: invoice.amount.field
+        weight: 1
+      - strategy: role_label
+        value:
+          role: field
+          label: Amount
+        weight: 0.6
+      - strategy: path
+        value: scrollView/container/container[0]/field
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.5001
+          y: 0.1801
+        weight: 0.1
+    fingerprint:
+      role: field
+      label_norm: amount
+      parent_role: container
+      sibling_index: 1
+      bbox_norm:
+        x: 0.0821
+        y: 0.1635
+        w: 0.8359
+        h: 0.0332
+    status: verified
+    last_verified_build: "4412"
+  - id: invoice.cancel.button
+    role: button
+    label: Cancel
+    intent: cancel_invoice
+    intent_critical: false
+    locators:
+      - strategy: a11y_id
+        value: invoice.cancel.button
+        weight: 1
+      - strategy: role_label
+        value:
+          role: button
+          label: Cancel
+        weight: 0.6
+      - strategy: text
+        value: Cancel
+        weight: 0.3
+      - strategy: path
+        value: navigationBar/button[0]
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.1308
+          y: 0.0818
+        weight: 0.1
+    fingerprint:
+      role: button
+      label_norm: cancel
+      parent_role: navigationBar
+      sibling_index: 0
+      bbox_norm:
+        x: 0.041
+        y: 0.0604
+        w: 0.1795
+        h: 0.0427
+    status: verified
+    last_verified_build: "4412"
+  - id: invoice.client.picker
+    role: picker
+    label: Client
+    intent: choose_client
+    locators:
+      - strategy: a11y_id
+        value: invoice.client.picker
+        weight: 1
+      - strategy: role_label
+        value:
+          role: picker
+          label: Client
+        weight: 0.6
+      - strategy: path
+        value: scrollView/container/container[1]/picker
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.5001
+          y: 0.2607
+        weight: 0.1
+    fingerprint:
+      role: picker
+      label_norm: client
+      parent_role: container
+      sibling_index: 1
+      bbox_norm:
+        x: 0.0821
+        y: 0.2441
+        w: 0.8359
+        h: 0.0332
+    status: verified
+    last_verified_build: "4412"
+  - id: invoice.due.picker
+    role: picker
+    label: Due date
+    intent: choose_due_date
+    locators:
+      - strategy: a11y_id
+        value: invoice.due.picker
+        weight: 1
+      - strategy: role_label
+        value:
+          role: picker
+          label: Due date
+        weight: 0.6
+      - strategy: path
+        value: scrollView/container/container[2]/picker
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.5001
+          y: 0.3412
+        weight: 0.1
+    fingerprint:
+      role: picker
+      label_norm: due date
+      parent_role: container
+      sibling_index: 1
+      bbox_norm:
+        x: 0.0821
+        y: 0.3246
+        w: 0.8359
+        h: 0.0332
+    status: verified
+    last_verified_build: "4412"
+  - id: invoice.note.field
+    role: field
+    label: Note
+    intent: enter_note
+    locators:
+      - strategy: a11y_id
+        value: invoice.note.field
+        weight: 1
+      - strategy: role_label
+        value:
+          role: field
+          label: Note
+        weight: 0.6
+      - strategy: path
+        value: scrollView/container/container[3]/field
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.5001
+          y: 0.455
+        weight: 0.1
+    fingerprint:
+      role: field
+      label_norm: note
+      parent_role: container
+      sibling_index: 1
+      bbox_norm:
+        x: 0.0821
+        y: 0.4052
+        w: 0.8359
+        h: 0.0995
+    status: verified
+    last_verified_build: "4412"
+  - id: invoice.save.button
+    role: button
+    label: Save
+    intent: save_invoice
+    intent_critical: true
+    locators:
+      - strategy: a11y_id
+        value: invoice.save.button
+        weight: 1
+      - strategy: role_label
+        value:
+          role: button
+          label: Save
+        weight: 0.6
+      - strategy: text
+        value: Save
+        weight: 0.3
+      - strategy: path
+        value: navigationBar/button[1]
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.8974
+          y: 0.0818
+        weight: 0.1
+    fingerprint:
+      role: button
+      label_norm: save
+      parent_role: navigationBar
+      sibling_index: 2
+      bbox_norm:
+        x: 0.8205
+        y: 0.0604
+        w: 0.1538
+        h: 0.0427
+    status: verified
+    last_verified_build: "4412"
+edges:
+  - action:
+      type: tap
+      element: invoice.cancel.button
+    to: invoice_list
+    postconditions:
+      - screen: invoice_list
+    status: verified
+    last_verified_build: "4412"
+  - action:
+      type: tap
+      element: invoice.client.picker
+    to: client_picker
+    postconditions:
+      - screen: client_picker
+    status: verified
+    last_verified_build: "4412"
+  - action:
+      type: tap
+      element: invoice.save.button
+    to: invoice_detail
+    postconditions:
+      - screen: invoice_detail
+    status: verified
+    last_verified_build: "4412"
+meta:
+  sources:
+    - exploration
+    - router_export
+  status: verified
+  last_verified_build: "4412"

@@ -23,35 +23,39 @@ data class AppMapEdge(val action: AppMapAction, val to: String) {
 
 data class AppMapBuildInfo(val version: String, val buildNumber: String, val gitSha: String) {
     companion object {
-        /** versionName / versionCode from PackageManager; git sha from [AppMapRouterRegistry.gitSha]. */
-        fun current(context: Context): AppMapBuildInfo {
+        /** Placeholder that still satisfies the schema's hex pattern when no sha was wired up. */
+        const val UNKNOWN_GIT_SHA = "0000000"
+
+        /** versionName / versionCode from PackageManager; git sha from [gitSha] or [AppMapRouterRegistry.gitSha]. */
+        fun current(context: Context, gitSha: String? = null): AppMapBuildInfo {
             val info = context.packageManager.getPackageInfo(context.packageName, 0)
             val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else {
                 @Suppress("DEPRECATION")
                 info.versionCode.toLong()
             }
-            return AppMapBuildInfo(info.versionName ?: "0", code.toString(), AppMapRouterRegistry.gitSha)
+            return AppMapBuildInfo(info.versionName ?: "0", code.toString(), gitSha ?: AppMapRouterRegistry.gitSha)
         }
     }
 }
 
 object AppMapRouterRegistry {
-    private class Screen(val id: String, val route: String, val viewType: String, val edges: List<AppMapEdge>)
+    private class Screen(val id: String, val route: String, val viewType: String, val title: String?, val edges: List<AppMapEdge>)
 
     private val screens = sortedMapOf<String, Screen>()
     private val gates = sortedMapOf<String, String>()
 
     /** Set from the app's own BuildConfig (e.g. `AppMapRouterRegistry.gitSha = BuildConfig.GIT_SHA`). */
     @Volatile
-    var gitSha: String = "unknown"
+    var gitSha: String = AppMapBuildInfo.UNKNOWN_GIT_SHA
 
-    fun register(id: String, route: String, viewType: Class<*>, staticEdges: List<AppMapEdge> = emptyList()) =
-        register(id, route, viewType.simpleName, staticEdges)
+    /** `route` is the screen's deep link (`appmap://<id>`) or `"none"`; `title` is the static nav title. */
+    fun register(id: String, route: String, viewType: Class<*>, title: String? = null, staticEdges: List<AppMapEdge> = emptyList()) =
+        register(id, route, viewType.simpleName, title, staticEdges)
 
     @Synchronized
-    fun register(id: String, route: String, viewTypeName: String, staticEdges: List<AppMapEdge> = emptyList()) {
+    fun register(id: String, route: String, viewTypeName: String, title: String? = null, staticEdges: List<AppMapEdge> = emptyList()) {
         if (!BuildConfig.APP_MAP_DEBUG) return
-        screens[id] = Screen(id, route, viewTypeName, staticEdges.toList())
+        screens[id] = Screen(id, route, viewTypeName, title, staticEdges.toList())
     }
 
     /** Registers an interrupter and its dismiss control (01 R7). */
@@ -75,19 +79,21 @@ object AppMapRouterRegistry {
                 "git_sha" to build.gitSha,
             ),
             "screens" to screens.values.map { s ->
-                linkedMapOf(
+                linkedMapOf<String, Any?>(
                     "id" to s.id,
                     "route" to s.route,
                     "view_type" to s.viewType,
-                    "edges" to s.edges.map { e ->
+                ).also { m ->
+                    s.title?.let { m["title"] = it }
+                    m["edges"] = s.edges.map { e ->
                         linkedMapOf(
                             "action" to linkedMapOf<String, Any?>("type" to e.action.type).also { m ->
                                 e.action.element?.let { m["element"] = it }
                             },
                             "to" to e.to,
                         )
-                    },
-                )
+                    }
+                },
             },
             "gates" to gates.map { (id, dismiss) -> linkedMapOf("id" to id, "dismiss" to dismiss) },
         )
@@ -98,7 +104,7 @@ object AppMapRouterRegistry {
     internal fun clearForTests() {
         screens.clear()
         gates.clear()
-        gitSha = "unknown"
+        gitSha = AppMapBuildInfo.UNKNOWN_GIT_SHA
     }
 }
 

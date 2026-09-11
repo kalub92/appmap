@@ -1,0 +1,432 @@
+{
+  "session_id": "sess_2026-09-10_0007",
+  "transcript_path": "/Users/dev/.claude/projects/-Users-dev-app/sess_2026-09-10_0007.jsonl",
+  "cwd": "/Users/dev/app",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "mcp__argent__tap",
+  "tool_use_id": "toolu_01AbCdEf",
+  "tool_input": {
+    "id": "invoice.add.button"
+  },
+  "tool_response": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Tapped element invoice.add.button"
+      }
+    ],
+    "structuredContent": {
+      "ok": true,
+      "latency_ms": 420,
+      "snapshot": {
+        "platform": "ios",
+        "screen": {
+          "width": 390,
+          "height": 844,
+          "scale": 3
+        },
+        "root": {
+          "type": "Application",
+          "label": "Invoices",
+          "frame": {
+            "x": 0,
+            "y": 0,
+            "width": 390,
+            "height": 844
+          },
+          "children": [
+            {
+              "type": "Window",
+              "frame": {
+                "x": 0,
+                "y": 0,
+                "width": 390,
+                "height": 844
+              },
+              "children": [
+                {
+                  "type": "Other",
+                  "label": "status bar",
+                  "frame": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 390,
+                    "height": 47
+                  },
+                  "children": [
+                    {
+                      "type": "StaticText",
+                      "label": "9:41",
+                      "frame": {
+                        "x": 24,
+                        "y": 14,
+                        "width": 40,
+                        "height": 20
+                      },
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "type": "Other",
+                  "identifier": "screen.invoice_new",
+                  "frame": {
+                    "x": 0,
+                    "y": 47,
+                    "width": 390,
+                    "height": 797
+                  },
+                  "children": [
+                    {
+                      "type": "NavigationBar",
+                      "label": "New Invoice",
+                      "frame": {
+                        "x": 0,
+                        "y": 47,
+                        "width": 390,
+                        "height": 44
+                      },
+                      "children": [
+                        {
+                          "type": "Button",
+                          "identifier": "invoice.cancel.button",
+                          "label": "Cancel",
+                          "enabled": true,
+                          "frame": {
+                            "x": 16,
+                            "y": 51,
+                            "width": 70,
+                            "height": 36
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "StaticText",
+                          "label": "New Invoice",
+                          "frame": {
+                            "x": 140,
+                            "y": 58,
+                            "width": 110,
+                            "height": 22
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "Button",
+                          "identifier": "invoice.save.button",
+                          "label": "Save",
+                          "enabled": false,
+                          "frame": {
+                            "x": 320,
+                            "y": 51,
+                            "width": 60,
+                            "height": 36
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "type": "ScrollView",
+                      "frame": {
+                        "x": 0,
+                        "y": 91,
+                        "width": 390,
+                        "height": 670
+                      },
+                      "children": [
+                        {
+                          "type": "Other",
+                          "label": "form",
+                          "frame": {
+                            "x": 0,
+                            "y": 110,
+                            "width": 390,
+                            "height": 420
+                          },
+                          "children": [
+                            {
+                              "type": "Other",
+                              "frame": {
+                                "x": 16,
+                                "y": 110,
+                                "width": 358,
+                                "height": 60
+                              },
+                              "children": [
+                                {
+                                  "type": "StaticText",
+                                  "label": "Amount",
+                                  "frame": {
+                                    "x": 32,
+                                    "y": 118,
+                                    "width": 80,
+                                    "height": 18
+                                  },
+                                  "children": []
+                                },
+                                {
+                                  "type": "TextField",
+                                  "identifier": "invoice.amount.field",
+                                  "label": "Amount",
+                                  "value": "",
+                                  "enabled": true,
+                                  "hasFocus": false,
+                                  "frame": {
+                                    "x": 32,
+                                    "y": 138,
+                                    "width": 326,
+                                    "height": 28
+                                  },
+                                  "children": []
+                                },
+                                {
+                                  "type": "StaticText",
+                                  "label": "USD",
+                                  "frame": {
+                                    "x": 320,
+                                    "y": 142,
+                                    "width": 36,
+                                    "height": 18
+                                  },
+                                  "children": []
+                                }
+                              ]
+                            },
+                            {
+                              "type": "Other",
+                              "frame": {
+                                "x": 16,
+                                "y": 178,
+                                "width": 358,
+                                "height": 60
+                              },
+                              "children": [
+                                {
+                                  "type": "StaticText",
+                                  "label": "Client",
+                                  "frame": {
+                                    "x": 32,
+                                    "y": 186,
+                                    "width": 80,
+                                    "height": 18
+                                  },
+                                  "children": []
+                                },
+                                {
+                                  "type": "Picker",
+                                  "identifier": "invoice.client.picker",
+                                  "label": "Client",
+                                  "value": "Select a client",
+                                  "enabled": true,
+                                  "frame": {
+                                    "x": 32,
+                                    "y": 206,
+                                    "width": 326,
+                                    "height": 28
+                                  },
+                                  "children": [
+                                    {
+                                      "type": "StaticText",
+                                      "label": "Select a client",
+                                      "frame": {
+                                        "x": 32,
+                                        "y": 210,
+                                        "width": 200,
+                                        "height": 20
+                                      },
+                                      "children": []
+                                    },
+                                    {
+                                      "type": "Image",
+                                      "label": "chevron",
+                                      "frame": {
+                                        "x": 346,
+                                        "y": 210,
+                                        "width": 12,
+                                        "height": 20
+                                      },
+                                      "children": []
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "type": "Other",
+                              "frame": {
+                                "x": 16,
+                                "y": 246,
+                                "width": 358,
+                                "height": 60
+                              },
+                              "children": [
+                                {
+                                  "type": "StaticText",
+                                  "label": "Due date",
+                                  "frame": {
+                                    "x": 32,
+                                    "y": 254,
+                                    "width": 80,
+                                    "height": 18
+                                  },
+                                  "children": []
+                                },
+                                {
+                                  "type": "Picker",
+                                  "identifier": "invoice.due.picker",
+                                  "label": "Due date",
+                                  "value": "Oct 10, 2026",
+                                  "enabled": true,
+                                  "frame": {
+                                    "x": 32,
+                                    "y": 274,
+                                    "width": 326,
+                                    "height": 28
+                                  },
+                                  "children": []
+                                }
+                              ]
+                            },
+                            {
+                              "type": "Other",
+                              "frame": {
+                                "x": 16,
+                                "y": 314,
+                                "width": 358,
+                                "height": 120
+                              },
+                              "children": [
+                                {
+                                  "type": "StaticText",
+                                  "label": "Note",
+                                  "frame": {
+                                    "x": 32,
+                                    "y": 322,
+                                    "width": 80,
+                                    "height": 18
+                                  },
+                                  "children": []
+                                },
+                                {
+                                  "type": "TextField",
+                                  "identifier": "invoice.note.field",
+                                  "label": "Note",
+                                  "value": "",
+                                  "enabled": true,
+                                  "hasFocus": false,
+                                  "frame": {
+                                    "x": 32,
+                                    "y": 342,
+                                    "width": 326,
+                                    "height": 84
+                                  },
+                                  "children": [
+                                    {
+                                      "type": "StaticText",
+                                      "label": "Add a note",
+                                      "frame": {
+                                        "x": 36,
+                                        "y": 346,
+                                        "width": 100,
+                                        "height": 18
+                                      },
+                                      "children": []
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "StaticText",
+                          "label": "Line items",
+                          "frame": {
+                            "x": 32,
+                            "y": 550,
+                            "width": 120,
+                            "height": 18
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "Table",
+                          "label": "line items",
+                          "frame": {
+                            "x": 0,
+                            "y": 574,
+                            "width": 390,
+                            "height": 1
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "Button",
+                          "label": "Add line item",
+                          "enabled": true,
+                          "frame": {
+                            "x": 32,
+                            "y": 580,
+                            "width": 150,
+                            "height": 36
+                          },
+                          "children": [
+                            {
+                              "type": "Image",
+                              "label": "plus",
+                              "frame": {
+                                "x": 40,
+                                "y": 588,
+                                "width": 20,
+                                "height": 20
+                              },
+                              "children": []
+                            },
+                            {
+                              "type": "StaticText",
+                              "label": "Add line item",
+                              "frame": {
+                                "x": 68,
+                                "y": 589,
+                                "width": 110,
+                                "height": 18
+                              },
+                              "children": []
+                            }
+                          ]
+                        },
+                        {
+                          "type": "StaticText",
+                          "label": "Preview",
+                          "frame": {
+                            "x": 32,
+                            "y": 640,
+                            "width": 120,
+                            "height": 18
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "Image",
+                          "label": "invoice preview",
+                          "frame": {
+                            "x": 32,
+                            "y": 664,
+                            "width": 326,
+                            "height": 80
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 // Debug-only router export receiver (01 R6). Declared in src/debug/AndroidManifest.xml.
 //
-//   adb shell am broadcast -a com.example.app.APPMAP_EXPORT --es path /sdcard/router-export.json
+//   adb shell am broadcast -a com.example.app.APPMAP_EXPORT --es path /sdcard/router-export.json [--es git_sha <sha>]
 //
 // Writes AppMapRouterRegistry.exportJson() to `path`; if that location is not writable under scoped
 // storage it falls back to the app-specific external files dir, then to internal files. The path
@@ -18,8 +18,9 @@ import java.io.IOException
 class AppMapExportReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val requested = intent.getStringExtra(EXTRA_PATH)
+        val gitSha = intent.getStringExtra(EXTRA_GIT_SHA)?.takeIf { it.isNotBlank() }
         val json = try {
-            AppMapRouterRegistry.exportJson(context.packageName, AppMapBuildInfo.current(context))
+            AppMapRouterRegistry.exportJson(context.packageName, AppMapBuildInfo.current(context, gitSha))
         } catch (e: IllegalStateException) {
             Log.e(TAG, "router export refused", e)
             if (isOrderedBroadcast) setResult(Activity.RESULT_CANCELED, e.message, null)
@@ -53,6 +54,7 @@ class AppMapExportReceiver : BroadcastReceiver() {
     private companion object {
         const val TAG = "app-map"
         const val EXTRA_PATH = "path"
+        const val EXTRA_GIT_SHA = "git_sha"
         const val DEFAULT_NAME = "router-export.json"
     }
 }
