@@ -10,8 +10,11 @@
  *     false`), or (a') the id has a `labelRegexById` entry that matches, or (b) the role is in
  *     `STATIC_LABEL_ROLES` and the label exactly equals an entry of `policy.staticLabels`;
  *     otherwise drop it. Gate dialogs work because their button labels are in the static table.
- *  4. apply `policy.piiPatterns` to every surviving string (`label`, `a11y_id` is exempt);
- *     any hit → the string becomes `[redacted]` and `scrub_hits` increments (07 §2.3.4);
+ *  4. apply `policy.piiPatterns` to every surviving string (07 §2.3.4): every `label`, and every
+ *     `a11y_id` that is NOT registered (`staticIds ∪ dynamicIds ∪ markers ∪ labelRegexById
+ *     keys`) — Android resource-ids / testTags and some iOS identifiers embed row data
+ *     (`cell_billing@acme.example`); registered ids can never be PII and stay intact. Any hit
+ *     → the string becomes `[redacted]` and `scrub_hits` increments;
  *  5. keep `role`, `a11y_id`, `bbox_norm`, `enabled`, `focused`, `selected`, `children`;
  *     set `scrubbed: true`, `scrub_hits`.
  *
@@ -42,6 +45,7 @@ export function buildScrubPolicy(ids: IdsRegistry, staticLabels: ReadonlySet<str
   throw new NotImplementedError('scrub.buildScrubPolicy');
 }
 
+/** The ONLY place a `ScrubbedTree` is minted (the compile-time brand is applied by one cast here). */
 export function scrub(tree: Tree, policy: ScrubPolicy): ScrubbedTree {
   void tree; void policy;
   throw new NotImplementedError('scrub.scrub');

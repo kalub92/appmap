@@ -1,6 +1,5 @@
 id: gate.biometric_prompt
 kind: gate
-title: Face ID prompt
 deep_link: none
 signature:
   marker: none

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://app-map.local/schema/heal-report.schema.json",
   "title": "heal report",
-  "description": "06 R6 — heal-report.json produced by `app-map run --all --headless --report`",
+  "description": "06 R6 — heal-report.json produced by `app-map run --all --headless --report`. Uploaded as a CI artifact: ids, step ids, strategies, scores and closed codes only (07 §2.4) — never Maestro output, hierarchy text, labels or paths.",
   "definitions": {
     "elementId": {
       "type": "string",
@@ -142,7 +142,9 @@
         "label_regex": {
           "type": "string",
           "minLength": 1,
-          "format": "regex"
+          "format": "regex",
+          "maxLength": 200,
+          "description": "user-authored regex source; ≤200 chars and no nested quantifiers (validate rule 1 safe-regex check, 07 §4)"
         }
       },
       "required": [
@@ -283,7 +285,7 @@
                 },
                 "step": {
                   "type": "string",
-                  "pattern": "^s[0-9]+$"
+                  "pattern": "^s[0-9]+[a-z]?$"
                 },
                 "element": {
                   "$ref": "#/definitions/elementId"
@@ -363,7 +365,8 @@
           },
           "fallback_step": {
             "type": "string",
-            "pattern": "^s[0-9]+$"
+            "pattern": "^s[0-9]+[a-z]?$",
+            "description": "recipe step (s1…) or guided/headless entry step (s0, s0a…)"
           },
           "screen_seen": {
             "type": "string",
@@ -382,11 +385,22 @@
             "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
             "description": "build number as a string (02 §8)"
           },
-          "flow_path": {
-            "type": "string"
+          "error_code": {
+            "type": "string",
+            "enum": [
+              "maestro_failed",
+              "maestro_unavailable",
+              "not_headless_eligible",
+              "release_build_refused",
+              "timeout",
+              "hierarchy_unavailable"
+            ],
+            "description": "closed failure code; the free-text Maestro output stays in .local/server.log (07 §2.4)"
           },
-          "error": {
-            "type": "string"
+          "failed_command_index": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "index of the Maestro command that failed (04 §6.1)"
           }
         },
         "required": [
@@ -415,7 +429,7 @@
           },
           "step": {
             "type": "string",
-            "pattern": "^s[0-9]+$"
+            "pattern": "^s[0-9]+[a-z]?$"
           },
           "element": {
             "$ref": "#/definitions/elementId"
@@ -506,7 +520,7 @@
           },
           "step": {
             "type": "string",
-            "pattern": "^s[0-9]+$"
+            "pattern": "^s[0-9]+[a-z]?$"
           },
           "element": {
             "$ref": "#/definitions/elementId"

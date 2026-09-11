@@ -3,7 +3,9 @@
  * `.codex/config.toml` (minimal TOML reader for `[mcp_servers.*]` tables) and
  * `.claude/settings.json`; fails when:
  *  - `unlisted_server`: a server name is not in `app-map/policy/mcp-allowlist.yaml`, or its
- *    pinned version/package differs from the allowlist entry;
+ *    pinned version/package differs from the allowlist entry — an `npx` server matches on
+ *    `<package>@<version>` (the allowlist schema requires `package` for `source: npm`), an
+ *    in-repo server on `command` + `args`;
  *  - `unpinned_npx`: any `command` is `npx` (or args contain `npx`) without an exact
  *    `<pkg>@<x.y.z>` pin (`-y` allowed; `@latest`, ranges and bare names fail);
  *  - `secret_literal`: a value in `env`, `headers` or `url` that looks like a token/secret
@@ -13,9 +15,15 @@
  *    `.claude/hooks/` (after `$CLAUDE_PROJECT_DIR` substitution).
  * Exit 1 with every violation listed (06 §4).
  *
+ * Also home of `intentCriticalDiff` (07 §4, 07 §7): `app-map intent-critical-diff <base-ref>`
+ * compares `app-map/ids.yaml` and every screen/recipe file between `<base-ref>` (`git show
+ * <ref>:<path>`) and the working tree, reporting ids whose `intent_critical` was downgraded
+ * `true → false` (two approvals required), upgraded, and every intent_critical element whose
+ * screen element or recipe step changed — as data plus a markdown table for the bot comment.
+ *
  * Layer: top (imports yaml/load.readAllowlist, types).
  */
-import type { McpAllowlist, PolicyCheckResult } from './types.ts';
+import type { IntentCriticalDiffResult, McpAllowlist, PolicyCheckResult } from './types.ts';
 import { NotImplementedError } from './errors.ts';
 
 export const SECRET_PATTERNS: readonly RegExp[] = [
@@ -39,6 +47,19 @@ export interface PolicyCheckOptions {
 export function policyCheck(repoRoot: string, opts: PolicyCheckOptions = {}): PolicyCheckResult {
   void repoRoot; void opts;
   throw new NotImplementedError('policy-check.policyCheck');
+}
+
+export interface IntentCriticalDiffOptions {
+  /** `git show` runner (injectable for tests): returns the file text at `ref`, or `undefined` when absent */
+  readAtRef?: (ref: string, relPath: string) => string | undefined;
+  /** map dir relative to repoRoot (default `app-map`) */
+  mapDir?: string;
+}
+
+/** 07 §4 / 07 §7 — see module doc. Never throws for a missing base file (treated as empty). */
+export function intentCriticalDiff(repoRoot: string, baseRef: string, opts: IntentCriticalDiffOptions = {}): IntentCriticalDiffResult {
+  void repoRoot; void baseRef; void opts;
+  throw new NotImplementedError('policy-check.intentCriticalDiff');
 }
 
 /** Pure: is `args` an exactly pinned npx invocation (`@scope/pkg@1.2.3`)? */

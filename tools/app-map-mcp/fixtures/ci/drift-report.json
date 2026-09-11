@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "platform": "ios",
+  "build": "4413",
+  "generated_at": "2026-09-06T06:10:03Z",
+  "screens": [
+    {
+      "screen": "client_picker",
+      "status": "skipped",
+      "marker_present": false,
+      "required_present": 0,
+      "missing_ids": [],
+      "hash_changed": false,
+      "unresolvable_elements": [],
+      "ci_gate_referenced": true,
+      "reason": "no_deep_link"
+    },
+    {
+      "screen": "invoice_detail",
+      "status": "degraded",
+      "marker_present": true,
+      "required_present": 1,
+      "missing_ids": [],
+      "hash_changed": true,
+      "unresolvable_elements": [],
+      "ci_gate_referenced": true
+    },
+    {
+      "screen": "invoice_list",
+      "status": "ok",
+      "marker_present": true,
+      "required_present": 1,
+      "missing_ids": [],
+      "hash_changed": false,
+      "unresolvable_elements": [],
+      "ci_gate_referenced": false
+    },
+    {
+      "screen": "invoice_new",
+      "status": "broken",
+      "marker_present": true,
+      "required_present": 0.6667,
+      "missing_ids": ["invoice.save.button"],
+      "hash_changed": true,
+      "unresolvable_elements": ["invoice.save.button"],
+      "ci_gate_referenced": true
+    },
+    {
+      "screen": "login",
+      "status": "ok",
+      "marker_present": true,
+      "required_present": 1,
+      "missing_ids": [],
+      "hash_changed": false,
+      "unresolvable_elements": [],
+      "ci_gate_referenced": false
+    }
+  ],
+  "summary": { "ok": 2, "degraded": 1, "broken": 1, "skipped": 1, "blocking": true }
+}

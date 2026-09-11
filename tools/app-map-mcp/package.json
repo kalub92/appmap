@@ -5,7 +5,7 @@
   "description": "App-map MCP server and CLI: screen identification, locator resolution, recipes, replay, healing.",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.18.0"
   },
   "bin": {
     "app-map": "./bin/app-map"
@@ -14,8 +14,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"dist/test/**/*.test.js\"",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"src/test/**/*.test.ts\"",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test:dist": "npm run build && node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"dist/test/**/*.test.js\"",
+    "validate-pilot": "node scripts/validate-pilot.mjs"
   },
   "appMap": {
     "maestroVersion": ">=1.39.0"

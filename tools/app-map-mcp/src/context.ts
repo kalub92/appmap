@@ -13,8 +13,13 @@
  *     succeeds. The CLI, by contrast, exits 1 with the issues listed;
  *  5. opens the cache (store/db.ts); if `db.getMeta('tree_hash') !== map.treeHash` the map is
  *     upserted (03 §4 "reload when YAML changed since the cache's recorded git tree hash");
- *  6. resolves the effective build: `config.build` when not `auto`, else the last observation's
- *     reported build, else `manifest.build.build_number` (03 §3).
+ *  6. resolves the effective build: `config.build` when not `auto`, else `db.getMeta('build')`
+ *     (the last driver-reported build, set by `setBuild`), else `manifest.build.build_number`
+ *     (03 §3).
+ *
+ * The Maestro version check (03 §13, 07 §5.3) is NOT part of `openContext` (CLI commands must
+ * stay fast); `server.startServer` runs `headless.checkMaestroVersion` once after open,
+ * non-fatal, logging a `warn` — headless runs re-check and fail with `maestro_unavailable`.
  *
  * `reload()` re-runs 4–6 (used by the `export` tool after writing and by tests).
  * `close()` closes db and logger; idempotent.
@@ -25,7 +30,7 @@ import type { AppMapConfig } from './config.ts';
 import type { EventSink } from './events.ts';
 import type { Logger } from './log.ts';
 import type { AppMapDb } from './store/db.ts';
-import type { BuildNumber, LoadedMap } from './types.ts';
+import type { BuildNumber, BuildProbeResult, LoadedMap } from './types.ts';
 import { AppMapError, NotImplementedError } from './errors.ts';
 
 export interface AppMapContext {
@@ -37,12 +42,20 @@ export interface AppMapContext {
   readonly log: Logger;
   /** effective build number (03 §3 `APP_MAP_BUILD` auto-detection) */
   readonly build: BuildNumber;
+  /**
+   * last successful 07 §3 probe of this process (guided/headless runs set it; `null` until
+   * then). The only source of 02 §4.3 variant facts — pass `probeConditions(ctx.probe)` into
+   * `identify` (observe.ts, guided.ts, headless.ts, drift.ts).
+   */
+  readonly probe: BuildProbeResult | null;
   /** set when the last load failed validation; tools surface it (03 §11) */
   readonly loadError: AppMapError | null;
   /** re-read YAML, re-validate, upsert the cache; returns the new map or throws `invalid_map` */
   reload(): LoadedMap;
-  /** override the effective build (driver reported it, 03 §13) */
+  /** override the effective build (driver reported it, 03 §13); also `db.setMeta('build', …)` */
   setBuild(build: BuildNumber): void;
+  /** cache a probe result (guided.startGuidedRun / headless.runHeadless after a successful probe) */
+  setProbe(probe: BuildProbeResult | null): void;
   close(): void;
 }
 

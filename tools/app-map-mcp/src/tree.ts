@@ -6,8 +6,10 @@
  *    e.g. fixtures/trees/*.normalized.json — returned as-is after a structural check;
  *  - `argent`: XCUITest-like `{type, identifier?, label?, value?, enabled?, hasFocus?,
  *    selected?, frame:{x,y,width,height}, children[]}` possibly wrapped as `{root, screen:{width,
- *    height}}` (fixtures/raw/argent-snapshot.invoice_list.json — best-effort, field names
- *    unverified against the real driver);
+ *    height}, build_number?, bundle_id?, udid?}` (fixtures/raw/argent-snapshot.invoice_list.json
+ *    — best-effort, field names unverified against the real driver). The wrapper's
+ *    `build_number` → `Tree.build` and `bundle_id` → `Tree.app_id` (03 §3 `APP_MAP_BUILD=auto`,
+ *    03 §13; observe.ts calls `ctx.setBuild`); `udid` is dropped (07 §2.2 device identifiers);
  *  - `maestro`: `maestro hierarchy` JSON `{elements:[{attributes:{resource-id,text,
  *    accessibilityText,bounds:"[x1,y1][x2,y2]",class,enabled,focused,selected,…},children}]}`
  *    or the bare `{attributes, children}` root (fixtures/raw/maestro-hierarchy.invoice_list.json

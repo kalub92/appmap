@@ -75,7 +75,14 @@
             "type": "boolean"
           },
           "reason": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "no_deep_link",
+              "not_in_router_export",
+              "marker_timeout",
+              "open_failed"
+            ],
+            "description": "why the screen was skipped (or broken without a hierarchy); closed so the artifact stays ids-and-scores only (07 §2.4)"
           }
         },
         "required": [

@@ -9,15 +9,17 @@
  * | export [--force] [--check]                                  | dev, Stop hook, CI | store/export.exportMap                            |
  * | record --stdin                                              | PostToolUse hook   | ingest-socket.postToIngestSocket ‖ observe.recordHookPayload; ALWAYS exit 0 |
  * | summary [--max-tokens N] [--hook-json]                      | SessionStart hook  | format.formatSessionStartContext; `--hook-json` wraps in `SessionStartHookOutput` |
- * | import-router <json> [--no-retire] [--dry-run]              | CI                 | router-import.importRouter (+ export unless dry-run) |
- * | compile --session S --task T --name R [--param name:type…]  | dev                | compile.compileRecipe → prints YAML                |
- * | run R --params k=v… [--headless] [--all --status s,…] [--report path] | dev, CI | guided (prints first step) or headless (report JSON) |
- * | maestro-export [R | --all] [--status s,…] --out DIR         | CI                 | maestro.maestroExport                             |
- * | drift --build B [--platform p] [--router path] [--out path] | CI                 | drift.driftTour; exit 1 when `summary.blocking`    |
+ * | import-router <json> [--no-retire] [--strict] [--purge-retired] [--dry-run] | CI | router-import.importRouter (+ export unless dry-run) |
+ * | compile --session S --task T --name R [--param name:type[=value]…] [--to-seq N] | dev | compile.compileRecipe (`=value` fills `values`) → prints YAML |
+ * | run R --params k=v… [--headless] [--params-file f] | run --all --status s,… --headless [--params-file f] [--report path] | dev, CI | guided (prints first step) or headless (report JSON) |
+ * | maestro-export [R | --all] [--status s,…] [--params-file f] --out DIR | CI      | maestro.maestroExport; exit 1 (`bad_input`) when a required param has no value |
+ * | drift [--build B] [--platform p] [--router path] [--out path] | CI               | drift.driftTour; `--build` defaults to the router export's build, else `APP_MAP_BUILD`/manifest; exit 1 when `summary.blocking` |
  * | report [--since ISO|30d] [--json]                            | dev                | report.report                                     |
  * | gen-configs [--check]                                       | CI, dev            | gen-configs.genConfigs                            |
- * | lint-ids                                                    | CI                 | lint-ids.lintIds                                  |
+ * | lint-ids [--platform ios,android] [--src dir…]              | CI                 | lint-ids.lintIds                                  |
  * | policy-check                                                | CI                 | policy-check.policyCheck                          |
+ * | intent-critical-diff <base-ref> [--markdown]                | CI (bot comment)   | policy-check.intentCriticalDiff; exit 1 when `downgraded` is non-empty (07 §7 two approvals) |
+ * | mark R STATUS [--reviewer NAME] [--recipe-file path] [--force] | dev            | lifecycle.markRecipe (CLI twin of the tool)      |
  * | merge-driver %O %A %B [%P]                                  | git                | merge-driver.runMergeDriver                       |
  * | migrate-id OLD NEW [--dry-run]                              | dev                | migrate-id.migrateId                              |
  *
@@ -40,7 +42,7 @@ export interface CliIo {
 
 export const COMMANDS = [
   'validate', 'export', 'record', 'summary', 'import-router', 'compile', 'run', 'maestro-export', 'drift', 'report',
-  'gen-configs', 'lint-ids', 'policy-check', 'merge-driver', 'migrate-id', 'help',
+  'gen-configs', 'lint-ids', 'policy-check', 'intent-critical-diff', 'mark', 'merge-driver', 'migrate-id', 'help',
 ] as const;
 export type Command = (typeof COMMANDS)[number];
 
@@ -69,15 +71,17 @@ commands:
   export [--force] [--check]     cache → canonical YAML (03 §4)
   record --stdin                 ingest one hook payload (05 §3); always exits 0
   summary [--max-tokens N] [--hook-json]
-  import-router <json>           seed/refresh screens from the router export (01 R6)
-  compile --session S --task T --name R [--param name:type ...]
-  run R --params k=v ... [--headless] | run --all --status s,... --headless [--report path]
-  maestro-export [R | --all] [--status s,...] --out DIR
-  drift --build B [--router path] [--out path]
+  import-router <json> [--no-retire] [--strict] [--purge-retired] [--dry-run]
+  compile --session S --task T --name R [--param name:type[=value] ...] [--to-seq N]
+  run R --params k=v ... [--headless] [--params-file f] | run --all --status s,... --headless [--params-file f] [--report path]
+  maestro-export [R | --all] [--status s,...] [--params-file f] --out DIR
+  drift [--build B] [--router path] [--out path]
   report [--since ISO|30d] [--json]
   gen-configs [--check]
-  lint-ids
+  lint-ids [--platform ios,android] [--src dir ...]
   policy-check
+  intent-critical-diff <base-ref> [--markdown]
+  mark R STATUS [--reviewer NAME] [--recipe-file path] [--force]
   merge-driver %O %A %B [%P]
   migrate-id OLD NEW [--dry-run]
 global: --dir, --platform, --build, --json, --quiet

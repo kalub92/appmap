@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "platform": "ios",
+  "build": "4413",
+  "generated_at": "2026-09-06T06:00:30Z",
+  "runs": [
+    {
+      "recipe": "create_invoice",
+      "version": 1,
+      "mode": "headless",
+      "ok": false,
+      "steps": 6,
+      "steps_done": 5,
+      "heals": [
+        {
+          "recipe": "create_invoice",
+          "step": "s1",
+          "element": "invoice.amount.field",
+          "old_strategy": "a11y_id",
+          "new_strategy": "role_label",
+          "old_locator": { "strategy": "a11y_id", "value": "invoice.amount.field", "weight": 1 },
+          "new_locator": { "strategy": "role_label", "value": { "role": "field", "label": "Amount" }, "weight": 0.6 },
+          "score": 0.88,
+          "runner_up_score": 0.41,
+          "accepted": true,
+          "reason": "accepted",
+          "intent_critical": false,
+          "build": "4413"
+        },
+        {
+          "recipe": "create_invoice",
+          "step": "s5",
+          "element": "invoice.save.button",
+          "old_strategy": "a11y_id",
+          "score": 0.81,
+          "runner_up_score": 0.3,
+          "accepted": false,
+          "reason": "intent_critical_label_changed",
+          "intent_critical": true,
+          "build": "4413"
+        }
+      ],
+      "fallback_step": "s5",
+      "screen_seen": "invoice_new",
+      "retries": 1,
+      "ms": 9800,
+      "build": "4413",
+      "error_code": "maestro_failed",
+      "failed_command_index": 11
+    },
+    {
+      "recipe": "filter_invoices",
+      "version": 2,
+      "mode": "headless",
+      "ok": false,
+      "steps": 3,
+      "steps_done": 0,
+      "heals": [],
+      "fallback_step": "s0a",
+      "screen_seen": "unknown",
+      "retries": 0,
+      "ms": 4200,
+      "build": "4413",
+      "error_code": "not_headless_eligible"
+    }
+  ],
+  "heals": [
+    {
+      "recipe": "create_invoice",
+      "step": "s1",
+      "element": "invoice.amount.field",
+      "old_strategy": "a11y_id",
+      "new_strategy": "role_label",
+      "old_locator": { "strategy": "a11y_id", "value": "invoice.amount.field", "weight": 1 },
+      "new_locator": { "strategy": "role_label", "value": { "role": "field", "label": "Amount" }, "weight": 0.6 },
+      "score": 0.88,
+      "runner_up_score": 0.41,
+      "accepted": true,
+      "reason": "accepted",
+      "intent_critical": false,
+      "build": "4413"
+    }
+  ],
+  "needs_human": [
+    {
+      "recipe": "create_invoice",
+      "step": "s5",
+      "element": "invoice.save.button",
+      "old_strategy": "a11y_id",
+      "score": 0.81,
+      "runner_up_score": 0.3,
+      "accepted": false,
+      "reason": "intent_critical_label_changed",
+      "intent_critical": true,
+      "build": "4413"
+    }
+  ]
+}

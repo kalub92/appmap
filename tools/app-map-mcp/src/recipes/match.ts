@@ -31,8 +31,13 @@ export function paramsNeeded(recipe: RecipeFile, instruction: string): string[] 
   throw new NotImplementedError('recipes/match.paramsNeeded');
 }
 
-/** Best-effort param extraction from the instruction (money → first `$?digits[.digits]`, string → first quoted/capitalised phrase). */
-export function inferParams(recipe: RecipeFile, instruction: string): Partial<RecipeParams> {
+/**
+ * Best-effort param extraction from the instruction (money/number → first `$?digits[.digits]`,
+ * string → first quoted string, else the longest run of capitalised words after the matched
+ * span — `"for Acme Corp"` → `Acme Corp`; bool/enum → never). Used by `match_recipe` for
+ * `params_needed` and by the compiler as the fallback for `CompileRecipeInput.values` (04 §3.4).
+ */
+export function inferParams(recipe: Pick<RecipeFile, 'params'>, instruction: string): Partial<RecipeParams> {
   void recipe; void instruction;
   throw new NotImplementedError('recipes/match.inferParams');
 }

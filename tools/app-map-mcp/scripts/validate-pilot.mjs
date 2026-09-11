@@ -145,18 +145,74 @@ for (const platform of platforms) {
   }
 }
 
+// 2b. ids.yaml ↔ screen file agreement (validate rule 2 extension): title/deep_link must match when both present;
+//     gate files carry no title (07 §2.1, architecture §7 decision 33)
+for (const platform of platforms) {
+  for (const f of readdirSync(join(MAP, platform, 'screens'))) {
+    const file = join(MAP, platform, 'screens', f);
+    const doc = parseYaml(readFileSync(file, 'utf8'));
+    const errs = [];
+    if (doc.kind === 'screen') {
+      const reg = ids.screens.find((s) => s.id === doc.id);
+      if (reg?.title !== undefined && doc.title !== undefined && reg.title !== doc.title) errs.push(`title ${JSON.stringify(doc.title)} differs from ids.yaml ${JSON.stringify(reg.title)}`);
+      // agreement is on the route (query stripped): the screen file may add `?fixture=…` (01 R5), the registry records the route
+      const routeKey = (u) => (u.includes('?') ? u.slice(0, u.indexOf('?')) : u);
+      if (reg?.deep_link !== undefined && doc.deep_link !== undefined && routeKey(reg.deep_link) !== routeKey(doc.deep_link)) errs.push(`deep_link ${doc.deep_link} differs from ids.yaml ${reg.deep_link} (route part)`);
+    } else if (doc.title !== undefined) errs.push('gate files must not carry a title (07 §2.1)');
+    if (errs.length) report(file, false, errs.map((m) => ({ instancePath: '', message: m })));
+  }
+}
+
 // 3. JSON fixtures
 const jsonFixture = (kind, file) => existsSync(file) && check(kind, file, JSON.parse(readFileSync(file, 'utf8')));
 jsonFixture('router-export', join(FIX, 'router-export.ios.json'));
 if (existsSync(join(FIX, 'hooks'))) for (const f of readdirSync(join(FIX, 'hooks'))) if (f.endsWith('.json')) jsonFixture('hook-payload', join(FIX, 'hooks', f));
+jsonFixture('drift-report', join(FIX, 'ci', 'drift-report.json'));
+jsonFixture('heal-report', join(FIX, 'ci', 'heal-report.json'));
 
-// 4. trajectory lines: structural sanity (Observation shape, scrubbed snapshot, no `value` keys)
+// 3b. events.jsonl fixture: every line validates against events.schema.json (08 §2)
+const eventsFixture = join(FIX, 'events', 'sample.events.jsonl');
+if (existsSync(eventsFixture)) {
+  const errs = [];
+  readFileSync(eventsFixture, 'utf8').split('\n').filter(Boolean).forEach((line, i) => {
+    let o;
+    try { o = JSON.parse(line); } catch (e) { errs.push(`line ${i + 1}: ${e.message}`); return; }
+    if (!validators.events(o)) errs.push(`line ${i + 1}: ${validators.events.errors.map((e) => `${e.instancePath || '/'} ${e.message}`).join('; ')}`);
+  });
+  report(eventsFixture, errs.length === 0, errs.map((m) => ({ instancePath: '', message: m })));
+}
+
+// 3c. CI params fixture: `{recipe: {param: value}}` and every required param of a pilot recipe has a value
+const paramsFixture = join(FIX, 'ci', 'params.json');
+if (existsSync(paramsFixture)) {
+  const params = JSON.parse(readFileSync(paramsFixture, 'utf8'));
+  const errs = [];
+  for (const platform of platforms) {
+    const dir = join(MAP, platform, 'recipes');
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir)) {
+      const doc = parseYaml(readFileSync(join(dir, f), 'utf8'));
+      for (const p of doc.params) if (p.required && params[doc.id]?.[p.name] === undefined && !(p.values && p.values.length)) errs.push(`${doc.id}.${p.name}: no CI value (maestro-export would fail with bad_input)`);
+    }
+  }
+  report(paramsFixture, errs.length === 0, errs.map((m) => ({ instancePath: '', message: m })));
+}
+
+// 4. trajectory lines: structural sanity (Observation shape, scrubbed snapshot, no `value` keys,
+//    no label on or under a node whose id is `dynamic: true` in ids.yaml — 07 §2.3.2)
+const dynamicIds = new Set(ids.elements.filter((e) => e.dynamic === true).map((e) => e.id));
 const traj = join(FIX, 'trajectories', 'create_invoice.session.jsonl');
 if (existsSync(traj)) {
   const errs = [];
   const lines = readFileSync(traj, 'utf8').split('\n').filter(Boolean);
   lines.forEach((line, i) => {
     const o = JSON.parse(line);
+    const walkDyn = (n, under) => {
+      const d = under || dynamicIds.has(n.a11y_id);
+      if (d && n.label !== undefined) errs.push(`line ${i + 1}: label under dynamic id ${n.a11y_id ?? '(child)'} (07 §2.3.2)`);
+      for (const c of n.children ?? []) walkDyn(c, d);
+    };
+    if (o.snapshot) walkDyn(o.snapshot.root, false);
     for (const k of ['ts', 'session', 'seq', 'tool', 'input', 'screen_before', 'screen_after', 'signature_after', 'snapshot', 'ok', 'latency_ms']) if (!(k in o)) errs.push(`line ${i + 1}: missing ${k}`);
     if (o.seq !== i + 1) errs.push(`line ${i + 1}: seq must be ${i + 1}`);
     if (o.snapshot && o.snapshot.scrubbed !== true) errs.push(`line ${i + 1}: snapshot not marked scrubbed`);

@@ -27,7 +27,8 @@
           "const": "task"
         },
         "task": {
-          "type": "string"
+          "type": "string",
+          "description": "declared task text after the PII deny list (07 §2.3.4); local-only (07 §2.4)"
         },
         "mode_start": {
           "type": "string",
@@ -151,7 +152,7 @@
         },
         "fallback_step": {
           "type": "string",
-          "pattern": "^s[0-9]+$"
+          "pattern": "^s[0-9]+[a-z]?$"
         },
         "fallback_reason": {
           "type": "string"
@@ -197,7 +198,8 @@
           "type": "string"
         },
         "step": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^s[0-9]+[a-z]?$"
         },
         "element": {
           "type": "string"

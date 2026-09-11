@@ -1,9 +1,16 @@
 /**
  * [A1] `app-map validate` — 02 §10 rules 1–8 (06 R1 blocks the PR on any error).
  *
- *  1. every file validates against its JSON Schema (yaml/schemas.ts)
+ *  1. every file validates against its JSON Schema (yaml/schemas.ts); plus a safe-regex check
+ *     on every user-authored regex source (`matches[]`, `label_regex`): ≤200 chars, no nested
+ *     quantifiers (`(a+)+`, `(a*)*`, `(a|aa)+`-style) — `safeRegexIssue` (07 §4 malicious YAML)
  *  2. every element id, screen id, gate id exists in ids.yaml (gate dismiss controls count as
- *     registered via `gates[].dismiss`; screen markers via `screens[].id`)
+ *     registered via `gates[].dismiss`; screen markers via `screens[].id`); element ids in
+ *     screen files match `ID_REGEX` (2+ segments; `ELEMENT_ID_REGEX` applies to ids.yaml only);
+ *     when ids.yaml carries `title`/`deep_link` for a screen they must agree with the screen
+ *     file's — `title` exactly, `deep_link` on `routeKey` (query stripped: the registry records
+ *     the route, the screen file may add `?fixture=…`, 01 R5); `indexMap` serves the screen
+ *     file's values (two sources of truth otherwise — `plan_path`, `routes`, drift)
  *  3. every edge `to`, `entry.fallback_path` entry, `expect.screen`, condition `screen` references
  *     an existing screen file (`_previous` allowed on gates)
  *  4. every committed element has ≥2 locators and an `a11y_id` locator, unless the file is a
@@ -14,7 +21,10 @@
  *  7. serialization is canonical (yaml/canonical.ts `isCanonical`)
  *  8. forbidden content sweep over `elements[].label`, `title`, every `text`/`text_present`/
  *     `match.text` and `description`: email, phone, 13–19 digit runs, currency, IBAN-like,
- *     SSN-like (`scrub.ts` PII_PATTERNS); `{param}` slots are exempt
+ *     SSN-like (`scrub.ts` PII_PATTERNS); `{param}` slots are exempt. Also a WARNING when a
+ *     `title` or element `label` is not in `.local/strings.<platform>.txt` while that file
+ *     exists (07 §2.1: static copy must exist in the app's string tables); gates carry no
+ *     `title` (architecture §7 decision 33)
  *
  * Also enforced: file name equals `id` (02 §2.1); recipe `platform` equals its directory;
  * dynamic elements carry no `label` (07 §2.3).
@@ -62,6 +72,12 @@ export function forbiddenContentIssues(file: string, doc: ScreenFile | RecipeFil
 export function nonCanonicalFiles(config: Pick<AppMapConfig, 'dir'>): string[] {
   void config;
   throw new NotImplementedError('validate.nonCanonicalFiles');
+}
+
+/** Pure: rule 1 safe-regex check; `undefined` when `source` is acceptable. */
+export function safeRegexIssue(source: string): string | undefined {
+  void source;
+  throw new NotImplementedError('validate.safeRegexIssue');
 }
 
 /** Human-readable, one issue per line: `<file>[:<location>] rule <n>: <message>` — CI output (06 §4). */

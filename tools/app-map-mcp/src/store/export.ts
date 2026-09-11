@@ -8,8 +8,12 @@
  *   `last_verified_build`; `manifest.generated_at` is the only timestamp and is refreshed only
  *   when the manifest itself changes (build bump via import-router).
  * - Conflict safety: before overwriting, compare the file's current git blob hash
- *   (yaml/load.gitBlobHash) with the `blob_sha` recorded at load; if it differs, the file is
- *   listed in `conflicts` with a unified diff and NOT written unless `force`.
+ *   (yaml/load.gitBlobHash) with the `blob_sha` recorded at load (`ctx.map.files`, mirrored in
+ *   `db.getBlobSha`); if it differs, the file is listed in `conflicts` with a unified diff and
+ *   NOT written unless `force`. A file that was never loaded (new screen) has no recorded sha
+ *   and is written only if it does not exist on disk (else conflict).
+ * - Dirty kinds: `screen`, `recipe`, `ids` (import-router registered screens, 06 R7) and
+ *   `manifest` (build refresh). Paths come from paths.ts for `ctx.config.platform`.
  * - `check`: reload every YAML, re-serialize canonically, report `non_canonical` paths; writes
  *   nothing (06 R1). Exit code for the CLI: 1 when `conflicts` or `non_canonical` is non-empty.
  * - Idempotent: a second export writes nothing (02 §11).
@@ -17,7 +21,8 @@
  * Layer: store (imports context types + yaml/*).
  */
 import type { AppMapContext } from '../context.ts';
-import type { ExportResult, RecipeFile, ScreenFile } from '../types.ts';
+import type { Platform } from '../config.ts';
+import type { ExportResult, IdsRegistry, Manifest, RecipeFile, ScreenFile } from '../types.ts';
 import { NotImplementedError } from '../errors.ts';
 
 export interface ExportOptions {
@@ -32,9 +37,13 @@ export function exportMap(ctx: AppMapContext, opts: ExportOptions = {}): ExportR
   throw new NotImplementedError('store/export.exportMap');
 }
 
-/** Pure: relative path → canonical text for the given entities (what `exportMap` would write). */
-export function renderEntities(entities: { screens: ScreenFile[]; recipes: RecipeFile[] }): Map<string, string> {
-  void entities;
+/**
+ * Pure: relative path (`<platform>/screens/<id>.yaml`, `<platform>/recipes/<id>.yaml`,
+ * `<platform>/manifest.yaml`, `ids.yaml`) → canonical text for the given entities (what
+ * `exportMap` would write). `ScreenFile` carries no platform, hence the argument.
+ */
+export function renderEntities(platform: Platform, entities: { screens: ScreenFile[]; recipes: RecipeFile[]; manifest?: Manifest; ids?: IdsRegistry }): Map<string, string> {
+  void platform; void entities;
   throw new NotImplementedError('store/export.renderEntities');
 }
 

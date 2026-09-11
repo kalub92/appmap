@@ -11,19 +11,31 @@
  *
  * 7.2 acceptance — ALL of: score ≥ 0.75 and runner-up ≤ score − 0.10; if `intent_critical`,
  *   `labelNorm(node)` === stored `label_norm` exactly (invariant 6); the step's `expect` holds
- *   after acting on the candidate (`verify` callback — the guided runner asks the LLM to act and
- *   checks the next observation; the headless runner re-exports and reruns).
- *   Accepted → `updated_element`: new `a11y_id` locator at rank 0 when the node has an id, else
- *   the winning strategy (`role_label` from the node's label; never `text`/`geometry` alone on
- *   `intent_critical`, 04 §7.3) promoted to rank 0; `status: healed_pending_review`; fingerprint
- *   refreshed; `db.putElement` marks the screen dirty; `heal` event logged.
- *   Rejected → reasons `low_score` | `ambiguous` | `intent_critical_label_changed` |
- *   `postcondition_failed` | `no_candidates`; a step without `expect` → `no_expect` (never heals).
+ *   after acting on the candidate. The postcondition check is asynchronous by nature, so the
+ *   API is split in three pure-ish stages that the runners sequence:
+ *
+ *   1. `proposeHeal(input)`            pure: score + static rules → `candidate` or a rejection reason;
+ *   2. the runner acts on the candidate (guided: hands `candidate.proposed_locator` out as the
+ *      step target and stores `toPendingHeal(...)` on `RunRecord.pending_heal`; headless:
+ *      re-exports the flow from step k with the candidate and reruns);
+ *   3. `applyHeal(ctx, pending|input, candidate)` once `expect` held → writes `updated_element`
+ *      (new `a11y_id` locator at rank 0 when the node has an id, else the winning strategy —
+ *      `role_label` from the node's label; never `text`/`geometry` alone on `intent_critical`,
+ *      04 §7.3 — promoted to rank 0; fingerprint refreshed; `status: healed_pending_review`),
+ *      `db.putElement` (screen dirty, reason `heal`), bumps the element `heals` counter and logs
+ *      the `heal` event; or `rejectHeal(ctx, pending|input, reason, candidates)` which logs the
+ *      rejected `heal` event (`postcondition_failed`, `low_score`, `ambiguous`,
+ *      `intent_critical_label_changed`, `no_candidates`; a step without `expect` → `no_expect`,
+ *      never heals).
+ *
+ *   `heal()` is the one-call convenience for headless mode (propose → `verify` → apply/reject).
+ *   Guided mode cannot use it: the postcondition is only observable on the NEXT `report_step`
+ *   call, possibly in a new process (state lives in the db, architecture §2.2).
  *
  * Layer: session (imports context, types, tree, signature, resolve, events).
  */
 import type { AppMapContext } from './context.ts';
-import type { HealCandidate, HealInput, HealResult, Role } from './types.ts';
+import type { HealCandidate, HealInput, HealReason, HealResult, PendingHeal, Role } from './types.ts';
 import { NotImplementedError } from './errors.ts';
 
 /** roles considered interchangeable for candidate selection */
@@ -39,15 +51,61 @@ export function scoreCandidates(input: HealInput): HealCandidate[] {
   throw new NotImplementedError('heal.scoreCandidates');
 }
 
-/** Pure: 7.2 static checks (score, margin, intent_critical label) — no postcondition yet. */
-export function proposeHeal(input: HealInput): { candidate?: HealCandidate; runner_up?: HealCandidate; reason: HealResult['reason']; candidates: HealCandidate[] } {
+/** What `proposeHeal` returns: the static verdict before any postcondition. */
+export interface HealProposal {
+  /** present only when every static rule (score, margin, intent_critical label) passed */
+  candidate?: HealCandidate;
+  runner_up?: HealCandidate;
+  /** `accepted` when `candidate` is set (pending the postcondition), else the rejection reason */
+  reason: HealReason;
+  /** top-3 by score, for the fallback payload */
+  candidates: HealCandidate[];
+}
+
+/** Pure: 7.2 static checks (score, margin, intent_critical label, `no_expect`) — no postcondition yet. */
+export function proposeHeal(input: HealInput): HealProposal {
   void input;
   throw new NotImplementedError('heal.proposeHeal');
 }
 
+/** Pure: serializable pending record for `RunRecord.pending_heal` (drops the `node`, keeps its fingerprint). */
+export function toPendingHeal(input: HealInput, proposal: HealProposal & { candidate: HealCandidate }, scoredOnSeq: number): PendingHeal {
+  void input; void proposal; void scoredOnSeq;
+  throw new NotImplementedError('heal.toPendingHeal');
+}
+
+/** Pure: the element as it will be stored when the heal is accepted (locator promotion + fingerprint refresh). */
+export function healedElement(input: Pick<HealInput, 'element' | 'intent_critical'>, candidate: PendingHeal['candidate']): NonNullable<HealResult['updated_element']> {
+  void input; void candidate;
+  throw new NotImplementedError('heal.healedElement');
+}
+
 /**
- * Full heal: propose, then `verify(candidate)` for the postcondition, then apply to the cache
- * and log. `verify` resolves `true` when `expect` held after acting on the candidate.
+ * Stage 3 (accept): the postcondition held. Writes the healed element to the cache
+ * (`db.putElement(screen, updated, {reason: 'heal'})` → screen dirty, so `export` produces the
+ * PR diff), bumps counters, appends the `heal` event (`accepted: true`) and returns the
+ * `HealResult`. Accepts either a live `HealInput` + candidate (headless) or a persisted
+ * `PendingHeal` (guided).
+ */
+export function applyHeal(ctx: AppMapContext, source: { input: HealInput; candidate: HealCandidate; runner_up?: HealCandidate } | { pending: PendingHeal; recipe: string }, opts: { run_id?: string } = {}): HealResult {
+  void ctx; void source; void opts;
+  throw new NotImplementedError('heal.applyHeal');
+}
+
+/**
+ * Stage 3 (reject): logs the rejected `heal` event (`accepted: false`, `reason`), bumps the
+ * element `misses` counter and returns a `HealResult` whose `candidates` (≤3) feed the fallback
+ * payload. `intent_critical_label_changed` additionally makes the guided fallback reason the
+ * same string so the LLM confirms with the user (04 §7.2).
+ */
+export function rejectHeal(ctx: AppMapContext, source: { input: HealInput } | { pending: PendingHeal; recipe: string }, reason: Exclude<HealReason, 'accepted'>, candidates: HealCandidate[], opts: { run_id?: string; runner_up_score?: number } = {}): HealResult {
+  void ctx; void source; void reason; void candidates; void opts;
+  throw new NotImplementedError('heal.rejectHeal');
+}
+
+/**
+ * Headless convenience: `proposeHeal` → `verify(candidate)` (re-export from step k and rerun,
+ * 04 §6.1) → `applyHeal` | `rejectHeal(postcondition_failed)`. Not used by guided.ts.
  */
 export function heal(ctx: AppMapContext, input: HealInput, verify: (candidate: HealCandidate) => Promise<boolean>): Promise<HealResult> {
   void ctx; void input; void verify;

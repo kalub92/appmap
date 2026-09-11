@@ -13,8 +13,10 @@
  *    THRESHOLDS.alert_pending_heals or any intent_critical rejection;
  *  - brittleness_index = runs on a build that is new (first run of that build in the window)
  *    needing ≥1 heal or fallback ÷ such runs;
- *  - unknown_screen_rate = identify events with `screen === 'unknown'` ÷ identify events;
- *    alert when > THRESHOLDS.alert_unknown_rate;
+ *  - unknown_screen_rate = identify events with `screen === 'unknown'` ÷ identify events over
+ *    the window, and unknown_screen_rate_7d over the trailing
+ *    `THRESHOLDS.alert_unknown_window_days`; the alert fires on the 7-day value
+ *    (08 §5 row 6 "> 10% for a week");
  *  - map_coverage = screens with deep_link and `verified` status ÷ screens in the latest router
  *    export (falls back to screens in the map when no export is available);
  *  - convergence[r] = success rate of successive runs of r (cumulative), oldest → newest;

@@ -1,6 +1,5 @@
 id: gate.biometric_prompt
 kind: gate
-title: Biometric prompt
 deep_link: none
 signature:
   marker: none

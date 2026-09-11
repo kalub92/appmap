@@ -201,7 +201,9 @@
         "label_regex": {
           "type": "string",
           "minLength": 1,
-          "format": "regex"
+          "format": "regex",
+          "maxLength": 200,
+          "description": "user-authored regex source; ≤200 chars and no nested quantifiers (validate rule 1 safe-regex check, 07 §4)"
         }
       },
       "required": [

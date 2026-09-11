@@ -52,12 +52,13 @@ export function combineSignals(signals: readonly IdentifySignal[]): number {
 
 /**
  * Evaluate a variant `when` (or edge pre/postcondition) against known facts. `true`/`false` when
- * every key in `cond` is present in `facts`; `undefined` when any key is unknown (02 §4.3
- * "unknown conditions are treated as any variant may match"). `platform_version` compares
- * dotted versions with the leading operator.
+ * every key in `cond` is present in `facts` (`flag`/`value` pairs are looked up in `flags`:
+ * `flags[cond.flag] === cond.value`); `undefined` when any key is unknown (02 §4.3 "unknown
+ * conditions are treated as any variant may match"). `platform_version` compares dotted
+ * versions with the leading operator. Facts come from `probeConditions(ctx.probe)`.
  */
-export function evaluateCondition(cond: Condition, facts: Condition | undefined): boolean | undefined {
-  void cond; void facts;
+export function evaluateCondition(cond: Condition, facts: Condition | undefined, flags?: IdentifyOptions['flags']): boolean | undefined {
+  void cond; void facts; void flags;
   throw new NotImplementedError('identify.evaluateCondition');
 }
 

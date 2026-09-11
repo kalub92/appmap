@@ -22,7 +22,8 @@ android/…                    same shape for Android; ids are shared, locators 
                              resource ids (01 R3)
 .local/                      git-ignored runtime state: cache.sqlite, ingest.sock,
                              trajectories/, events.jsonl, server.log, strings.<platform>.txt,
-                             maestro/ (02 §7, 07 §2.4)
+                             ci-params.<platform>.json (CI recipe param values, generated from
+                             the app's fixtures at build time — 07 §2.3.5), maestro/ (02 §7, 07 §2.4)
 ```
 
 Files are written in canonical form (fixed key order, id-sorted lists, block style, 2-space

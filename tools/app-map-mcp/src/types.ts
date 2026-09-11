@@ -9,9 +9,10 @@
  * - optional fields are `?:` and are omitted (never `null`) in YAML/JSON;
  * - "build" is always the build *number* as a string (`"4412"`, 02 §8).
  *
- * Layer: leaf (imports only config types).
+ * Layer: leaf (imports only config types and errors).
  */
 import type { Platform } from './config.ts';
+import { AppMapError, ERROR_CODES } from './errors.ts';
 
 export type { Platform } from './config.ts';
 
@@ -21,7 +22,13 @@ export type { Platform } from './config.ts';
 
 /** `^[a-z0-9]+(\.[a-z0-9_]+)+$` — every dotted id (elements, markers, gates, dismiss controls) */
 export const ID_REGEX = /^[a-z0-9]+(\.[a-z0-9_]+)+$/;
-/** element ids: `<feature>.<name>.<kind>`, three or more segments, never `screen.`/`gate.` */
+/**
+ * Registry element ids (`ids.yaml` `elements[]` ONLY): `<feature>.<name>.<kind>`, three or more
+ * segments, never `screen.`/`gate.` (mirrors ids.schema.json). Element ids inside screen files
+ * and recipes are validated with `ID_REGEX` (01 R2, two or more segments) because gate dismiss
+ * controls (`gate.push_permission.deny`) are elements there. The last segment is NOT required to
+ * spell the registry `kind` (01 R1's own example is `invoice.list.table` with `kind: list`).
+ */
 export const ELEMENT_ID_REGEX = /^(?!screen\.|gate\.)[a-z0-9]+(\.[a-z0-9_]+){2,}$/;
 /** screen ids: snake_case */
 export const SCREEN_ID_REGEX = /^[a-z][a-z0-9_]*$/;
@@ -35,8 +42,14 @@ export const MARKER_REGEX = /^screen\.([a-z][a-z0-9_]*)$/;
 export const DEEP_LINK_REGEX = /^appmap:\/\/([a-z][a-z0-9_]*)(\?[A-Za-z0-9_.=&%-]*)?$/;
 /** structural hash (02 §4.4) */
 export const STRUCTURAL_HASH_REGEX = /^sha1:[0-9a-f]{40}$/;
-/** recipe step ids (02 §6) */
+/** recipe step ids in YAML (02 §6): `s1`, `s2`, … */
 export const STEP_ID_REGEX = /^s[0-9]+$/;
+/**
+ * step ids as they appear in runs, events and reports: recipe steps plus the guided-run entry
+ * steps `s0` / `s0a`, `s0b`, … (fallback-path expansion, architecture §7 decision 17). Used by
+ * events.schema.json `fallback_step` and heal-report.schema.json `step`.
+ */
+export const RUN_STEP_ID_REGEX = /^s[0-9]+[a-z]?$/;
 /** `{param}` slot in a recipe step (04 §3.4) */
 export const PARAM_SLOT_REGEX = /^\{([a-z][a-z0-9_]*)\}$/;
 
@@ -189,7 +202,8 @@ export interface Manifest {
   schema_version: 1;
   app_id: string;
   platform: Platform;
-  deep_link_scheme: string;
+  /** fixed by 01 R5; every deep-link pattern (`DEEP_LINK_REGEX`, schemas) hard-codes `appmap://` */
+  deep_link_scheme: 'appmap';
   build: BuildInfo;
   generated_at: Timestamp;
   /** `app-map-mcp@<semver>` */
@@ -475,15 +489,35 @@ export interface Tree {
   captured_at?: Timestamp;
   /** route/deep link the driver reported for this state, if any (identification signal 03 §5.3) */
   route?: string;
-  /** build number the driver reported, if any (03 §13) */
+  /**
+   * build number the driver reported, if any (03 §3 `APP_MAP_BUILD=auto`, 03 §13). `tree.ts`
+   * maps the Argent wrapper's `build_number` here; observe.ts calls `ctx.setBuild(tree.build)`
+   * when `config.build === 'auto'`.
+   */
   build?: BuildNumber;
+  /** bundle id / application id the driver reported (Argent wrapper `bundle_id`); feeds the 07 §3 probe */
+  app_id?: string;
   root: TreeNode;
   /** absent or false on raw trees */
   scrubbed?: false;
 }
 
-/** The only tree form that exists past the ingest boundary (03 §7). Runtime-branded by `scrubbed: true`. */
+/**
+ * Compile-time brand that only `scrub()` can mint (a single cast inside scrub.ts). It is a
+ * `declare`d symbol — it never exists at runtime and is never serialized — so
+ * `{ ...rawTree, scrubbed: true as const }` does NOT type-check as a `ScrubbedTree`.
+ */
+declare const SCRUBBED: unique symbol;
+
+/**
+ * The only tree form that exists past the ingest boundary (03 §7). Branded twice: at compile
+ * time by `[SCRUBBED]` (see above) and at runtime by `scrubbed: true` (the JSON form, checked by
+ * `isScrubbed`). `db.insertObservation`, the trajectory writer (`tree.compactJson` for the
+ * trajectory line) and every event/tool output that carries a tree MUST assert `isScrubbed`
+ * as a precondition and throw `AppMapError(bad_input)` otherwise (07 §8 unit test).
+ */
 export interface ScrubbedTree extends Omit<Tree, 'scrubbed'> {
+  readonly [SCRUBBED]: true;
   scrubbed: true;
   /** number of strings replaced by `[redacted]` (07 §2.3.4); >0 flags the observation `scrub_hit` */
   scrub_hits?: number;
@@ -499,6 +533,8 @@ export interface ScrubPolicy {
   dynamicIds: ReadonlySet<string>;
   /** per-id computed-label regexes from ids.yaml `label_regex` (07 §9) */
   labelRegexById: ReadonlyMap<string, RegExp>;
+  /** registered screen markers (`screen.<id>`); with staticIds/dynamicIds these are the ids exempt from the PII sweep */
+  markers: ReadonlySet<string>;
   /** static string table snapshot (`.local/strings.<platform>.txt`), exact-match */
   staticLabels: ReadonlySet<string>;
   /** PII deny list applied to every surviving string (07 §2.3.4) */
@@ -539,10 +575,11 @@ export interface Observation {
   session: SessionId;
   /** 1-based, monotonic per session */
   seq: number;
-  /** task text declared via match_recipe/name_task; absent before a task is declared (04 §2) */
+  /** task text declared via `match_recipe` (always, even on no_match) or `compile_recipe`; absent before a task is declared (04 §2); PII-redacted */
   task?: string;
   /** e.g. `mcp__argent__tap` */
   tool: string;
+  /** driver arguments; `text` is kept for the compiler (04 §3.4) after `redactString` (architecture §7 decision 13) */
   input: DriverInput;
   /** resolved element id for the tapped/typed node when one exists (04 §2) */
   element?: ElementId;
@@ -602,8 +639,18 @@ export interface IdentifyOptions {
   route?: string;
   /** current build number for confidence decay (02 §8); omit = no decay */
   build?: BuildNumber;
-  /** evaluated against variant `when` conditions (02 §4.3); unknown keys → any variant may match */
+  /**
+   * Facts evaluated against variant `when` conditions (02 §4.3); unknown keys → any variant may
+   * match. Sourced by the callers (observe.ts, guided.ts, headless.ts, drift.ts) from
+   * `ctx.probe` via `probeConditions(ctx.probe)` — `flag` from `probe.flags`, `auth` from
+   * `probe.auth`, `platform_version` from `probe.platform_version`.
+   */
   conditions?: Condition;
+  /**
+   * feature flags known to hold (`probe.flags`); a variant `when {flag, value}` is evaluated
+   * against `flags[flag]` (absent flag ⇒ unknown ⇒ variant may match)
+   */
+  flags?: Readonly<Record<string, boolean | string | number>>;
   /** platform of the tree; defaults to the map's */
   platform?: Platform;
 }
@@ -697,6 +744,28 @@ export interface HealInput {
   /** the resolution that triggered healing */
   trigger: ResolveResult;
   build: BuildNumber;
+  /** guided run this heal belongs to (for the `heal` event's `run_id`) */
+  run_id?: RunId;
+}
+
+/**
+ * A proposed heal whose postcondition has not been checked yet (04 §7.2 rule 3). In guided
+ * mode the check happens on the NEXT `report_step` call, so the candidate is persisted on the
+ * `RunRecord` (`pending_heal`) — serializable, no `TreeNode` reference. `applyHeal` rebuilds the
+ * `updated_element` from `candidate.proposed_locator` + `candidate.fingerprint`.
+ */
+export interface PendingHeal {
+  step: StepId;
+  screen: ScreenId;
+  element: ElementId;
+  intent_critical: boolean;
+  old_strategy: LocatorStrategy;
+  old_locator?: Locator;
+  candidate: Omit<HealCandidate, 'node'> & { fingerprint: Fingerprint };
+  runner_up_score?: number;
+  /** seq of the observation the candidate was scored on */
+  scored_on_seq: number;
+  ts: Timestamp;
 }
 
 // =============================================================================================
@@ -726,6 +795,8 @@ export interface RunStep {
   intent_critical?: boolean;
   /** 07 §3: candidate recipes announce intent_critical steps to the user before acting */
   announce?: boolean;
+  /** the target is a heal candidate awaiting its postcondition (04 §7.2.3); the `healed` summary follows on the next report_step */
+  healing?: boolean;
 }
 
 export const FALLBACK_REASONS = [
@@ -779,7 +850,14 @@ export interface RunRecord {
   recipe: RecipeId;
   version: number;
   mode: RunMode;
-  session?: SessionId;
+  /**
+   * REQUIRED: the harness session whose observations verify this run. `startGuidedRun`
+   * resolves it (`input.session` ?? newest observation's session, else fallback
+   * `no_observation`) and `reportStep` scopes every lookup to `db.listObservations(session,
+   * {fromSeq: last_seq + 1})` — never across sessions (03 §2: many instances share one cache).
+   * Headless runs use the synthetic session `headless:<run_id>`.
+   */
+  session: SessionId;
   params: RecipeParams;
   state: RunState;
   /** step currently handed out (`s0` = entry) */
@@ -793,8 +871,12 @@ export interface RunRecord {
   started_at: Timestamp;
   finished_at?: Timestamp;
   build: BuildNumber;
+  /** `session` seq when the run started (exclusive lower bound); lifecycle `recompile_from` uses `(session, start_seq + 1)` */
+  start_seq: number;
   /** seq of the last observation consumed, so report_step never re-verifies a stale one */
-  last_seq?: number;
+  last_seq: number;
+  /** heal handed out as the current step's target, awaiting its postcondition (04 §7.2.3) */
+  pending_heal?: PendingHeal;
 }
 export interface RunStepRecord {
   run_id: RunId;
@@ -807,7 +889,13 @@ export interface RunStepRecord {
   ts: Timestamp;
 }
 
-/** 07 §3 debug-endpoint record (iOS: `defaults read <bundle> app_map_debug_probe`). */
+/**
+ * 07 §3 debug-endpoint record (iOS: `defaults read <bundle> app_map_debug_probe`; Android
+ * `run-as … files/app_map_debug_probe.json`). Besides the Release/sandbox gate it is the only
+ * source of the 02 §4.3 variant facts (`flags`, `auth`, `platform_version`); the last successful
+ * probe is cached on `AppMapContext.probe` and turned into `IdentifyOptions.conditions` by
+ * `probeConditions`.
+ */
 export interface BuildProbeResult {
   schema_version: 1;
   build_type: 'debug' | 'release';
@@ -816,12 +904,35 @@ export interface BuildProbeResult {
   version: string;
   build_number: BuildNumber;
   git_sha: string;
+  /** feature flags / A/B arms as the app evaluates them (02 §4.3 `flag`) */
+  flags?: Record<string, boolean | string | number>;
+  /** current auth state of the fixture account (02 §4.3 `auth`) */
+  auth?: AuthState;
+  /** OS version, dotted (`17.4`), for `platform_version` conditions */
+  platform_version?: string;
   written_at?: Timestamp;
+}
+
+/** Variant facts from a probe (pure, cheap): `{auth, platform_version}`; flags travel in `IdentifyOptions.flags`. */
+export function probeConditions(probe: BuildProbeResult | null | undefined): Pick<IdentifyOptions, 'conditions' | 'flags'> {
+  if (!probe) return {};
+  const conditions: Condition = {};
+  if (probe.auth !== undefined) conditions.auth = probe.auth;
+  if (probe.platform_version !== undefined) conditions.platform_version = probe.platform_version;
+  return { conditions: Object.keys(conditions).length ? conditions : undefined, flags: probe.flags };
 }
 
 // =============================================================================================
 // Headless replay (04 §6.1) and heal report (06 R6) — schema `heal-report`
 // =============================================================================================
+
+/**
+ * Closed failure codes for a headless run. heal-report.json is uploaded as a CI artifact and
+ * must contain ids and scores only (07 §2.4): Maestro's stdout/stderr (which can echo on-screen
+ * text) stays in the server log, never in the report.
+ */
+export const HEADLESS_ERROR_CODES = ['maestro_failed', 'maestro_unavailable', 'not_headless_eligible', 'release_build_refused', 'timeout', 'hierarchy_unavailable'] as const;
+export type HeadlessErrorCode = (typeof HEADLESS_ERROR_CODES)[number];
 
 export interface HeadlessReport {
   recipe: RecipeId;
@@ -836,8 +947,10 @@ export interface HeadlessReport {
   retries: number;
   ms: number;
   build: BuildNumber;
-  flow_path?: string;
-  error?: string;
+  /** closed code; free text goes to `ctx.log` only */
+  error_code?: HeadlessErrorCode;
+  /** index of the Maestro command that failed (04 §6.1), when Maestro named it */
+  failed_command_index?: number;
 }
 export interface HealReport {
   schema_version: 1;
@@ -855,6 +968,9 @@ export interface HealReport {
 // Drift (06 R4) — schema `drift-report`
 // =============================================================================================
 
+/** why a drift screen is `skipped` (or `broken` without a hierarchy); closed so the CI artifact stays ids-and-scores only (07 §2.4) */
+export const DRIFT_REASONS = ['no_deep_link', 'not_in_router_export', 'marker_timeout', 'open_failed'] as const;
+export type DriftReason = (typeof DRIFT_REASONS)[number];
 export interface DriftScreenResult {
   screen: ScreenId;
   status: DriftStatus;
@@ -864,7 +980,7 @@ export interface DriftScreenResult {
   hash_changed: boolean;
   unresolvable_elements: ElementId[];
   ci_gate_referenced: boolean;
-  reason?: string;
+  reason?: DriftReason;
 }
 export interface DriftReport {
   schema_version: 1;
@@ -912,6 +1028,10 @@ export interface SessionStartHookOutput {
 // =============================================================================================
 
 interface EventBase { ts: Timestamp; platform?: Platform; session?: SessionId }
+/**
+ * `task` (08 §2). `task` is the declared task text after `redactString` (PII patterns) — see
+ * architecture §7 decision 13; it is fixture-only data by policy (07 §3) and local-only (07 §2.4).
+ */
 export interface TaskEvent extends EventBase {
   kind: 'task'; session: SessionId; task: string; mode_start: SessionMode; mode_end: SessionMode; ok: boolean;
   driver_calls: number; perception_bytes: number; screenshots: number; ms: number; build?: BuildNumber;
@@ -946,10 +1066,25 @@ export type EventInput = Event extends infer E ? (E extends Event ? Omit<E, 'ts'
 /** Where an element is declared; the same id may appear on several screens (e.g. gates, tabs). */
 export interface ElementRef { screen: ScreenId | GateId; element: ElementDef }
 
+/** Per-file provenance recorded at load so `export` can detect concurrent edits (03 §4). */
+export interface LoadedFile {
+  kind: 'screen' | 'recipe' | 'manifest' | 'ids';
+  /** screen/gate id, recipe id, `manifest` or `ids` */
+  id: string;
+  /** git blob sha of the file as read (`gitBlobHash`); `undefined` outside a git repo */
+  blob_sha?: string;
+}
+
 export interface LoadedMap {
   platform: Platform;
   manifest: Manifest;
   ids: IdsRegistry;
+  /**
+   * every file that was read, keyed by path relative to `config.dir` (`ios/screens/login.yaml`,
+   * `ids.yaml`); `db.upsertMap` copies `blob_sha` into `screens.blob_sha` / `recipes.blob_sha` /
+   * `registry.blob_sha`, and `store/export.ts` refuses to overwrite a file whose current blob differs
+   */
+  files: ReadonlyMap<string, LoadedFile>;
   /** every registered id (screens' markers, gates, dismiss controls, elements) → registry entry */
   idsIndex: ReadonlyMap<string, IdsElement | IdsGate | IdsScreen>;
   /** element registry entries by id, including gate dismiss controls synthesized as `{kind:'button'}` */
@@ -965,7 +1100,11 @@ export interface LoadedMap {
   markers: ReadonlyMap<string, ScreenId>;
   /** deep link (query stripped) → screen id */
   routes: ReadonlyMap<string, ScreenId>;
-  /** static labels from screen files (element labels + titles) ∪ `.local/strings.<platform>.txt` */
+  /**
+   * static labels from screen files (element labels + `kind: screen` titles) ∪
+   * `.local/strings.<platform>.txt`. Gate titles are NOT included (07 §2.1: only copy that also
+   * exists in the app's string tables may widen what the scrubber keeps).
+   */
   staticLabels: ReadonlySet<string>;
   /** git tree hash of `app-map/` at load time (03 §4 reload check); `undefined` outside a git repo */
   treeHash?: string;
@@ -1019,17 +1158,47 @@ export interface RecordObservationInput {
   error?: string;
   latency_ms?: number;
 }
-export interface NameScreenInput { screen_id: ScreenId; title?: string; deep_link?: string; session?: SessionId }
-export interface NameScreenResult { screen: ScreenFile; created: boolean; from_seq: number }
+export interface NameScreenInput {
+  /** must be registered in ids.yaml `screens[]` (01 R1; `invalid_map` otherwise) */
+  screen_id: ScreenId;
+  title?: string;
+  /** must equal the registry's `deep_link` when both are present, else `none` */
+  deep_link?: string;
+  session?: SessionId;
+}
+export interface NameScreenResult { screen: ScreenFile; created: boolean; from_seq: number; /** element ids found on the snapshot */ elements: ElementId[] }
 export interface CompileRecipeInput {
   session: SessionId;
   task: string;
   recipe_id: RecipeId;
   params: RecipeParam[];
+  /**
+   * concrete values the session used for each param (04 §3.4): `{amount: 50, client: 'Acme
+   * Corp'}` — the LLM knows what it typed. When absent, `match.inferParams(recipe, task)`
+   * supplies them; a typed/selected literal that matches neither is `unparameterized_value`.
+   */
+  values?: Record<string, string | number>;
   /** when set, compile a revision of this recipe (04 §8) */
   revision_of?: number;
   /** start compiling at this seq (guided_fallback revisions) */
   from_seq?: number;
+  /** end of the task slice (inclusive); defaults to the session's `task_end_seq` (finishTask) or the last observation */
+  to_seq?: number;
+}
+/** `mark_recipe` tool input (03 §8, 04 §3.8, 07 §7). */
+export interface MarkRecipeInput {
+  recipe_id: RecipeId;
+  status: RecipeStatus;
+  /**
+   * the reviewed draft (a `RecipeFile` or its YAML text) — REQUIRED for `candidate` when the
+   * recipe is not yet in the cache: the server keeps no per-session draft, nothing is written
+   * without this call (04 §3.8)
+   */
+  recipe?: RecipeFile | string;
+  /** required for `ci_gate` (07 §7: a reviewer who is not the author); recorded in `provenance.reviewed_by` */
+  reviewer?: string;
+  /** skip `eligibleForCiGate` (dev only; the CLI flag) */
+  force?: boolean;
 }
 export type CompileRecipeResult =
   | { ok: true; recipe: RecipeFile; /** canonical YAML for review */ yaml: string; collapsed_observations: number; warnings: string[] }
@@ -1057,9 +1226,47 @@ export interface ValidationIssue {
 }
 export interface ValidateResult { ok: boolean; issues: ValidationIssue[]; files_checked: number }
 export interface MigrateIdResult { old_id: ElementId | ScreenId; new_id: string; files_changed: string[]; references: number }
-export interface ImportRouterResult { created: ScreenId[]; updated: ScreenId[]; retired: ScreenId[]; unchanged: ScreenId[]; edges_added: number }
+export interface ImportRouterResult {
+  created: ScreenId[];
+  updated: ScreenId[];
+  retired: ScreenId[];
+  unchanged: ScreenId[];
+  edges_added: number;
+  /** exported screens that were not in ids.yaml and were appended to `screens[]` (06 R7 PR carries both); empty with `strict` (which errors instead) */
+  unregistered: ScreenId[];
+  /** retired screens deleted by `purgeRetired` (02 §8 "retired for one release, then deleted") */
+  purged: ScreenId[];
+  /** manifest `build` refreshed from the export */
+  build_updated: boolean;
+}
 export interface MaestroExportResult { flows: Array<{ recipe: RecipeId; path: string; eligible: boolean; ineligible_steps: StepId[] }>; out_dir: string }
-export interface LintIdsResult { ok: boolean; issues: Array<{ rule: 'marker_unreferenced' | 'bad_id' | 'orphan_constant' | 'string_literal_id' | 'generated_out_of_sync'; message: string; file?: string; line?: number }> }
+export const LINT_RULES = ['marker_unreferenced', 'bad_id', 'orphan_constant', 'string_literal_id', 'generated_out_of_sync'] as const;
+export type LintRule = (typeof LINT_RULES)[number];
+export interface LintIdsResult {
+  ok: boolean;
+  issues: Array<{
+    rule: LintRule;
+    /** `error` fails the command; `warning` is printed only (e.g. `bad_id` kind-segment convention) */
+    severity: 'error' | 'warning';
+    message: string;
+    /** `marker_unreferenced` is reported per platform (01 R8: referenced in iOS AND Android source) */
+    platform?: Platform;
+    file?: string;
+    line?: number;
+  }>;
+}
+/** `app-map intent-critical-diff <base-ref>` (07 §4, 07 §7) — feeds the PR bot comment and the two-approval rule. */
+export interface IntentCriticalDiffResult {
+  base_ref: string;
+  /** ids whose `intent_critical` went `true → false` in ids.yaml (07 §7: needs two approvals) */
+  downgraded: ElementId[];
+  /** ids whose `intent_critical` went `false/absent → true` */
+  upgraded: ElementId[];
+  /** intent_critical elements whose screen-file entry or recipe step changed in the diff */
+  touched: Array<{ element: ElementId; file: string }>;
+  /** markdown table for the bot comment */
+  markdown: string;
+}
 export interface GenConfigsResult { written: string[]; stale: string[]; ok: boolean }
 export interface PolicyCheckResult { ok: boolean; violations: Array<{ rule: 'unlisted_server' | 'unpinned_npx' | 'secret_literal' | 'hook_outside_dir'; file: string; message: string }> }
 export interface MergeResult { merged: string; conflicts: Array<{ path: string; base?: unknown; ours: unknown; theirs: unknown }> }
@@ -1075,7 +1282,10 @@ export interface ReportMetrics {
   pending_review_heals: number;
   intent_critical_rejections: number;
   brittleness_index: number;
+  /** over the whole window */
   unknown_screen_rate: number;
+  /** over the trailing `THRESHOLDS.alert_unknown_window_days` (08 §5 row 6: "> 10% for a week") */
+  unknown_screen_rate_7d: number;
   map_coverage: number;
   convergence: Record<RecipeId, number[]>;
   alerts: string[];
@@ -1129,6 +1339,10 @@ export function edgeElement(action: EdgeAction): ElementId | undefined {
 }
 export function isScrubbed(t: AnyTree): t is ScrubbedTree {
   return t.scrubbed === true;
+}
+/** Precondition helper for writers: throws unless `isScrubbed(t)` (03 §7, 07 §8). */
+export function assertScrubbed(t: AnyTree, where: string): asserts t is ScrubbedTree {
+  if (!isScrubbed(t)) throw new AppMapError(ERROR_CODES.BAD_INPUT, `${where}: refusing to persist an unscrubbed tree`, 'run the tree through scrub() first (03 §7)');
 }
 export function now(): Timestamp {
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');

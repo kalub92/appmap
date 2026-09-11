@@ -14,9 +14,14 @@
  *     tests inject fixtures) → scrub → identify → if a gate is present, prepend a dismiss and
  *     retry; else heal (heal.ts) with `verify` = re-export from step k and rerun; max
  *     `opts.maxRetries` (2) reruns;
- *  4. return `HeadlessReport {ok, steps_done, heals, fallback_step?, screen_seen?, retries, ms}`;
- *     log a `recipe_run` event and `lifecycle.recordRunOutcome`. On `fallback_step` the caller
- *     may resume in guided mode from that step.
+ *  4. return `HeadlessReport {ok, steps_done, heals, fallback_step?, screen_seen?, retries, ms,
+ *     error_code?, failed_command_index?}` — closed codes only, Maestro's stdout/stderr goes to
+ *     `ctx.log` at `debug` (07 §2.4: the report is a CI artifact); log a `recipe_run` event,
+ *     `lifecycle.markVerified(ctx, {recipe, screens, elements})` on success and
+ *     `lifecycle.recordRunOutcome`. On `fallback_step` the caller may resume in guided mode
+ *     from that step. Headless runs record a `RunRecord` with `session: 'headless:<run_id>'`.
+ *  Params come from `input.params` merged per `maestro.resolveRecipeParams` (params file, enum
+ *  defaults); a missing required param is `bad_input` before anything is exported.
  *
  * `runAllHeadless` (06 R6 / CLI `run --all --status verified,ci_gate --headless --report`):
  * runs every recipe with the given statuses, aggregates a `HealReport` (accepted heals vs
@@ -26,7 +31,7 @@
  * lifecycle, guided (probe), events). All process spawning goes through the injectable `exec`.
  */
 import type { AppMapContext } from '../context.ts';
-import type { AnyTree, HeadlessReport, HealReport, RecipeParams, RecipeStatus, SessionId, StepId, Tree } from '../types.ts';
+import type { AnyTree, HeadlessErrorCode, HeadlessReport, HealReport, RecipeParams, RecipeStatus, SessionId, StepId, Tree } from '../types.ts';
 import type { BuildInfoProbe } from './guided.ts';
 import { NotImplementedError } from '../errors.ts';
 
@@ -36,7 +41,7 @@ export type ExecFn = (cmd: string, args: readonly string[], opts?: { cwd?: strin
 /** Injectable hierarchy dump after a failure (default: `maestro hierarchy` via `exec`). */
 export type HierarchyProvider = (opts: { exec: ExecFn; udid?: string }) => Promise<Tree | AnyTree | null>;
 
-export interface HeadlessInput { recipe_id: string; params: RecipeParams; session?: SessionId }
+export interface HeadlessInput { recipe_id: string; params: RecipeParams; session?: SessionId; /** `--params-file` (default `paths.ciParamsFile`) */ paramsFile?: string }
 export interface HeadlessOptions {
   exec?: ExecFn;
   hierarchy?: HierarchyProvider;
@@ -55,13 +60,13 @@ export function runHeadless(ctx: AppMapContext, input: HeadlessInput, opts: Head
   throw new NotImplementedError('recipes/headless.runHeadless');
 }
 
-export function runAllHeadless(ctx: AppMapContext, opts: HeadlessOptions & { statuses: RecipeStatus[]; params?: Record<string, RecipeParams> }): Promise<HealReport> {
+export function runAllHeadless(ctx: AppMapContext, opts: HeadlessOptions & { statuses: RecipeStatus[]; params?: Record<string, RecipeParams>; paramsFile?: string }): Promise<HealReport> {
   void ctx; void opts;
   throw new NotImplementedError('recipes/headless.runAllHeadless');
 }
 
-/** Pure: exit code + output → outcome; `failed_command_index` when Maestro names the failing command. */
-export function parseMaestroResult(result: ExecResult): { ok: boolean; failed_command_index?: number; message?: string } {
+/** Pure: exit code + output → outcome; `failed_command_index` when Maestro names the failing command. `message` is for the log only, never the report. */
+export function parseMaestroResult(result: ExecResult): { ok: boolean; failed_command_index?: number; error_code?: HeadlessErrorCode; message?: string } {
   void result;
   throw new NotImplementedError('recipes/headless.parseMaestroResult');
 }

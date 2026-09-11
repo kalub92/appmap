@@ -21,8 +21,8 @@
       ]
     },
     "deep_link_scheme": {
-      "type": "string",
-      "pattern": "^[a-z][a-z0-9+.-]*$"
+      "const": "appmap",
+      "description": "fixed by 01 R5; every deep-link pattern in the schemas hard-codes appmap://"
     },
     "build": {
       "type": "object",

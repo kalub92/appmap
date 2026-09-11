@@ -17,7 +17,7 @@
  */
 import type { AppMapContext } from '../context.ts';
 import type { RecipeStats } from '../store/db.ts';
-import type { MarkRecipeResult, RecipeFile, RecipeId, RecipeStatus, RunRecord, ScreenId } from '../types.ts';
+import type { BuildNumber, EdgeAction, ElementId, MarkRecipeInput, MarkRecipeResult, RecipeFile, RecipeId, RecipeStatus, RunRecord, ScreenId } from '../types.ts';
 import { NotImplementedError } from '../errors.ts';
 
 /** 08 §5 thresholds. */
@@ -41,8 +41,10 @@ export const THRESHOLDS = {
   alert_fallback_rate: 0.2,
   /** report alert: pending-review heals (08 §4) */
   alert_pending_heals: 5,
-  /** unknown-screen rate over a week that schedules exploration (08 §5) */
+  /** unknown-screen rate over a week that schedules exploration (08 §5 row 6) … */
   alert_unknown_rate: 0.1,
+  /** … measured over this trailing window (`ReportMetrics.unknown_screen_rate_7d`) */
+  alert_unknown_window_days: 7,
   /** stage-2 exit: brittleness index (08 §6) */
   target_brittleness_index: 0.15,
 } as const;
@@ -85,14 +87,41 @@ export function recordRunOutcome(ctx: AppMapContext, run: RunRecord, outcome: { 
 }
 
 /**
- * `mark_recipe {recipe_id, status}` (03 §8): human-in-the-loop promote/demote. `candidate` on a
- * recipe that is not yet in the cache writes the draft (`opts.recipe`) — the only way a compiled
- * draft becomes real (04 §3.8). `ci_gate` requires `opts.reviewer` (07 §7) and
- * `eligibleForCiGate` unless `opts.force`. Marks the recipe dirty; export writes it.
+ * `mark_recipe {recipe_id, status, recipe?, reviewer?}` (03 §8, `MarkRecipeInput`): human-in-the-
+ * loop promote/demote. `candidate` on a recipe that is not yet in the cache REQUIRES
+ * `input.recipe` (the reviewed draft as `RecipeFile` or YAML text; parsed + schema-validated +
+ * cross-referenced before write) — the only way a compiled draft becomes real (04 §3.8); the
+ * server keeps no per-session draft. `ci_gate` requires `input.reviewer` (07 §7; stored in
+ * `provenance.reviewed_by`) and `eligibleForCiGate` unless `input.force`. Marks the recipe
+ * dirty; export writes it.
  */
-export function markRecipe(ctx: AppMapContext, recipeId: RecipeId, status: RecipeStatus, opts: { recipe?: RecipeFile; reviewer?: string; force?: boolean } = {}): MarkRecipeResult {
-  void ctx; void recipeId; void status; void opts;
+export function markRecipe(ctx: AppMapContext, input: MarkRecipeInput): MarkRecipeResult {
+  void ctx; void input;
   throw new NotImplementedError('recipes/lifecycle.markRecipe');
+}
+
+/** What `markVerified` promotes; every list is optional. */
+export interface VerifiedEntities {
+  screens?: ScreenId[];
+  /** `(screen, element)` pairs resolved by `a11y_id` (or an accepted heal's postcondition) */
+  elements?: Array<{ screen: ScreenId; element: ElementId }>;
+  /** edges whose postcondition was observed */
+  edges?: Array<{ screen: ScreenId; action: EdgeAction; to: ScreenId }>;
+  recipe?: RecipeId;
+}
+
+/**
+ * 02 §8 / 08 §5 row 5: record a successful verification. For every named screen (`meta`),
+ * element, edge and recipe: `last_verified_build = build`, `status: candidate → verified`
+ * (elements in `healed_pending_review` stay — only a human review clears that, 04 §7.2), rows
+ * marked dirty (reason `verify`) so `export` writes the new build number. Called from
+ * `guided.reportStep` (each ok step / done), `headless.runHeadless` (success) and
+ * `observe.ingestObservation` (marker + all required_ids + hash match = lazy re-verify).
+ * Returns what actually changed (unchanged rows are not dirtied, so exports stay quiet).
+ */
+export function markVerified(ctx: AppMapContext, entities: VerifiedEntities, build: BuildNumber = ctx.build): { screens: ScreenId[]; elements: ElementId[]; edges: number; recipe?: RecipeId } {
+  void ctx; void entities; void build;
+  throw new NotImplementedError('recipes/lifecycle.markVerified');
 }
 
 /** 02 §8 / 04 §8: retire every recipe whose steps, entry or verify reference `screenId`. */

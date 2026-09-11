@@ -12,11 +12,19 @@
  *  - screens in the map (`sources` includes `router_export`) but absent from the export →
  *    `meta.status: retired` (not deleted; 02 §8) when `opts.retire` (default true), and
  *    dependent recipes are retired (lifecycle.retireRecipesForScreen);
- *  - gates in the export are checked against `ids.yaml` (missing → error listing them; ids.yaml
- *    is hand-maintained, 01 R1);
- *  - the manifest `build` is refreshed from the export's `build` when newer.
- * Screen ids must exist in `ids.yaml` (otherwise `invalid_map` naming them — the registry is
- * the source of truth). Writes go to the cache as dirty; `export` produces the diff (06 R7 PR).
+ *  - a screen id absent from `ids.yaml` is appended to `screens[]` (`{id, title?, deep_link}`)
+ *    via `db.putIds(..., {dirty: true, reason: 'import_router'})` and reported in
+ *    `unregistered` so the 06 R7 PR carries the registry change and the new screen file
+ *    together (01 R6 "seeds or refreshes"); with `opts.strict` it is `invalid_map` naming the
+ *    ids instead (interactive use). Gates in the export must already be registered (their
+ *    dismiss control is app code — `invalid_map` listing them);
+ *  - `opts.purgeRetired`: a screen already `retired` whose `meta.last_verified_build` (or the
+ *    build it was retired on, tracked in `meta` via `last_verified_build` staying as-is) is
+ *    older than the export's build is deleted (`db.deleteScreen`, file removed by `export`) —
+ *    02 §8 "retired for one release, then deleted"; reported in `purged`;
+ *  - the manifest `build` is refreshed from the export's `build` when newer
+ *    (`db.putManifest`, `build_updated: true`).
+ * Writes go to the cache as dirty; `export` produces the diff (06 R7 PR).
  *
  * Layer: session (imports context, types, yaml/schemas, lifecycle).
  */
@@ -27,6 +35,10 @@ import { NotImplementedError } from './errors.ts';
 export interface ImportRouterOptions {
   /** retire screens missing from the export (default true) */
   retire?: boolean;
+  /** error (`invalid_map`) on exported screens not in ids.yaml instead of registering them (default false; `--strict`) */
+  strict?: boolean;
+  /** delete screens retired on an earlier build (default false; `--purge-retired`) */
+  purgeRetired?: boolean;
   dryRun?: boolean;
 }
 

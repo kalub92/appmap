@@ -4,16 +4,16 @@
  * stress test). Schema is documented in docs/dev/architecture.md ("SQLite schema"); it is
  * regenerable from YAML + logs and versioned via `meta.schema_version` (recreate on mismatch).
  *
- * Tables: `meta`, `screens`, `elements`, `recipes`, `runs`, `run_steps`, `observations`,
- * `sessions`, `counters`, `dirty`. Durable entities are stored as JSON blobs (`json` column) plus
+ * Tables: `meta`, `screens`, `elements`, `recipes`, `registry` (ids.yaml + manifest rows),
+ * `runs`, `run_steps`, `observations`, `sessions`, `counters`, `dirty`. Durable entities are stored as JSON blobs (`json` column) plus
  * the columns needed for queries; `dirty` marks what `export` must write (03 §4 write path).
  *
  * Layer: store (imports types/config/paths/errors + yaml/load for `LoadedMap`).
  */
 import type { AppMapConfig } from '../config.ts';
 import type {
-  BuildNumber, ElementDef, ElementId, LoadedMap, Observation, RecipeFile, RecipeId, RecipeStatus, RunId, RunRecord,
-  RunStepRecord, ScreenFile, ScreenId, SessionId, SessionMode, Timestamp,
+  BuildNumber, ElementDef, ElementId, IdsRegistry, LoadedMap, Manifest, Observation, RecipeFile, RecipeId, RecipeStatus, RunId,
+  RunRecord, RunStepRecord, ScreenFile, ScreenId, SessionId, SessionMode, Timestamp,
 } from '../types.ts';
 import { NotImplementedError } from '../errors.ts';
 
@@ -24,7 +24,8 @@ export type CounterKind = 'element' | 'recipe' | 'screen';
 /** per-element `hits|misses|heals`; per-recipe `runs|replay_success|fallbacks|guided_runs|headless_runs`; per-screen `seen` (02 §7) */
 export type CounterName = 'hits' | 'misses' | 'heals' | 'runs' | 'replay_success' | 'fallbacks' | 'guided_runs' | 'headless_runs' | 'seen';
 
-export type DirtyKind = 'screen' | 'recipe';
+/** `ids` = ids.yaml (import-router registers new screens, 06 R7); `manifest` = build refresh */
+export type DirtyKind = 'screen' | 'recipe' | 'ids' | 'manifest';
 export interface DirtyRow { kind: DirtyKind; key: string; reason: string; ts: Timestamp }
 
 export interface SessionRow {
@@ -32,6 +33,8 @@ export interface SessionRow {
   task?: string;
   /** seq at which the task was declared (observations before it are not compilable, 04 §2) */
   task_seq?: number;
+  /** seq at which `finishTask` closed the task (compile slice end, 04 §3.1); absent while open */
+  task_end_seq?: number;
   mode: SessionMode;
   started_at: Timestamp;
   last_seq: number;
@@ -105,8 +108,10 @@ export class AppMapDb {
 
   // ---- map (durable entities) -----------------------------------------------------------------
   /**
-   * Replace screens/elements/recipes with the loaded map, preserving rows that are `dirty`
-   * (session edits not yet exported) and every counter. Records `tree_hash`/`loaded_at` in meta.
+   * Replace screens/elements/recipes (+ the `registry` row for ids.yaml and manifest) with the
+   * loaded map, preserving rows that are `dirty` (session edits not yet exported) and every
+   * counter. Copies `map.files[*].blob_sha` into `screens.blob_sha` / `recipes.blob_sha` /
+   * `registry.blob_sha` (export conflict check, 03 §4). Records `tree_hash`/`loaded_at` in meta.
    */
   upsertMap(map: LoadedMap): void {
     void map;
@@ -145,6 +150,31 @@ export class AppMapDb {
     void id; void ts;
     throw new NotImplementedError('store/db.AppMapDb.setScreenLastSeen');
   }
+  /** blob sha recorded at load for a screen/recipe/ids/manifest row (export conflict check) */
+  getBlobSha(kind: DirtyKind, key: string): string | undefined {
+    void kind; void key;
+    throw new NotImplementedError('store/db.AppMapDb.getBlobSha');
+  }
+  /** ids.yaml as cached (import-router may append screens, 06 R7) */
+  getIds(): IdsRegistry | undefined {
+    throw new NotImplementedError('store/db.AppMapDb.getIds');
+  }
+  putIds(ids: IdsRegistry, opts: { dirty: boolean; reason?: string }): void {
+    void ids; void opts;
+    throw new NotImplementedError('store/db.AppMapDb.putIds');
+  }
+  getManifest(): Manifest | undefined {
+    throw new NotImplementedError('store/db.AppMapDb.getManifest');
+  }
+  putManifest(manifest: Manifest, opts: { dirty: boolean; reason?: string }): void {
+    void manifest; void opts;
+    throw new NotImplementedError('store/db.AppMapDb.putManifest');
+  }
+  /** delete a screen row (+ its elements) — only `import-router --purge-retired` (02 §8) */
+  deleteScreen(id: ScreenId): void {
+    void id;
+    throw new NotImplementedError('store/db.AppMapDb.deleteScreen');
+  }
 
   // ---- dirty tracking (03 §4) -----------------------------------------------------------------
   listDirty(): DirtyRow[] {
@@ -180,12 +210,12 @@ export class AppMapDb {
     void session;
     throw new NotImplementedError('store/db.AppMapDb.nextSeq');
   }
-  /** store the observation including its scrubbed snapshot JSON (raw trees never reach here) */
+  /** store the observation including its scrubbed snapshot JSON — PRECONDITION `assertScrubbed(obs.snapshot)` (03 §7, 07 §8); throws `bad_input` otherwise */
   insertObservation(obs: Observation): void {
     void obs;
     throw new NotImplementedError('store/db.AppMapDb.insertObservation');
   }
-  /** newest observation for `session`, or across all sessions when omitted */
+  /** newest observation for `session`, or across all sessions when omitted (single-window convenience; runs must pass a session) */
   lastObservation(session?: SessionId): Observation | undefined {
     void session;
     throw new NotImplementedError('store/db.AppMapDb.lastObservation');
@@ -232,6 +262,12 @@ export class AppMapDb {
     throw new NotImplementedError('store/db.AppMapDb.recipeStats');
   }
 
+  /** runs of a session in a given state (Stop-hook outcome inference, observe.inferTaskOutcome) */
+  listRunsForSession(session: SessionId, opts: { states?: RunRecord['state'][] } = {}): RunRecord[] {
+    void session; void opts;
+    throw new NotImplementedError('store/db.AppMapDb.listRunsForSession');
+  }
+
   /** delete observations/runs older than `before` (retention, 07 §2.4) */
   pruneBefore(before: Timestamp): { observations: number; runs: number } {
     void before;
@@ -265,7 +301,7 @@ CREATE TABLE IF NOT EXISTS recipes (
   blob_sha TEXT, json TEXT NOT NULL, dirty INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY, recipe_id TEXT NOT NULL, version INTEGER NOT NULL, mode TEXT NOT NULL,
-  session TEXT, state TEXT NOT NULL, current_step TEXT NOT NULL, step_index INTEGER NOT NULL,
+  session TEXT NOT NULL, state TEXT NOT NULL, current_step TEXT NOT NULL, step_index INTEGER NOT NULL,
   ok INTEGER, heals INTEGER NOT NULL DEFAULT 0, fallbacks INTEGER NOT NULL DEFAULT 0,
   build TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, json TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS runs_by_recipe ON runs (recipe_id, started_at);
@@ -279,8 +315,10 @@ CREATE TABLE IF NOT EXISTS observations (
   latency_ms INTEGER NOT NULL, snapshot_bytes INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL,
   PRIMARY KEY (session, seq));
 CREATE INDEX IF NOT EXISTS observations_by_ts ON observations (ts);
+CREATE TABLE IF NOT EXISTS registry (
+  kind TEXT PRIMARY KEY, blob_sha TEXT, json TEXT NOT NULL, dirty INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS sessions (
-  session TEXT PRIMARY KEY, task TEXT, task_seq INTEGER, mode TEXT NOT NULL DEFAULT 'explore',
+  session TEXT PRIMARY KEY, task TEXT, task_seq INTEGER, task_end_seq INTEGER, mode TEXT NOT NULL DEFAULT 'explore',
   started_at TEXT NOT NULL, last_seq INTEGER NOT NULL DEFAULT 0, driver_calls INTEGER NOT NULL DEFAULT 0,
   perception_bytes INTEGER NOT NULL DEFAULT 0, screenshots INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS counters (

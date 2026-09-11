@@ -9,7 +9,7 @@
  * Layer: yaml (imports types/config/paths/errors + yaml/schemas + validate).
  */
 import type { AppMapConfig, Platform } from '../config.ts';
-import type { BuildNumber, IdsRegistry, LoadedMap, Manifest, McpAllowlist, RecipeFile, ScreenFile } from '../types.ts';
+import type { BuildNumber, IdsRegistry, LoadedFile, LoadedMap, Manifest, McpAllowlist, RecipeFile, ScreenFile } from '../types.ts';
 import { NotImplementedError } from '../errors.ts';
 
 /** `yaml.parse` of a file; throws `AppMapError(invalid_map)` with file + line on parse errors. */
@@ -68,12 +68,17 @@ export interface IndexMapInput {
   /** effective build; defaults to `manifest.build.build_number` */
   build?: BuildNumber;
   treeHash?: string;
+  /** relative path → provenance (`loadMap` fills it from `readScreenFiles`/`readRecipeFiles` paths + `gitBlobHash`); empty map when absent */
+  files?: ReadonlyMap<string, LoadedFile>;
 }
 
 /**
  * Pure: build `LoadedMap` indexes (screens/gates split by `kind`, elements by id with every
  * declaration, markers, routes keyed by `routeKey(deep_link)`, elementRegistry including gate
  * dismiss controls synthesized as `{id, kind:'button', intent_critical:false, dynamic:false}`).
+ * `staticLabels` = `staticStrings` ∪ element labels ∪ `kind: screen` titles (gate titles are
+ * excluded, 07 §2.1). `routes` are keyed from the screen files; validate rule 2 guarantees they
+ * agree with ids.yaml.
  */
 export function indexMap(input: IndexMapInput): LoadedMap {
   void input;
@@ -88,7 +93,11 @@ export interface LoadMapOptions {
   platform?: Platform;
 }
 
-/** Read + validate + index. The one entry point the server, CLI and tests use. */
+/**
+ * Read + validate + index. The one entry point the server, CLI and tests use. Fills
+ * `LoadedMap.files` with one entry per file read (`ids.yaml`, `<platform>/manifest.yaml`,
+ * `<platform>/screens/<id>.yaml`, `<platform>/recipes/<id>.yaml`) and its `gitBlobHash`.
+ */
 export function loadMap(config: AppMapConfig, opts: LoadMapOptions = {}): LoadedMap {
   void config; void opts;
   throw new NotImplementedError('yaml/load.loadMap');

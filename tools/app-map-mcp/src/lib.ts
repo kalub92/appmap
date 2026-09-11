@@ -27,7 +27,7 @@ export { assertValid, getValidator, loadSchemas, validateAgainstSchema, validate
 export type { SchemaIssue, SchemaValidator } from './yaml/schemas.ts';
 export { gitBlobHash, gitTreeHash, indexMap, loadMap, parseYamlFile, readAllowlist, readIds, readManifest, readRecipeFiles, readScreenFiles, readStaticStrings } from './yaml/load.ts';
 export type { IndexMapInput, LoadMapOptions } from './yaml/load.ts';
-export { crossReferenceIssues, forbiddenContentIssues, formatIssues, nonCanonicalFiles, validateMap } from './validate.ts';
+export { crossReferenceIssues, forbiddenContentIssues, formatIssues, nonCanonicalFiles, safeRegexIssue, validateMap } from './validate.ts';
 export type { CrossRefInput, ValidateOptions } from './validate.ts';
 export { migrateId, rewriteIdReferences } from './migrate-id.ts';
 export { mergeYamlDocuments, runMergeDriver } from './merge-driver.ts';
@@ -52,15 +52,16 @@ export { planPath, shortestEdgePath } from './plan.ts';
 export * as format from './format.ts';
 
 // ---- session ------------------------------------------------------------------------------------
-export { declareTask, finishTask, hookPayloadToObservation, ingestObservation, isDriverTool, lastObservation, readTrajectory, recordHookPayload, recordObservation } from './observe.ts';
+export { declareTask, finishTask, hookPayloadToObservation, inferTaskOutcome, ingestObservation, isDriverTool, lastObservation, nameScreen, readTrajectory, recordHookPayload, recordObservation } from './observe.ts';
 export { MATCH_CONFIDENCE, eligibleRecipes, inferParams, matchRecipe, paramsNeeded } from './recipes/match.ts';
 export * as compile from './recipes/compile.ts';
-export { THRESHOLDS, decideTransition, eligibleForCiGate, markRecipe, recordRunOutcome, retireRecipesForScreen, screensReferenced, shouldRecompile } from './recipes/lifecycle.ts';
-export type { LifecycleDecision } from './recipes/lifecycle.ts';
-export { COMPATIBLE_ROLES, bboxProximity, heal, jaroWinkler, lcsLength, proposeHeal, scoreCandidates } from './heal.ts';
-export { assertDebugSandbox, checkExpect, defaultBuildProbe, expandSteps, reportStep, startGuidedRun, substituteParams, toRunStep } from './recipes/guided.ts';
+export { THRESHOLDS, decideTransition, eligibleForCiGate, markRecipe, markVerified, recordRunOutcome, retireRecipesForScreen, screensReferenced, shouldRecompile } from './recipes/lifecycle.ts';
+export type { LifecycleDecision, VerifiedEntities } from './recipes/lifecycle.ts';
+export { COMPATIBLE_ROLES, applyHeal, bboxProximity, heal, healedElement, jaroWinkler, lcsLength, proposeHeal, rejectHeal, scoreCandidates, toPendingHeal } from './heal.ts';
+export type { HealProposal } from './heal.ts';
+export { assertDebugSandbox, checkExpect, defaultBuildProbe, expandSteps, reportStep, resolveRunSession, startGuidedRun, substituteParams, toRunStep } from './recipes/guided.ts';
 export type { BuildInfoProbe, GuidedRunOptions, StartGuidedRunInput } from './recipes/guided.ts';
-export { maestroExport, maestroSelectorFor, recipeToMaestroFlow, stepForCommandIndex } from './recipes/maestro.ts';
+export { maestroExport, maestroSelectorFor, readParamsFile, recipeToMaestroFlow, resolveRecipeParams, stepForCommandIndex } from './recipes/maestro.ts';
 export type { FlowOptions, MaestroExportOptions, MaestroFlow, MaestroSelector } from './recipes/maestro.ts';
 export { checkMaestroVersion, defaultExec, defaultHierarchy, fallbackStepFor, parseMaestroResult, runAllHeadless, runHeadless } from './recipes/headless.ts';
 export type { ExecFn, ExecResult, HeadlessInput, HeadlessOptions, HierarchyProvider } from './recipes/headless.ts';
@@ -74,7 +75,9 @@ export { RESOURCE_TEMPLATES, SERVER_NAME, TOOL_NAMES, createServer, startServer,
 export type { RunningServer, ToolName, ToolResult } from './server.ts';
 export { INGEST_TIMEOUT_MS, MAX_REQUEST_BYTES, parseRequestLine, postToIngestSocket, startIngestServer } from './ingest-socket.ts';
 export type { IngestResponse, IngestServer } from './ingest-socket.ts';
-export { lintIds } from './lint-ids.ts';
+export { KIND_SYNONYMS, constantNames, findStringLiteralIds, lintIds } from './lint-ids.ts';
+export type { LintIdsOptions } from './lint-ids.ts';
 export { genConfigs } from './gen-configs.ts';
-export { policyCheck } from './policy-check.ts';
+export { intentCriticalDiff, policyCheck } from './policy-check.ts';
+export type { IntentCriticalDiffOptions, PolicyCheckOptions } from './policy-check.ts';
 export { computeMetrics, formatReport, report } from './report.ts';

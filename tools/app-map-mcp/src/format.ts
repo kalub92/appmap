@@ -13,7 +13,9 @@
  * recipes  create_invoice, filter_invoices
  * ```
  * - header: `screen <id>  conf <0.00>  title "<title>"  deep_link <link|none>`; `conf` is the
- *   caller-supplied identification confidence (omit the `conf` segment when not supplied);
+ *   caller-supplied identification confidence (omit the `conf` segment when not supplied) —
+ *   the server derives it per architecture §7 decision 44 (last observation's confidence when it
+ *   identified this screen, else the 02 §8 decayed base);
  *   two spaces between segments; `title` segment omitted when the screen has none;
  * - element rows: two-space indent, id padded to the longest id + 2, role padded to the longest
  *   role + 2, then `"<label>"` or `[dynamic]` padded likewise, then `-> <to>` for the first

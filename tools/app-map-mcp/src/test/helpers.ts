@@ -15,7 +15,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AppMapConfig, Platform } from '../config.ts';
 import { CONFIG_DEFAULTS, loadConfig } from '../config.ts';
-import type { AnyTree, HookPayload, Observation, RouterExport, Tree } from '../types.ts';
+import type { AnyTree, DriftReport, Event, HealReport, HookPayload, Observation, RecipeParams, RouterExport, Tree } from '../types.ts';
 
 /** tools/app-map-mcp */
 export const PACKAGE_ROOT: string = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -41,8 +41,10 @@ export interface MakeTempOptions {
   platform?: Platform;
   /** extra env applied on top of the defaults (e.g. `{ APP_MAP_BUILD: '4413' }`) */
   env?: NodeJS.ProcessEnv;
-  /** also copy fixtures/strings.ios.txt to `.local/strings.<platform>.txt` (default true when copyPilot) */
+  /** also copy fixtures/strings.<platform>.txt to `.local/strings.<platform>.txt` (default true when copyPilot); skipped silently when the fixture is absent */
   withStrings?: boolean;
+  /** also copy fixtures/ci/params.json to `.local/ci-params.<platform>.json` (default true when copyPilot) */
+  withCiParams?: boolean;
 }
 
 /**
@@ -58,12 +60,14 @@ export function makeTempAppMapDir(opts: MakeTempOptions = {}): TempAppMapDir {
       recursive: true,
       filter: (src) => !src.split(/[/\\]/).includes('.local'),
     });
+    const platform = opts.platform ?? CONFIG_DEFAULTS.platform;
     if (opts.withStrings ?? true) {
-      const strings = join(FIXTURES_DIR, 'strings.ios.txt');
-      if (existsSync(strings)) {
-        const platform = opts.platform ?? CONFIG_DEFAULTS.platform;
-        cpSync(strings, join(dir, '.local', `strings.${platform}.txt`));
-      }
+      const strings = join(FIXTURES_DIR, `strings.${platform}.txt`);
+      if (existsSync(strings)) cpSync(strings, join(dir, '.local', `strings.${platform}.txt`));
+    }
+    if (opts.withCiParams ?? true) {
+      const params = join(FIXTURES_DIR, 'ci', 'params.json');
+      if (existsSync(params)) cpSync(params, join(dir, '.local', `ci-params.${platform}.json`));
     }
   } else {
     cpSync(join(PILOT_APP_MAP_DIR, 'schema'), join(dir, 'schema'), { recursive: true });
@@ -109,7 +113,7 @@ export function loadFixtureTree(name: string): Tree {
 /** Names of every iOS fixture tree (without suffix), for table-driven tests. */
 export const PILOT_SCREEN_TREES: readonly string[] = ['login', 'invoice_list', 'invoice_new', 'invoice_detail', 'client_picker'];
 
-/** `fixtures/hooks/<name>.json` → HookPayload (`post-tool-use.tap`, `session-start`, `post-tool-use-failure.tap`). */
+/** `fixtures/hooks/<name>.json` → HookPayload (`post-tool-use.tap`, `session-start`, `post-tool-use-failure.tap`, `stop`). */
 export function loadHookFixture(name: string): HookPayload {
   return readJsonFixture<HookPayload>(join('hooks', `${name}.json`));
 }
@@ -127,9 +131,42 @@ export function loadTrajectoryFixture(name: string): Observation[] {
     .map((l) => JSON.parse(l) as Observation);
 }
 
-/** Static string table fixture as a Set (07 §2.3.3). */
-export function loadStaticStringsFixture(): Set<string> {
-  return new Set(readFixture('strings.ios.txt').split('\n').filter((l) => l.length > 0));
+/** Static string table fixture as a Set (07 §2.3.3); `strings.<platform>.txt`. */
+export function loadStaticStringsFixture(platform: Platform = 'ios'): Set<string> {
+  return new Set(readFixture(`strings.${platform}.txt`).split('\n').filter((l) => l.length > 0));
+}
+
+/** `fixtures/events/sample.events.jsonl` → events in file order (08 §2; report.test.ts input). */
+export function loadEventsFixture(name = 'sample'): Event[] {
+  return readFixture(join('events', `${name}.events.jsonl`))
+    .split('\n')
+    .filter((l) => l.trim().length > 0)
+    .map((l) => JSON.parse(l) as Event);
+}
+
+/** `fixtures/ci/drift-report.json` (06 R4 artifact, validates against drift-report.schema.json). */
+export function loadDriftReportFixture(): DriftReport {
+  return readJsonFixture<DriftReport>(join('ci', 'drift-report.json'));
+}
+
+/** `fixtures/ci/heal-report.json` (06 R6 artifact, validates against heal-report.schema.json). */
+export function loadHealReportFixture(): HealReport {
+  return readJsonFixture<HealReport>(join('ci', 'heal-report.json'));
+}
+
+/** `fixtures/ci/params.json` — per-recipe CI param values (`{create_invoice: {amount: 50, client: 'Acme Corp'}}`). */
+export function loadCiParamsFixture(): Record<string, RecipeParams> {
+  return readJsonFixture<Record<string, RecipeParams>>(join('ci', 'params.json'));
+}
+
+/** `fixtures/maestro/<recipe>.flow.yaml` — golden Maestro flow (04 §6.2; maestro.test.ts). */
+export function loadMaestroFlowFixture(recipe = 'create_invoice'): string {
+  return readFixture(join('maestro', `${recipe}.flow.yaml`));
+}
+
+/** `fixtures/lint/<name>` — Swift/Kotlin snippets with lint violations (01 R8; lint-ids.test.ts). */
+export function loadLintFixture(name: 'Bad.swift' | 'Bad.kt'): string {
+  return readFixture(join('lint', name));
 }
 
 /** Deep clone a tree so a test can mutate it (drop ids, relabel) without touching the fixture. */

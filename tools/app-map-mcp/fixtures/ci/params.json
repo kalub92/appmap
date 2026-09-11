@@ -1,0 +1,6 @@
+{
+  "create_invoice": {
+    "amount": 50,
+    "client": "Acme Corp"
+  }
+}

@@ -5,9 +5,11 @@
  * trajectory (observe.readTrajectory / db.listObservations) and returns it for LLM review.
  * Nothing is written until `mark_recipe(candidate)` (lifecycle.markRecipe) — 04 §3.8.
  *
- *  1. slice: observations from the task's `task_seq` (or `input.from_seq`) to the first
- *     observation whose `screen_after` satisfies `verify` (input `verify` when given, else the
- *     last observation); observations before a task is declared are not compilable (`no_task`);
+ *  1. slice: observations from the task's `task_seq` (or `input.from_seq`) to `input.to_seq`,
+ *     else the session's `task_end_seq` (set by `observe.finishTask`: compile_recipe/Stop hook/
+ *     guided done — 04 §3.1's "report_task(ok)"), else the first observation whose
+ *     `screen_after` satisfies `verify`, else the last observation; observations before a task
+ *     is declared are not compilable (`no_task`);
  *  2. collapse backtracking: remove `A → B → A` loops where no `type` happened in B (repeat until
  *     stable) and repeated identical consecutive taps; a trajectory that keeps looping without
  *     converging on a new screen → `loops_never_converge`;
@@ -17,9 +19,11 @@
  *     `swipe` → `swipe`; a tap that dismissed a gate (gate present before, absent after, element
  *     is a gate dismiss id) → `dismiss_gate`;
  *  4. parameterize: every typed/selected value equal (case-insensitive, trimmed; money values
- *     compared numerically) to a declared param's inferred/supplied value becomes `{name}`;
- *     literal values that are not static copy (`map.staticLabels`) → `unparameterized_value`
- *     with `offending_values` (07 §2.3.5);
+ *     compared numerically) to a declared param's value becomes `{name}`; values come from
+ *     `input.values` (the LLM/CLI knows what it typed) and, for params without one, from
+ *     `match.inferParams(recipe-like {params}, input.task)`; literal values that are not static
+ *     copy (`map.staticLabels`) → `unparameterized_value` with `offending_values` so the LLM
+ *     re-calls with `values` (07 §2.3.5);
  *  5. entry: if the first acted-on screen has a `deep_link`, `entry.deep_link` = that link
  *     (`?fixture=logged_in` appended when the recipe has `auth: logged_in`) and the leading
  *     navigation steps become `entry.fallback_path` (screen ids);
@@ -43,8 +47,8 @@ export function compileRecipe(ctx: AppMapContext, input: CompileRecipeInput): Co
   throw new NotImplementedError('recipes/compile.compileRecipe');
 }
 
-/** Step 1. Pure. */
-export function sliceTrajectory(observations: readonly Observation[], opts: { fromSeq: number; verify?: Expect }): Observation[] {
+/** Step 1. Pure. `toSeq` (inclusive) wins over `verify`. */
+export function sliceTrajectory(observations: readonly Observation[], opts: { fromSeq: number; toSeq?: number; verify?: Expect }): Observation[] {
   void observations; void opts;
   throw new NotImplementedError('recipes/compile.sliceTrajectory');
 }
@@ -64,8 +68,8 @@ export function translateSteps(map: LoadedMap, observations: readonly Observatio
   throw new NotImplementedError('recipes/compile.translateSteps');
 }
 
-/** Step 4. Pure. */
-export function parameterize(steps: readonly TranslatedStep[], params: readonly RecipeParam[], values: Readonly<Record<string, string>>, staticLabels: ReadonlySet<string>): { steps: TranslatedStep[]; offending: string[] } {
+/** Step 4. Pure. `values` = `input.values` merged over `inferParams` (see module doc). */
+export function parameterize(steps: readonly TranslatedStep[], params: readonly RecipeParam[], values: Readonly<Record<string, string | number>>, staticLabels: ReadonlySet<string>): { steps: TranslatedStep[]; offending: string[] } {
   void steps; void params; void values; void staticLabels;
   throw new NotImplementedError('recipes/compile.parameterize');
 }

@@ -6,28 +6,36 @@
  * | tool                 | input                                            | body                                                      |
  * |----------------------|--------------------------------------------------|-----------------------------------------------------------|
  * | summary              | {}                                               | format.formatSummary(ctx.map).text                        |
- * | identify_screen      | {snapshot?}                                      | snapshot ? normalize+scrub+identify : identify(last obs)  |
- * | get_screen           | {screen_id}                                      | format.formatGetScreen (≤400 tokens)                      |
- * | find_element         | {screen_id, element_id? | intent?}               | resolve.findElement against the last observation          |
+ * | identify_screen      | {snapshot?, session?}                            | snapshot ? normalize+scrub+identify : identify(last obs of session); conditions from `probeConditions(ctx.probe)` |
+ * | get_screen           | {screen_id, session?}                            | format.formatGetScreen (≤400 tokens); `conf` = the session's last observation's `confidence` when its `screen_after === screen_id`, else `decayConfidence(1, buildsSince(ctx.build, meta.last_verified_build))` (02 §8), else omitted |
+ * | find_element         | {screen_id, element_id? | intent?, session?}     | resolve.findElement against the last observation          |
  * | plan_path            | {from, to}                                       | plan.planPath                                             |
- * | match_recipe         | {instruction, platform?}                         | match.matchRecipe + observe.declareTask                   |
- * | run_recipe           | {recipe_id, params, mode}                        | guided.startGuidedRun | headless.runHeadless              |
+ * | match_recipe         | {instruction, platform?, session?}               | match.matchRecipe; ALWAYS `observe.declareTask(ctx, session, instruction)` — matched or `no_match` (04 §2; there is no `name_task` tool) |
+ * | run_recipe           | {recipe_id, params, mode, session?}              | guided.startGuidedRun | headless.runHeadless              |
  * | report_step          | {run_id, step_id, ok, note?, snapshot?}          | guided.reportStep                                         |
- * | record_observation   | {tool, input, snapshot, ok}                      | observe.recordObservation                                 |
- * | name_screen          | {screen_id, title?, deep_link?}                  | candidate screen from the last observation (explore mode) |
- * | compile_recipe       | {session, task, recipe_id, params[]}             | compile.compileRecipe → draft YAML                        |
- * | mark_recipe          | {recipe_id, status}                              | lifecycle.markRecipe                                      |
- * | export               | {}                                               | store/export.exportMap                                    |
+ * | record_observation   | {tool, input, snapshot, ok, session?}            | observe.recordObservation                                 |
+ * | name_screen          | {screen_id, title?, deep_link?, session?}        | observe.nameScreen (explore mode)                         |
+ * | compile_recipe       | {session, task, recipe_id, params[], values?}    | observe.declareTask when the session has none; compile.compileRecipe → draft YAML; on `ok` `observe.finishTask(ctx, session, {ok: true, mode_end})` (04 §3.1) |
+ * | mark_recipe          | {recipe_id, status, recipe?, reviewer?}          | lifecycle.markRecipe(ctx, MarkRecipeInput) — `recipe` is the reviewed draft (RecipeFile or YAML text), required for `candidate` (04 §3.8); `reviewer` required for `ci_gate` (07 §7) |
+ * | export               | {}                                               | store/export.exportMap (never `force`; that is the CLI's) |
  *
  * Every handler: `try { … } catch (e) { return toolError(e) }` — never throws (03 §11); every
  * text output passes through `capTokens(text, config.maxContextTokens)`. Results are JSON in
  * a single text content block unless the format is a fixed text block (summary, get_screen,
  * steps). `ctx.loadError` short-circuits every tool with that error until `export`/reload.
- * The session id for observation-dependent tools is taken from the newest observation unless
- * the input carries `session`.
+ * Session: MCP gives the server no harness session id, so observation-dependent tools take an
+ * optional `session` and otherwise use the session of the newest observation in the cache
+ * (`ctx.db.lastObservation()`); a guided run pins its session at `run_recipe` time and never
+ * falls back across sessions (03 §2).
  *
  * Resources (03 §9): `app-map://{platform}/summary`, `app-map://{platform}/screens/{id}`,
  * `app-map://{platform}/recipes/{id}` (YAML verbatim from disk, `application/yaml`).
+ *
+ * Startup (`startServer`): `openContext` → `startIngestServer` → connect stdio; then, without
+ * blocking the first tool (03 §11 <700 ms), `headless.checkMaestroVersion(defaultExec,
+ * config.maestroBin, package.json appMap.maestroVersion)` once, non-fatal — a mismatch or
+ * missing binary is logged as `warn` (03 §13, 07 §5.3); headless runs re-check and fail with
+ * `maestro_unavailable`.
  *
  * Logging goes to `ctx.log` (file) — never stdout.
  *

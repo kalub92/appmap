@@ -75,11 +75,30 @@ export interface MaestroExportOptions {
   statuses?: RecipeStatus[];
   /** default `paths.maestroOutDir(config)` */
   outDir?: string;
-  /** params per recipe (CI uses fixture defaults from `params[].values?.[0]` or empty) */
+  /**
+   * params per recipe. Resolution order per param: `params[recipe][name]` → the params file
+   * (`paramsFile` ?? `paths.ciParamsFile(config)` when it exists) → `params[].values?.[0]`
+   * (enum default). A REQUIRED param still without a value → `AppMapError(bad_input)` naming
+   * `<recipe>.<param>` — the flow is never written with a literal `{slot}`.
+   */
   params?: Record<string, RecipeParams>;
+  /** `--params-file <json>`: `{ "<recipe_id>": { "<param>": value } }` (fixture data from the app, never committed — 07 §2.3.5) */
+  paramsFile?: string;
 }
 
-/** `app-map maestro-export [R | --all] [--status s,…] --out DIR` — writes one flow per recipe. */
+/** Load a params file (`{recipe: {param: value}}`); `bad_input` on shape errors; `{}` when absent and `required` is false. */
+export function readParamsFile(path: string, opts: { required?: boolean } = {}): Record<string, RecipeParams> {
+  void path; void opts;
+  throw new NotImplementedError('recipes/maestro.readParamsFile');
+}
+
+/** Pure: the values a recipe will run with (see `MaestroExportOptions.params`); throws `bad_input` listing missing required params. */
+export function resolveRecipeParams(recipe: RecipeFile, sources: { explicit?: RecipeParams; file?: RecipeParams }): RecipeParams {
+  void recipe; void sources;
+  throw new NotImplementedError('recipes/maestro.resolveRecipeParams');
+}
+
+/** `app-map maestro-export [R | --all] [--status s,…] [--params-file f] --out DIR` — writes one flow per recipe. */
 export function maestroExport(ctx: AppMapContext, opts: MaestroExportOptions): MaestroExportResult {
   void ctx; void opts;
   throw new NotImplementedError('recipes/maestro.maestroExport');

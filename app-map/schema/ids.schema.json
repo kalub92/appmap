@@ -37,11 +37,13 @@
           },
           "title": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "static nav title; must equal the screen file's `title` when both are present (validate rule 2)"
           },
           "deep_link": {
             "type": "string",
-            "pattern": "^(appmap://[a-z][a-z0-9_]*(\\?[A-Za-z0-9_.=&%\\-]*)?|none)$"
+            "pattern": "^(appmap://[a-z][a-z0-9_]*(\\?[A-Za-z0-9_.=&%\\-]*)?|none)$",
+            "description": "route for the screen; must equal the screen file's `deep_link` with the query stripped (the screen file may add `?fixture=…`, 01 R5) — validate rule 2"
           }
         },
         "required": [
@@ -106,7 +108,8 @@
             "type": "string",
             "minLength": 1,
             "format": "regex",
-            "description": "07 §9: computed labels (\"3 invoices\")"
+            "description": "07 §9: computed labels (\"3 invoices\")",
+            "maxLength": 200
           }
         },
         "required": [

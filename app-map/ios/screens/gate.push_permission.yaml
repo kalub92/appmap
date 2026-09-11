@@ -1,6 +1,5 @@
 id: gate.push_permission
 kind: gate
-title: Notifications permission
 deep_link: none
 signature:
   marker: none

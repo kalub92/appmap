@@ -48,7 +48,7 @@
           "package": {
             "type": "string",
             "minLength": 1,
-            "description": "npm package name when source=npm"
+            "description": "npm package name when source=npm; policy-check matches an npx server on `<package>@<version>` (06 R3)"
           },
           "version": {
             "type": "string",
@@ -73,6 +73,50 @@
           "version",
           "reviewer",
           "reviewed_at"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "source": {
+                  "const": "npm"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "package": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "package"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "source": {
+                  "const": "in-repo"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "command": {
+                  "type": "string"
+                },
+                "args": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "command",
+                "args"
+              ]
+            }
+          }
         ]
       }
     }

@@ -21,6 +21,9 @@
  * whose hash changed keep `last_verified_build` as-is so decay applies (06 R4 last paragraph) —
  * the tour never writes to the map. Output validates against `drift-report.schema.json`.
  *
+ * `reason` is the closed `DriftReason` enum (07 §2.4). Variant facts for identification come from
+ * `probeConditions(ctx.probe)` when a probe ran (optional for drift).
+ *
  * Layer: session (imports context, types, tree, scrub, signature, resolve, lifecycle, events).
  */
 import type { AppMapContext } from './context.ts';
@@ -29,7 +32,8 @@ import type { ExecFn, HierarchyProvider } from './recipes/headless.ts';
 import { NotImplementedError } from './errors.ts';
 
 export interface DriftOptions {
-  build: BuildNumber;
+  /** defaults to `router.build.build_number` when `router` is given, else `ctx.build` (06 §3 invokes `drift` without `--build`) */
+  build?: BuildNumber;
   /** router export for the same build (01 R6); when given, screens missing from it are reported `skipped` with `reason: 'not_in_router_export'` */
   router?: RouterExport;
   exec?: ExecFn;
