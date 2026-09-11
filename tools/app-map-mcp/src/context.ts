@@ -26,12 +26,19 @@
  *
  * Layer: store (imports everything below it: config, paths, log, yaml/load, store/db, events).
  */
+import { mkdirSync } from 'node:fs';
 import type { AppMapConfig } from './config.ts';
 import type { EventSink } from './events.ts';
+import { appendEvent, pruneLocal } from './events.ts';
 import type { Logger } from './log.ts';
+import { createLogger } from './log.ts';
 import type { AppMapDb } from './store/db.ts';
-import type { BuildNumber, BuildProbeResult, LoadedMap } from './types.ts';
-import { AppMapError, NotImplementedError } from './errors.ts';
+import { openDb } from './store/db.ts';
+import type { BuildNumber, BuildProbeResult, IdsRegistry, LoadedMap, Manifest } from './types.ts';
+import { now } from './types.ts';
+import { AppMapError, ERROR_CODES } from './errors.ts';
+import { localDir } from './paths.ts';
+import { indexMap, loadMap } from './yaml/load.ts';
 
 export interface AppMapContext {
   readonly config: AppMapConfig;
@@ -70,7 +77,130 @@ export interface OpenContextOptions {
   dbPath?: string;
 }
 
+/** `LoadedMap` with no screens/recipes — what tools see while the YAML is invalid (03 §11) */
+export function emptyMap(config: Pick<AppMapConfig, 'platform' | 'build'>): LoadedMap {
+  const manifest: Manifest = {
+    schema_version: 1,
+    app_id: '',
+    platform: config.platform,
+    deep_link_scheme: 'appmap',
+    build: { version: '', build_number: config.build !== 'auto' && config.build !== '' ? config.build : '0', git_sha: '' },
+    generated_at: now(),
+    generator: 'app-map-mcp (empty map)',
+  };
+  const ids: IdsRegistry = { schema_version: 1, screens: [], gates: [], elements: [] };
+  return indexMap({ platform: config.platform, manifest, ids, screens: [], recipes: [] });
+}
+
+/** 03 §3: `APP_MAP_BUILD` when set, else the driver-reported build cached in meta, else the manifest */
+function resolveBuild(config: AppMapConfig, db: AppMapDb, map: LoadedMap): BuildNumber {
+  if (config.build !== 'auto' && config.build !== '') return config.build;
+  const fromDriver = db.getMeta('build');
+  if (fromDriver !== undefined && fromDriver !== '') return fromDriver;
+  return map.manifest.build.build_number;
+}
+
 export function openContext(config: AppMapConfig, opts: OpenContextOptions = {}): AppMapContext {
-  void config; void opts;
-  throw new NotImplementedError('context.openContext');
+  const readOnly = opts.readOnly === true;
+  // 1. `.local/` (git-ignored, 07 §2.4) — a read-only opener still needs the log directory
+  mkdirSync(localDir(config), { recursive: true });
+  // 2. logger — never stdout (docs/dev/toolchain.md)
+  const log = createLogger(config, { sink: opts.logSink ?? 'file' });
+  let db: AppMapDb | undefined;
+  try {
+    // 3. file retention (07 §2.4); the db half runs right after the cache opens
+    if (!opts.skipRetention && !readOnly) {
+      const pruned = pruneLocal(config);
+      if (pruned.trajectories_deleted.length || pruned.events_dropped || pruned.other_deleted.length) {
+        log.info('retention: pruned .local', { retention_days: config.retentionDays, trajectories: pruned.trajectories_deleted.length, events: pruned.events_dropped, other: pruned.other_deleted.length });
+      }
+    }
+
+    // 4. the map (a validation failure keeps the context usable, 03 §11)
+    let map: LoadedMap = emptyMap(config);
+    let loadError: AppMapError | null = null;
+    const load = (): void => {
+      try {
+        map = loadMap(config);
+        loadError = null;
+      } catch (e) {
+        if (!AppMapError.is(e)) throw e;
+        map = emptyMap(config);
+        loadError = e;
+        log.error('map failed to load', { code: e.code, error: e.message });
+      }
+    };
+    load();
+
+    // 5. the cache
+    const dbOpts = { ...(opts.dbPath !== undefined ? { path: opts.dbPath } : {}), ...(readOnly ? { readOnly: true } : {}) };
+    db = openDb(config, dbOpts);
+    const cache = db;
+    if (!opts.skipRetention && !readOnly) {
+      const before = new Date(Date.now() - config.retentionDays * 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const pruned = cache.pruneBefore(before);
+      cache.setMeta('last_retention_run', now());
+      if (pruned.observations || pruned.runs) log.info('retention: pruned cache rows', { before, ...pruned });
+    }
+    const syncCache = (): void => {
+      if (readOnly || loadError !== null) return;
+      // 03 §4: reload the cache when the YAML changed since the recorded tree hash (or when
+      // the hash is unknown — outside git we cannot tell, so always upsert)
+      const recorded = cache.getMeta('tree_hash');
+      const platformChanged = cache.getMeta('platform') !== map.platform;
+      if (map.treeHash === undefined || recorded !== map.treeHash || platformChanged) {
+        cache.upsertMap(map);
+        log.info('map loaded into cache', { tree_hash: map.treeHash, screens: map.screens.size, gates: map.gates.size, recipes: map.recipes.size });
+      }
+    };
+    syncCache();
+
+    // 6. the effective build
+    let build = resolveBuild(config, cache, map);
+    map.build = build;
+
+    let probe: BuildProbeResult | null = null;
+    let closed = false;
+    const events: EventSink = { append: (event) => appendEvent(config, event) };
+    const ctx: AppMapContext = {
+      config,
+      get map() { return map; },
+      db: cache,
+      events,
+      log,
+      get build() { return build; },
+      get probe() { return probe; },
+      get loadError() { return loadError; },
+      reload() {
+        load();
+        syncCache();
+        build = resolveBuild(config, cache, map);
+        map.build = build;
+        if (loadError !== null) throw loadError;
+        return map;
+      },
+      setBuild(next) {
+        if (typeof next !== 'string' || next.length === 0) {
+          throw new AppMapError(ERROR_CODES.BAD_INPUT, 'build must be a non-empty build number string', 'e.g. "4412" (02 §8)');
+        }
+        build = next;
+        map.build = next;
+        if (!readOnly) cache.setMeta('build', next);
+      },
+      setProbe(next) {
+        probe = next;
+      },
+      close() {
+        if (closed) return;
+        closed = true;
+        cache.close();
+        log.close();
+      },
+    };
+    return ctx;
+  } catch (e) {
+    db?.close();
+    log.close();
+    throw e;
+  }
 }

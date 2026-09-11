@@ -54,8 +54,14 @@ export function capTokens(text: string, max: number): string {
   }
   if (kept.length === 0) {
     const first = lines[0] ?? '';
-    const chars = Math.max(0, budget * 4 - 1);
-    return `${first.slice(0, chars)}\n${TRUNCATION_MARKER}`;
+    let chars = Math.max(0, budget * 4 - 1);
+    let cut = first.slice(0, chars);
+    // 4 chars/token is only a first guess (short words and punctuation runs cost more): shrink until it fits
+    while (chars > 0 && estimateTokens(`${cut}\n${TRUNCATION_MARKER}`) > max) {
+      chars = Math.floor(chars * 0.9);
+      cut = first.slice(0, chars);
+    }
+    return `${cut}\n${TRUNCATION_MARKER}`;
   }
   return `${kept.join('\n')}\n${TRUNCATION_MARKER}`;
 }
