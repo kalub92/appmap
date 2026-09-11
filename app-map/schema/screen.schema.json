@@ -1,0 +1,842 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://app-map.local/schema/screen.schema.json",
+  "title": "app-map screen (or gate)",
+  "description": "02 §4 — app-map/<platform>/screens/<id>.yaml",
+  "definitions": {
+    "screenId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "01 R2: snake_case screen id"
+    },
+    "elementId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$",
+      "description": "01 R2: <feature>.<name>.<kind> (dotted, lowercase)"
+    },
+    "gateId": {
+      "type": "string",
+      "pattern": "^gate\\.[a-z0-9_]+$",
+      "description": "01 R2: gate.<name>"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "application",
+        "window",
+        "container",
+        "navigationBar",
+        "tabBar",
+        "toolbar",
+        "scrollView",
+        "list",
+        "cell",
+        "button",
+        "link",
+        "tab",
+        "toggle",
+        "field",
+        "secureField",
+        "searchField",
+        "picker",
+        "staticText",
+        "image",
+        "alert",
+        "sheet",
+        "keyboard",
+        "key",
+        "other"
+      ]
+    },
+    "build": {
+      "type": "string",
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
+      "description": "build number as a string (02 §8)"
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "auth": {
+          "type": "string",
+          "enum": [
+            "logged_in",
+            "logged_out",
+            "any"
+          ]
+        },
+        "screen": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "flag": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "platform_version": {
+          "type": "string",
+          "pattern": "^(>=|<=|>|<|=)?[0-9]+(\\.[0-9]+)*$"
+        }
+      },
+      "required": [],
+      "minProperties": 1,
+      "description": "02 §4.1 pre/postcondition; 02 §4.3 variant `when`"
+    },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "screen": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "focused": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
+        },
+        "visible": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "not_visible": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "text_present": {
+          "type": "string",
+          "minLength": 1,
+          "description": "static copy only (02 §6)"
+        }
+      },
+      "required": [],
+      "minProperties": 1,
+      "description": "02 §6 expect conditions (closed)"
+    },
+    "bboxNorm": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "w": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "h": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ]
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "roleLabelValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "$ref": "#/definitions/role"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label_regex": {
+          "type": "string",
+          "minLength": 1,
+          "format": "regex"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label"
+          ]
+        },
+        {
+          "properties": {
+            "label_regex": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label_regex"
+          ]
+        }
+      ]
+    },
+    "locator": {
+      "type": "object",
+      "description": "02 §5.1 locator; discriminated by `strategy`",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "strategy": {
+              "const": "a11y_id"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1
+            },
+            "weight": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "strategy",
+            "value",
+            "weight"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "strategy": {
+              "const": "role_label"
+            },
+            "value": {
+              "$ref": "#/definitions/roleLabelValue"
+            },
+            "weight": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "strategy",
+            "value",
+            "weight"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "strategy": {
+              "const": "text"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1
+            },
+            "weight": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "strategy",
+            "value",
+            "weight"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "strategy": {
+              "const": "path"
+            },
+            "value": {
+              "type": "string",
+              "pattern": "^[A-Za-z]+(\\[[0-9]+\\])?(/[A-Za-z]+(\\[[0-9]+\\])?)*$"
+            },
+            "weight": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "strategy",
+            "value",
+            "weight"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "strategy": {
+              "const": "geometry"
+            },
+            "value": {
+              "$ref": "#/definitions/point"
+            },
+            "weight": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "strategy",
+            "value",
+            "weight"
+          ]
+        }
+      ]
+    },
+    "fingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "$ref": "#/definitions/role"
+        },
+        "label_norm": {
+          "type": "string"
+        },
+        "parent_role": {
+          "$ref": "#/definitions/role"
+        },
+        "sibling_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bbox_norm": {
+          "$ref": "#/definitions/bboxNorm"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "description": "02 §5.3 fingerprint (never contains values)"
+    },
+    "element": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/elementId"
+        },
+        "role": {
+          "$ref": "#/definitions/role"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "static UI copy only; never data (02 §4.1)"
+        },
+        "intent": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "intent_critical": {
+          "type": "boolean"
+        },
+        "dynamic": {
+          "type": "boolean"
+        },
+        "locators": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/locator"
+          },
+          "minItems": 1
+        },
+        "fingerprint": {
+          "$ref": "#/definitions/fingerprint"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "candidate",
+            "verified",
+            "healed_pending_review"
+          ]
+        },
+        "last_verified_build": {
+          "$ref": "#/definitions/build"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "locators",
+        "status"
+      ]
+    },
+    "edgeAction": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "tap"
+            },
+            "element": {
+              "$ref": "#/definitions/elementId"
+            }
+          },
+          "required": [
+            "type",
+            "element"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "type"
+            },
+            "element": {
+              "$ref": "#/definitions/elementId"
+            }
+          },
+          "required": [
+            "type",
+            "element"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "select"
+            },
+            "element": {
+              "$ref": "#/definitions/elementId"
+            }
+          },
+          "required": [
+            "type",
+            "element"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "swipe"
+            },
+            "direction": {
+              "type": "string",
+              "enum": [
+                "up",
+                "down",
+                "left",
+                "right"
+              ]
+            },
+            "element": {
+              "$ref": "#/definitions/elementId"
+            }
+          },
+          "required": [
+            "type",
+            "direction"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "open_link"
+            },
+            "url": {
+              "type": "string",
+              "pattern": "^(appmap://[a-z][a-z0-9_]*(\\?[A-Za-z0-9_.=&%\\-]*)?|none)$"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "dismiss_gate"
+            },
+            "gate": {
+              "$ref": "#/definitions/gateId"
+            }
+          },
+          "required": [
+            "type",
+            "gate"
+          ]
+        }
+      ],
+      "description": "edge action (tap|type|select|swipe|open_link|dismiss_gate)"
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/edgeAction"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^([a-z][a-z0-9_]*|_previous)$",
+          "description": "screen id or `_previous` (02 §4.2)"
+        },
+        "preconditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/condition"
+          }
+        },
+        "postconditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/condition"
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "candidate",
+            "verified",
+            "retired"
+          ]
+        },
+        "last_verified_build": {
+          "$ref": "#/definitions/build"
+        }
+      },
+      "required": [
+        "action",
+        "to",
+        "status"
+      ]
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "when": {
+          "$ref": "#/definitions/condition"
+        },
+        "required_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
+          },
+          "uniqueItems": true
+        },
+        "structural_hash": {
+          "type": "string",
+          "pattern": "^sha1:[0-9a-f]{40}$"
+        }
+      },
+      "required": [
+        "id",
+        "when"
+      ],
+      "anyOf": [
+        {
+          "properties": {
+            "required_ids": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "required_ids"
+          ]
+        },
+        {
+          "properties": {
+            "structural_hash": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "structural_hash"
+          ]
+        }
+      ]
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "marker": {
+          "type": "string",
+          "pattern": "^(screen\\.[a-z][a-z0-9_]*|none)$"
+        },
+        "route": {
+          "type": "string",
+          "pattern": "^(appmap://[a-z][a-z0-9_]*(\\?[A-Za-z0-9_.=&%\\-]*)?|none)$"
+        },
+        "nav_class": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.]*$"
+        },
+        "required_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
+          },
+          "uniqueItems": true
+        },
+        "required_labels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/roleLabelValue"
+          },
+          "minItems": 1
+        },
+        "structural_hash": {
+          "type": "string",
+          "pattern": "^sha1:[0-9a-f]{40}$"
+        }
+      },
+      "required": [
+        "marker"
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^([a-z][a-z0-9_]*|gate\\.[a-z0-9_]+)$"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "screen",
+        "gate"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "static nav title (02 §4.1)"
+    },
+    "deep_link": {
+      "type": "string",
+      "pattern": "^(appmap://[a-z][a-z0-9_]*(\\?[A-Za-z0-9_.=&%\\-]*)?|none)$"
+    },
+    "signature": {
+      "$ref": "#/definitions/signature"
+    },
+    "dynamic_regions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
+      },
+      "uniqueItems": true
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^gate\\.[a-z0-9_]+$"
+      },
+      "uniqueItems": true
+    },
+    "variants": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/variant"
+      }
+    },
+    "elements": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/element"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/edge"
+      }
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "router_export",
+              "exploration",
+              "manual"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "candidate",
+            "verified",
+            "retired"
+          ]
+        },
+        "last_verified_build": {
+          "type": "string",
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
+          "description": "build number as a string (02 §8)"
+        }
+      },
+      "required": [
+        "sources",
+        "status"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "signature",
+    "elements",
+    "edges",
+    "meta"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "gate"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "deep_link": {
+            "type": "string",
+            "const": "none"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "screen"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "deep_link": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          }
+        },
+        "required": [
+          "deep_link"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "gate"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^gate\\.[a-z0-9_]+$"
+          }
+        }
+      }
+    }
+  ]
+}

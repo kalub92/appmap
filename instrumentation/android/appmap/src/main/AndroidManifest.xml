@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Release manifest: markers only. No appmap:// intent filter, no export receiver (01 §2, §4).
+     The debug-only entries live in src/debug/AndroidManifest.xml. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

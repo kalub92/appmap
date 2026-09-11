@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://app-map.local/schema/hook-payload.schema.json",
+  "title": "Claude Code hook stdin payload",
+  "description": "05 §3 — stdin of .claude/hooks/*.sh, also the ingest-socket request body (03 §2). Field names verified against the hooks reference at implementation time.",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "transcript_path": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "hook_event_name": {
+      "type": "string",
+      "enum": [
+        "SessionStart",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "Stop",
+        "PreCompact"
+      ]
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "startup",
+        "resume",
+        "clear",
+        "compact"
+      ]
+    },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool_input": {
+      "type": "object"
+    },
+    "tool_response": {},
+    "error": {
+      "type": "string"
+    },
+    "stop_hook_active": {
+      "type": "boolean"
+    },
+    "trigger": {
+      "type": "string"
+    },
+    "custom_instructions": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "hook_event_name"
+  ],
+  "additionalProperties": true,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "hook_event_name": {
+            "enum": [
+              "PostToolUse",
+              "PostToolUseFailure"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tool_name": {
+            "type": "string"
+          },
+          "tool_input": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tool_name",
+          "tool_input"
+        ]
+      }
+    }
+  ]
+}

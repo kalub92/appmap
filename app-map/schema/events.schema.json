@@ -1,0 +1,428 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://app-map.local/schema/events.schema.json",
+  "title": "app-map event (one JSON line)",
+  "description": "08 §2 — app-map/.local/events.jsonl; each line validates against this schema",
+  "type": "object",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ios",
+            "android"
+          ]
+        },
+        "session": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "task"
+        },
+        "task": {
+          "type": "string"
+        },
+        "mode_start": {
+          "type": "string",
+          "enum": [
+            "explore",
+            "guided",
+            "headless"
+          ]
+        },
+        "mode_end": {
+          "type": "string",
+          "enum": [
+            "explore",
+            "guided",
+            "headless"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "driver_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "perception_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "screenshots": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ts",
+        "kind",
+        "session",
+        "task",
+        "mode_start",
+        "mode_end",
+        "ok",
+        "driver_calls",
+        "perception_bytes",
+        "screenshots",
+        "ms"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ios",
+            "android"
+          ]
+        },
+        "session": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "recipe_run"
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "guided",
+            "headless"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "steps_done": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "heals": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fallbacks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "build": {
+          "type": "string",
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
+          "description": "build number as a string (02 §8)"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ts",
+        "kind",
+        "recipe",
+        "version",
+        "mode",
+        "ok",
+        "steps",
+        "steps_done",
+        "heals",
+        "fallbacks",
+        "ms",
+        "build"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ios",
+            "android"
+          ]
+        },
+        "session": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "heal"
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "step": {
+          "type": "string"
+        },
+        "element": {
+          "type": "string"
+        },
+        "old_strategy": {
+          "type": "string",
+          "enum": [
+            "a11y_id",
+            "role_label",
+            "text",
+            "path",
+            "geometry"
+          ]
+        },
+        "new_strategy": {
+          "type": "string",
+          "enum": [
+            "a11y_id",
+            "role_label",
+            "text",
+            "path",
+            "geometry"
+          ]
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "build": {
+          "type": "string",
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
+          "description": "build number as a string (02 §8)"
+        },
+        "intent_critical": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ts",
+        "kind",
+        "recipe",
+        "step",
+        "element",
+        "old_strategy",
+        "score",
+        "accepted",
+        "reason",
+        "build"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ios",
+            "android"
+          ]
+        },
+        "session": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "identify"
+        },
+        "screen": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "signal": {
+          "type": "string",
+          "enum": [
+            "marker",
+            "route",
+            "required_ids",
+            "structural_hash",
+            "title",
+            "none"
+          ]
+        },
+        "build": {
+          "type": "string",
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
+          "description": "build number as a string (02 §8)"
+        },
+        "variant": {
+          "type": "string"
+        },
+        "gates_present": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "ts",
+        "kind",
+        "screen",
+        "confidence",
+        "signal",
+        "build"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ios",
+            "android"
+          ]
+        },
+        "session": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "drift"
+        },
+        "screen": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "degraded",
+            "broken",
+            "skipped"
+          ]
+        },
+        "missing_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hash_changed": {
+          "type": "boolean"
+        },
+        "build": {
+          "type": "string",
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
+          "description": "build number as a string (02 §8)"
+        }
+      },
+      "required": [
+        "ts",
+        "kind",
+        "screen",
+        "status",
+        "missing_ids",
+        "hash_changed",
+        "build"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ios",
+            "android"
+          ]
+        },
+        "session": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "compile"
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "from_session": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "params": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ts",
+        "kind",
+        "recipe",
+        "version",
+        "from_session",
+        "steps",
+        "params"
+      ]
+    }
+  ]
+}

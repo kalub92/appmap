@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://app-map.local/schema/ids.schema.json",
+  "title": "app-map id registry",
+  "description": "01 R1 — app-map/ids.yaml (shared by every platform)",
+  "definitions": {
+    "screenId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "01 R2: snake_case screen id"
+    },
+    "elementId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$",
+      "description": "01 R2: <feature>.<name>.<kind> (dotted, lowercase)"
+    },
+    "gateId": {
+      "type": "string",
+      "pattern": "^gate\\.[a-z0-9_]+$",
+      "description": "01 R2: gate.<name>"
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "screens": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/definitions/screenId"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "deep_link": {
+            "type": "string",
+            "pattern": "^(appmap://[a-z][a-z0-9_]*(\\?[A-Za-z0-9_.=&%\\-]*)?|none)$"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/definitions/gateId"
+          },
+          "dismiss": {
+            "$ref": "#/definitions/elementId"
+          }
+        },
+        "required": [
+          "id",
+          "dismiss"
+        ]
+      }
+    },
+    "elements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/definitions/elementId"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "button",
+              "field",
+              "list",
+              "cell",
+              "toggle",
+              "tab",
+              "picker",
+              "link",
+              "text",
+              "sheet"
+            ]
+          },
+          "intent_critical": {
+            "type": "boolean"
+          },
+          "dynamic": {
+            "type": "boolean"
+          },
+          "label_regex": {
+            "type": "string",
+            "minLength": 1,
+            "format": "regex",
+            "description": "07 §9: computed labels (\"3 invoices\")"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ]
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "screens",
+    "gates",
+    "elements"
+  ]
+}
