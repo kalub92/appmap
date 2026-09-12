@@ -213,7 +213,7 @@ jobs:
       # produces both in the report; bare `maestro test` produces neither.
       - name: R5 run gate recipes
         run: tools/app-map-mcp/bin/app-map run --all --platform ios --status ci_gate --headless --report gate-report.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: app-map-drift-ios
@@ -290,7 +290,7 @@ jobs:
           test -f drift-table.md || exit 0
           { echo "### app-map drift — Android (06 R4)"; echo; cat drift-table.md; } > drift-comment.md
           gh pr comment "${{ github.event.pull_request.number }}" --body-file drift-comment.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: app-map-drift-android
@@ -345,7 +345,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/app-map/open-heal-pr.sh heal-report.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: app-map-heal-report
