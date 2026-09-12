@@ -50,7 +50,7 @@ jobs:
         with:
           # intent-critical-diff walks from the PR base sha (07 §7); a depth-1 checkout has no base.
           fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -161,7 +161,7 @@ jobs:
       APP_MAP_CI_PARAMS: ${{ vars.APP_MAP_CI_PARAMS }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -236,7 +236,7 @@ jobs:
       APP_MAP_CI_PARAMS: ${{ vars.APP_MAP_CI_PARAMS }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -315,7 +315,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -364,7 +364,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
