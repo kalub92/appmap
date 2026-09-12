@@ -142,6 +142,8 @@ export interface IndexMapInput {
   recipes: RecipeFile[];
   /** from `readStaticStrings`; merged with labels/titles found in screen files */
   staticStrings?: ReadonlySet<string>;
+  /** does `.local/strings.<platform>.txt` exist? (03 §5 step 1 / 03 §7 degrade without it) */
+  stringTablePresent?: boolean;
   /** effective build; defaults to `manifest.build.build_number` */
   build?: BuildNumber;
   treeHash?: string;
@@ -222,6 +224,7 @@ export function indexMap(input: IndexMapInput): LoadedMap {
     markers,
     routes,
     staticLabels,
+    stringTablePresent: input.stringTablePresent === true,
     build: input.build ?? input.manifest.build.build_number,
     loadedAt: now(),
   };
@@ -292,6 +295,7 @@ export function loadMap(config: AppMapConfig, opts: LoadMapOptions = {}): Loaded
     screens: screenFiles.map((s) => s.screen),
     recipes: recipeFiles.map((r) => r.recipe),
     staticStrings: readStaticStrings(cfg, platform),
+    stringTablePresent: existsSync(stringsFile(cfg, platform)),
     build,
     files,
   };

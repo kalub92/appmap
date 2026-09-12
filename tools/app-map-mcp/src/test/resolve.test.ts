@@ -99,7 +99,7 @@ describe('resolve — a11y_id on the pilot (02 §5.2)', () => {
 });
 
 describe('resolve — degraded matches per the weight table (02 §5.1–5.2)', () => {
-  it('no_ids fixture: invoice.add.button resolves by role_label at 0.6, which is not degraded (< 0.6 is)', () => {
+  it('no_ids fixture: invoice.add.button falls through to role_label at 0.6 and is degraded (03 §12)', () => {
     const tree = loadFixtureTree('invoice_list.no_ids');
     const r = resolve(map, map.screens.get('invoice_list')!.elements.find((e) => e.id === 'invoice.add.button')!, tree);
     assert.equal(r.status, 'hit');
@@ -107,7 +107,8 @@ describe('resolve — degraded matches per the weight table (02 §5.1–5.2)', (
     assert.equal(r.strategy, 'role_label');
     assert.equal(r.confidence, DEFAULT_LOCATOR_WEIGHTS.role_label);
     assert.equal(r.confidence, DEGRADED_THRESHOLD);
-    assert.equal(r.degraded, false);
+    // the authored a11y_id locator (rank 0) missed, so the fall-through is a degraded match
+    assert.equal(r.degraded, true);
     assert.equal(r.disambiguated, false);
     assert.deepEqual(r.target, { by: 'role_label', role: 'button', label: 'New Invoice' });
     assert.equal(r.path, 'window/container/navigationBar/button[1]', 'no marker → path from the tree root');

@@ -47,7 +47,7 @@ public enum AppMapDebugEndpoint {
             "schema_version": 1,
             "build_type": "debug",
             "sandbox": sandbox ?? isSandbox(bundle: bundle),
-            "app_id": bundle.bundleIdentifier ?? "unknown",
+            "app_id": bundle.bundleIdentifier ?? AppMapRouterRegistry.unknownAppID,
             "version": build.version,
             "build_number": build.buildNumber,
             "git_sha": build.gitSha,

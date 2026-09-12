@@ -1,14 +1,19 @@
 # .github/workflows/app-map.yml — app-map CI (06 §2–§3).
 #
 # validate (R1–R3)             every PR / push, linux, always runs — green in this repo today.
+# ios-instrumentation (01 §4)  every PR / push, macos-15, ALWAYS runs: the release-gate unit tests.
+# android-instrumentation      every PR / push, ubuntu, ALWAYS runs: the release-gate unit tests.
 # ios-drift-and-gate (R4–R5)   PRs only, macos-15; gated on the repo variable APP_MAP_HAS_APP == 'true'
 # android-drift-and-gate       PRs only, ubuntu + emulator; same gate
 # nightly-heal (R6)            schedule, macos-15; same gate; opens a PR, never merges
 # router-import (R7)           push to main; same gate; opens a PR if the map skeleton changed
 #
 # Set APP_MAP_HAS_APP=true (Settings → Secrets and variables → Actions → Variables) once the real app,
-# scripts/build-app.sh and the fixtures exist; until then the mobile jobs are skipped (not failed) so
-# the workflow stays green before an app exists. Also set APP_MAP_BUNDLE_ID (defaults to com.example.app).
+# scripts/build-app.sh and the fixtures exist; until then the *drift/gate* jobs are skipped (not failed)
+# so the workflow stays green before an app exists. The instrumentation jobs are NOT behind that gate:
+# they compile and unit-test the two in-repo packages, which is the 01 §4 release proof, and need no app.
+# Also set APP_MAP_BUNDLE_ID (defaults to com.example.app) and APP_MAP_CI_PARAMS (path to the fixture
+# parameter values for 06 R5/R6; see scripts/app-map/ci-params.sh).
 # PR creation from workflows requires "Allow GitHub Actions to create and approve pull requests" in
 # Settings → Actions → General. PRs opened with GITHUB_TOKEN do not trigger this workflow again.
 name: app-map
@@ -37,8 +42,14 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write   # the 07 §4 intent_critical bot comment
     steps:
       - uses: actions/checkout@v4
+        with:
+          # intent-critical-diff walks from the PR base sha (07 §7); a depth-1 checkout has no base.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -64,6 +75,76 @@ jobs:
         run: tools/app-map-mcp/bin/app-map gen-configs --check
       - name: R3 MCP policy
         run: tools/app-map-mcp/bin/app-map policy-check
+      # 07 §8: GitHub silently ignores a CODEOWNERS owner it cannot resolve, so the placeholder
+      # would leave the whole review control inert with no error anywhere. Until the project has a
+      # real app (and therefore a real owning team) this is an annotation; from Stage 1 on it blocks,
+      # like every other mobile job, via APP_MAP_HAS_APP.
+      - name: CODEOWNERS has a real owner (07 §7–§8)
+        run: |
+          if grep -q '@ORG/' CODEOWNERS; then
+            msg="CODEOWNERS still contains the @ORG/ placeholder; GitHub resolves no code owner, so 'Require review from Code Owners' matches nobody (07 §8). Replace it with the real team."
+            echo "::warning file=CODEOWNERS::$msg"
+            if [ "${{ vars.APP_MAP_HAS_APP }}" = "true" ]; then echo "$msg" >&2; exit 1; fi
+          fi
+      # 07 §4 threat table row 1 + 07 §7: an ids.yaml change that flips intent_critical true → false
+      # needs two approvals, and the diff is posted as a bot comment. Non-zero exit fails the check.
+      - name: 07 §7 intent_critical downgrade check
+        if: github.event_name == 'pull_request'
+        id: intent_critical
+        run: |
+          set +e
+          tools/app-map-mcp/bin/app-map intent-critical-diff "${{ github.event.pull_request.base.sha }}" --markdown > intent-critical.md
+          rc=$?
+          set -e
+          cat intent-critical.md
+          # exit 1 means "downgraded is non-empty" (cli.ts cmdIntentCriticalDiff); any other
+          # non-zero is a usage/git failure and must not be reported as a policy violation.
+          echo "downgraded=$([ "$rc" -eq 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          [ "$rc" -le 1 ] || exit "$rc"
+      - name: Post the intent_critical diff as a PR comment (07 §4)
+        if: github.event_name == 'pull_request' && steps.intent_critical.outputs.downgraded == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file intent-critical.md
+      - name: Fail when an intent_critical element was downgraded (07 §7 two approvals)
+        if: github.event_name == 'pull_request' && steps.intent_critical.outputs.downgraded == 'true'
+        run: |
+          echo "07 §7: this change needs TWO approvals from the code owners." >&2
+          exit 1
+
+  # 01 §4 release proof. These compile and unit-test the two IN-REPO instrumentation packages, so
+  # they need no app, no simulator and no APP_MAP_HAS_APP — gating them behind that variable is what
+  # kept AppMapReleaseGateTests / AppMapRouterRegistryReleaseTests / AppMapDeepLinkTest from ever
+  # running, which is precisely the regression 01 §4 exists to catch (a Release build that still
+  # answers `appmap://`).
+  ios-instrumentation:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests (Debug — APP_MAP_DEBUG on)
+        run: swift test --package-path instrumentation/ios/AppMapKit
+      - name: Release gate (01 §4 — the debug surfaces must be compiled out)
+        run: swift test -c release --package-path instrumentation/ios/AppMapKit -Xswiftc -enable-testing
+
+  android-instrumentation:
+    # The library is an AGP module meant to be included from the host app's Gradle build, so the
+    # host app supplies settings.gradle/gradlew. Until the app exists in this repo the job can only
+    # run where that build does — hence the gate here, unlike the iOS SwiftPM package which is
+    # standalone. Tracked in instrumentation/README.md §9.
+    if: vars.APP_MAP_HAS_APP == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - name: Unit tests + release gate (01 §4)
+        run: ./gradlew :appmap:testDebugUnitTest :appmap:testReleaseUnitTest
 
   # R4 drift tour + R5 gate recipes, iOS.
   ios-drift-and-gate:
@@ -72,6 +153,12 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     continue-on-error: false
+    permissions:
+      contents: read
+      pull-requests: write   # 06 R4.4 drift comment table
+    env:
+      APP_MAP_SIMULATOR: ${{ vars.APP_MAP_SIMULATOR || 'iPhone 16' }}
+      APP_MAP_CI_PARAMS: ${{ vars.APP_MAP_CI_PARAMS }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,19 +173,53 @@ jobs:
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
       - name: Build Debug app for the simulator
         run: ./scripts/build-app.sh --configuration Debug --sim
+      # 06 R4.1 step 1: "boot simulator/emulator, install the app". router-export.sh defaults to
+      # --udid booted and dies without one; a hosted runner boots nothing by itself.
+      - name: Boot the simulator and install the app (06 R4.1)
+        run: |
+          set -euo pipefail
+          xcrun simctl boot "$APP_MAP_SIMULATOR" || true
+          xcrun simctl bootstatus booted -b
+          app=${APP_MAP_APP_PATH:-$(find "${APP_MAP_BUILD_DIR:-build}" -name '*.app' -maxdepth 4 -type d | head -n 1)}
+          test -n "$app" || { echo "no .app found; set APP_MAP_APP_PATH" >&2; exit 1; }
+          xcrun simctl install booted "$app"
       - name: Router export (01 R6)
         run: ./scripts/app-map/router-export.sh --platform ios --out /tmp/router-export.json
       - name: R4 drift tour
-        run: tools/app-map-mcp/bin/app-map drift --platform ios --router /tmp/router-export.json --out drift-report.json
+        id: drift
+        continue-on-error: true
+        run: |
+          tools/app-map-mcp/bin/app-map drift --platform ios --router /tmp/router-export.json --out drift-report.json | tee drift-table.md
+      # 06 R4.4 / 06 §4: the table reaches the PR, so a `degraded` (non-blocking) finding is still
+      # visible to the reviewer instead of dying in the job log.
+      - name: Post the drift table as a PR comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+        run: |
+          { echo "### app-map drift — iOS (06 R4)"; echo; cat drift-table.md; } > drift-comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file drift-comment.md
+      - name: Fail on a ci_gate-referenced broken screen (06 §4)
+        if: steps.drift.outcome == 'failure'
+        run: exit 1
+      # 04 §6.2 / architecture §7 decision 36: maestro-export refuses to guess param values, so the
+      # workflow must produce app-map/.local/ci-params.ios.json first.
+      - name: Generate CI param values (04 §6.2)
+        run: ./scripts/app-map/ci-params.sh --platform ios
       - name: R5 export ci_gate recipes to Maestro flows (generated, never committed)
         run: tools/app-map-mcp/bin/app-map maestro-export --platform ios --status ci_gate --out .ci/maestro
+      # 06 §4 wants the failing step and the last screen seen on a gate failure — `app-map run`
+      # produces both in the report; bare `maestro test` produces neither.
       - name: R5 run gate recipes
-        run: maestro test .ci/maestro
+        run: tools/app-map-mcp/bin/app-map run --all --platform ios --status ci_gate --headless --report gate-report.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: app-map-drift-ios
-          path: drift-report.json
+          path: |
+            drift-report.json
+            gate-report.json
           if-no-files-found: ignore
 
   # Android mirror of the iOS job (06 §3): ubuntu + emulator; map directory app-map/android/.
@@ -108,6 +229,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     continue-on-error: false
+    permissions:
+      contents: read
+      pull-requests: write   # 06 R4.4 drift comment table
+    env:
+      APP_MAP_CI_PARAMS: ${{ vars.APP_MAP_CI_PARAMS }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -139,15 +265,38 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: |
+            set -euo pipefail
+            # 06 R4.1 step 1: the emulator runner boots the device; install the app onto it.
+            adb wait-for-device
+            apk=${APP_MAP_APK_PATH:-$(find . -name '*-debug.apk' -type f | head -n 1)}
+            test -n "$apk" || { echo "no debug APK found; set APP_MAP_APK_PATH" >&2; exit 1; }
+            adb install -r "$apk"
             ./scripts/app-map/router-export.sh --platform android --out /tmp/router-export.json
-            tools/app-map-mcp/bin/app-map drift --platform android --router /tmp/router-export.json --out drift-report.json
+            set +e
+            tools/app-map-mcp/bin/app-map drift --platform android --router /tmp/router-export.json --out drift-report.json | tee drift-table.md
+            drift_rc=${PIPESTATUS[0]}
+            set -e
+            echo "$drift_rc" > drift-rc.txt
+            ./scripts/app-map/ci-params.sh --platform android
             tools/app-map-mcp/bin/app-map maestro-export --platform android --status ci_gate --out .ci/maestro
-            maestro test .ci/maestro
+            tools/app-map-mcp/bin/app-map run --all --platform android --status ci_gate --headless --report gate-report.json
+            exit "$drift_rc"
+      - name: Post the drift table as a PR comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+        run: |
+          test -f drift-table.md || exit 0
+          { echo "### app-map drift — Android (06 R4)"; echo; cat drift-table.md; } > drift-comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file drift-comment.md
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: app-map-drift-android
-          path: drift-report.json
+          path: |
+            drift-report.json
+            gate-report.json
           if-no-files-found: ignore
 
   # R6 nightly heal: headless-run verified/ci_gate recipes, export accepted heals, open a PR. Never merges.
@@ -158,6 +307,9 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    env:
+      APP_MAP_SIMULATOR: ${{ vars.APP_MAP_SIMULATOR || 'iPhone 16' }}
+      APP_MAP_CI_PARAMS: ${{ vars.APP_MAP_CI_PARAMS }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -174,6 +326,17 @@ jobs:
           curl -fsSL "https://get.maestro.mobile.dev" | MAESTRO_VERSION="$MAESTRO_VERSION" bash
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
       - run: ./scripts/build-app.sh --configuration Debug --sim
+      - name: Boot the simulator and install the app
+        run: |
+          set -euo pipefail
+          xcrun simctl boot "${APP_MAP_SIMULATOR:-iPhone 16}" || true
+          xcrun simctl bootstatus booted -b
+          app=${APP_MAP_APP_PATH:-$(find "${APP_MAP_BUILD_DIR:-build}" -name '*.app' -maxdepth 4 -type d | head -n 1)}
+          test -n "$app" || { echo "no .app found; set APP_MAP_APP_PATH" >&2; exit 1; }
+          xcrun simctl install booted "$app"
+      # `run --all` resolves every required param the same way maestro-export does (04 §6.2).
+      - name: Generate CI param values (04 §6.2)
+        run: ./scripts/app-map/ci-params.sh --platform ios
       - name: Headless replay with healing (04 §6–§7)
         run: tools/app-map-mcp/bin/app-map run --all --status verified,ci_gate --headless --report heal-report.json
       - name: Export accepted heals to YAML

@@ -61,6 +61,20 @@ final class AppMapRouterRegistryTests: XCTestCase {
         XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("\\/"), "routes must not escape slashes")
     }
 
+    // 01 R6: app_id must match the schema's reverse-DNS pattern. The old literal "unknown" did not,
+    // so an export written without a bundle identifier (test host, command-line launch) was rejected
+    // by `app-map import-router` with a schema error instead of a usable message.
+    func testUnknownAppIDMatchesTheSchemaPattern() {
+        let pattern = "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$"
+        XCTAssertNotNil(
+            AppMapRouterRegistry.unknownAppID.range(of: pattern, options: .regularExpression),
+            "unknownAppID must satisfy router-export.schema.json"
+        )
+        XCTAssertNil("unknown".range(of: pattern, options: .regularExpression))
+        XCTAssertEqual(AppMapRouterRegistry.resolvedAppID("com.example.app"), "com.example.app")
+        XCTAssertEqual(AppMapRouterRegistry.resolvedAppID(""), Bundle.main.bundleIdentifier ?? AppMapRouterRegistry.unknownAppID)
+    }
+
     func testExportIsDeterministic() throws {
         let build = AppMapBuildInfo(version: "1", buildNumber: "1", gitSha: "x")
         XCTAssertEqual(try populated().exportData(appID: "a", build: build), try populated().exportData(appID: "a", build: build))

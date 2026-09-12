@@ -181,6 +181,24 @@ function waitForScreen(screen: ScreenId, timeout = DEFAULT_WAIT_MS): Command {
 }
 
 /** assertions for one `expect` block, in EXPECT_KEYS order; `skip` drops keys a `wait_for` already consumed. */
+/**
+ * `expect.visible` / `expect.not_visible` as an array of element ids. The JSON schema already
+ * requires an array, but this library is also callable with an unvalidated `RecipeFile`, and a
+ * scalar there used to crash with a raw TypeError instead of the `AppMapError(code, message,
+ * hint)` every error in this package is (architecture §1, 03 §11).
+ */
+function idList(value: unknown, stepId: StepId, field: string): ElementId[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new AppMapError(
+      ERROR_CODES.BAD_INPUT,
+      `${stepId}: ${field} must be an array of element ids`,
+      `e.g. ${field}: [invoice.save.button]`,
+    );
+  }
+  return value as ElementId[];
+}
+
 function emitExpect(st: EmitState, stepId: StepId, expect: Expect | undefined, skip: { screen?: boolean; firstVisible?: boolean; text_present?: boolean } = {}): void {
   if (!expect) return;
   if (expect.screen && !skip.screen) st.commands.push(waitForScreen(expect.screen));
@@ -191,14 +209,14 @@ function emitExpect(st: EmitState, stepId: StepId, expect: Expect | undefined, s
     // to a plain visibility assertion.
     else st.commands.push({ assertVisible: st.focused ? { ...sel, focused: true } : { ...sel } });
   }
-  const visible = expect.visible ?? [];
+  const visible = idList(expect.visible, stepId, 'expect.visible');
   visible.forEach((id, i) => {
     if (i === 0 && skip.firstVisible) return;
     const sel = selectorForElement(st.map, id, st.screen, st.overrides);
     if (!sel) st.ineligible.add(stepId);
     else st.commands.push({ assertVisible: sel });
   });
-  for (const id of expect.not_visible ?? []) {
+  for (const id of idList(expect.not_visible, stepId, 'expect.not_visible')) {
     const sel = selectorForElement(st.map, id, st.screen, st.overrides);
     if (!sel) st.ineligible.add(stepId);
     else st.commands.push({ assertNotVisible: sel });

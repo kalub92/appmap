@@ -49,6 +49,13 @@ export interface ValidateOptions {
   platforms?: Platform[];
   /** run rule 7 (default true; `loadMap` passes false) */
   canonical?: boolean;
+  /**
+   * 02 §11: router-export JSON files to check against `router-export.schema.json`
+   * (`app-map validate --router <path>`). They are build artifacts that live outside the map, so
+   * nothing under `config.dir` names them — without this the fifth schema is only reachable
+   * through `import-router`, and `validate` cannot cover all five as 02 §11 asks.
+   */
+  routerExports?: string[];
 }
 
 type Rule = ValidationIssue['rule'];
@@ -187,6 +194,26 @@ export function validateMap(config: AppMapConfig, opts: ValidateOptions = {}): V
   // ---- rule 7 ----
   if (opts.canonical !== false) {
     for (const file of nonCanonicalFiles(config)) issues.push(issue(7, file, 'not in canonical form — run `app-map export` (02 §2.3, 02 §10.7)'));
+  }
+
+  // ---- router exports (02 §11: the fifth schema) ----
+  for (const path of opts.routerExports ?? []) {
+    filesChecked++;
+    const file = relative(config.dir, path).startsWith('..') ? path : rel(path);
+    let doc: unknown;
+    try {
+      doc = JSON.parse(readFileSync(path, 'utf8'));
+    } catch (e) {
+      issues.push(issue(1, file, `router export is unreadable or not JSON: ${(e as Error).message}`));
+      continue;
+    }
+    try {
+      for (const i of validateAgainstSchema(sd, 'router-export', doc)) {
+        issues.push(issue(1, file, `router-export.schema.json: ${i.message}`, i.path));
+      }
+    } catch (e) {
+      issues.push(issue(1, file, AppMapError.is(e) ? e.message : String(e)));
+    }
   }
 
   return { ok: !issues.some((i) => i.severity === 'error'), issues: sortIssues(issues), files_checked: filesChecked };
@@ -425,8 +452,21 @@ export function forbiddenContentIssues(file: string, doc: ScreenFile | RecipeFil
     const hits = forbiddenPatternIndexes(text);
     if (hits.length) issues.push(issue(8, file, `${what} contains forbidden content (${hits.map((i) => PII_NAMES[i] ?? `pattern ${i}`).join(', ')}) — structure only, never data (02 §10.8, 07 §2)`, loc));
   };
+  /**
+   * A regex-valued field (`matches[]`, `label_regex`): sweep the source AND the source with its
+   * backslash escapes removed, so `jane\.doe@example\.com` is caught exactly like the plain
+   * address it encodes.
+   */
+  const sweepRegex = (source: string | undefined, loc: string, what: string): void => {
+    if (source === undefined) return;
+    sweep(source, loc, what);
+    const unescaped = source.replace(/\\(.)/g, '$1');
+    if (unescaped !== source && forbiddenPatternIndexes(source).length === 0) sweep(unescaped, loc, what);
+  };
   if ('schema_version' in doc && 'screens' in doc) {
     doc.screens.forEach((s, i) => sweep(s.title, `/screens/${i}/title`, `title of ${s.id}`));
+    // `label_regex` is author-written free text like any other label (07 §2.3 rule 6 backstop)
+    doc.elements.forEach((el, i) => sweepRegex(el.label_regex, `/elements/${i}/label_regex`, `label_regex of ${el.id}`));
     return issues;
   }
   if ('kind' in doc) {
@@ -443,6 +483,8 @@ export function forbiddenContentIssues(file: string, doc: ScreenFile | RecipeFil
     return issues;
   }
   sweep(doc.description, '/description', 'description');
+  // `matches` is the highest-risk recipe field: the compiler seeds it from the raw task text
+  (doc.matches ?? []).forEach((m, i) => sweepRegex(m, `/matches/${i}`, `match pattern ${i}`));
   doc.steps.forEach((st, si) => {
     if (st.action === 'type') sweep(st.text, `/steps/${si}/text`, `${st.id} text`);
     if (st.action === 'select') sweep(st.match.text, `/steps/${si}/match/text`, `${st.id} match text`);

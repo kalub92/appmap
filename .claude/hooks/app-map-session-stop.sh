@@ -9,6 +9,11 @@ set -u
 ROOT=${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}
 CLI="$ROOT/tools/app-map-mcp/bin/app-map"
 BUDGET=${APP_MAP_HOOK_BUDGET_SECS:-50}
+# The CLI resolves the map from APP_MAP_DIR, else from its own CWD (config.ts). A hook does not
+# control its CWD, so without this an off-root session exports NOTHING while still exiting 0 —
+# every dirty durable change is silently dropped (05 §3, 03 §4).
+APP_MAP_DIR=${APP_MAP_DIR:-$ROOT/app-map}
+export APP_MAP_DIR
 
 cat >/dev/null 2>&1 || true   # payload (session_id, stop_hook_active, …) is not needed
 

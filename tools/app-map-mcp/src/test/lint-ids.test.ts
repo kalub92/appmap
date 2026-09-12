@@ -26,10 +26,26 @@ const of = (r: LintIdsResult, rule: LintRule): LintIdsResult['issues'] => r.issu
 const errors = (r: LintIdsResult): LintIdsResult['issues'] => r.issues.filter((i) => i.severity === 'error');
 
 describe('06 R2: lint-ids passes on the committed repo', () => {
-  it('the pilot ids.yaml + instrumentation sources produce no issues', () => {
+  it('the pilot ids.yaml + instrumentation sources produce no errors', () => {
     const r = lintIds(PILOT_CONFIG, { repoRoot: REPO_ROOT });
-    assert.deepEqual(r.issues, [], JSON.stringify(r.issues, null, 2));
+    assert.deepEqual(r.issues.filter((i) => i.severity === 'error'), [], JSON.stringify(r.issues, null, 2));
     assert.ok(r.ok);
+    // 08 §6 Stage 0: the app source is not in this repo, so each platform says so out loud
+    // instead of the rule quietly disabling itself (01 R8).
+    assert.deepEqual(
+      r.issues.map((i) => `${i.severity}:${i.rule}:${i.platform}`).sort(),
+      ['warning:marker_unreferenced:android', 'warning:marker_unreferenced:ios'],
+    );
+  });
+
+  it('a platform declared instrumented can never lose every marker silently (01 R8)', () => {
+    const r = lintIds(PILOT_CONFIG, { repoRoot: REPO_ROOT, instrumentedPlatforms: ['ios'] });
+    assert.equal(r.ok, false);
+    const errors = r.issues.filter((i) => i.severity === 'error' && i.rule === 'marker_unreferenced');
+    assert.equal(errors.length, 5, 'one per pilot screen');
+    assert.ok(errors.every((i) => i.platform === 'ios'));
+    // android is still undeclared, so it stays a warning
+    assert.ok(r.issues.some((i) => i.severity === 'warning' && i.platform === 'android'));
   });
 
   it('`invoice.list.table` (kind: list) is not even a warning — decision 38 / KIND_SYNONYMS', () => {
@@ -166,6 +182,51 @@ describe('01 R2: bad_id', () => {
       assert.match(warnings[0]!.message, /invoice\.total\.thing/);
       assert.deepEqual(errors(r), [], 'a kind-segment convention miss never fails the command');
       assert.ok(r.ok);
+    });
+  });
+});
+
+// 01 R2 "Ids MUST NOT contain copy text or localized strings" — the regexes only fix the shape.
+describe('01 R2: id content (copy / localized strings)', () => {
+  /** the pilot map WITH its .local string table, so the copy vocabulary is populated */
+  function withIds(mutate: (ids: IdsRegistry) => void, assertions: (r: LintIdsResult) => void): void {
+    const t = makeTempAppMapDir();
+    try {
+      const file = join(t.dir, 'ids.yaml');
+      const ids = yamlParse(readFileSync(file, 'utf8')) as IdsRegistry;
+      mutate(ids);
+      writeFileSync(file, canonicalYaml('ids', ids));
+      assertions(lintIds({ dir: t.dir }, { ...LINT_FIXTURE_OPTS, iosDirs: ['does/not/exist'], androidDirs: ['does/not/exist'] }));
+    } finally {
+      t.cleanup();
+    }
+  }
+
+  it('a locale suffix on any segment is a warning', () => {
+    withIds((ids) => {
+      ids.elements.push({ id: 'invoice.save_invoice_button_en.button', kind: 'button' });
+      ids.elements.push({ id: 'invoice.total_pt_br.text', kind: 'text' });
+    }, (r) => {
+      const messages = of(r, 'bad_id').filter((i) => i.severity === 'warning').map((i) => i.message);
+      assert.ok(messages.some((m) => /save_invoice_button_en.*locale suffix "_en"/.test(m)), messages.join('\n'));
+      assert.ok(messages.some((m) => /total_pt_br.*locale suffix "_pt_br"/.test(m)), messages.join('\n'));
+      assert.deepEqual(errors(r), [], 'a content heuristic never fails the command');
+    });
+  });
+
+  it('an id segment that is verbatim app copy is a warning', () => {
+    withIds((ids) => {
+      // "New Invoice" is in the pilot's .local/strings.ios.txt
+      ids.elements.push({ id: 'invoice.new_invoice.button', kind: 'button' });
+    }, (r) => {
+      const messages = of(r, 'bad_id').filter((i) => i.severity === 'warning').map((i) => i.message);
+      assert.ok(messages.some((m) => /new_invoice.*verbatim app copy/.test(m)), messages.join('\n'));
+    });
+  });
+
+  it('the committed pilot ids are structural: no content warning at all', () => {
+    withIds(() => {}, (r) => {
+      assert.deepEqual(of(r, 'bad_id').filter((i) => /01 R2\)$/.test(i.message)), []);
     });
   });
 });

@@ -27,6 +27,7 @@
  * Layer: store (imports everything below it: config, paths, log, yaml/load, store/db, events).
  */
 import { mkdirSync } from 'node:fs';
+import { relative, sep } from 'node:path';
 import type { AppMapConfig } from './config.ts';
 import type { EventSink } from './events.ts';
 import { appendEvent, pruneLocal } from './events.ts';
@@ -37,7 +38,7 @@ import { openDb } from './store/db.ts';
 import type { BuildNumber, BuildProbeResult, IdsRegistry, LoadedMap, Manifest } from './types.ts';
 import { now } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
-import { localDir } from './paths.ts';
+import { localDir, stringsFile } from './paths.ts';
 import { indexMap, loadMap } from './yaml/load.ts';
 
 export interface AppMapContext {
@@ -151,6 +152,15 @@ export function openContext(config: AppMapConfig, opts: OpenContextOptions = {})
       if (map.treeHash === undefined || recorded !== map.treeHash || platformChanged) {
         cache.upsertMap(map);
         log.info('map loaded into cache', { tree_hash: map.treeHash, screens: map.screens.size, gates: map.gates.size, recipes: map.recipes.size });
+      }
+      if (!map.stringTablePresent) {
+        // 03 §5 step 1 needs the OS dialog copy the scrubber only keeps for REGISTERED static
+        // labels; without the table gate detection and label-based resolution simply stop working,
+        // which is indistinguishable from a clean load unless it is said out loud (07 §2.3.3).
+        log.warn('static string table is missing; gate detection and label-based resolution are degraded', {
+          file: relative(config.dir, stringsFile(config)).split(sep).join('/'),
+          fix: 'run scripts/app-map/strings-export.sh',
+        });
       }
     };
     syncCache();

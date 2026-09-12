@@ -143,12 +143,18 @@ function probeListener(path: string, timeoutMs = 200): Promise<boolean> {
 export async function startIngestServer(ctx: AppMapContext, opts: { socketPath?: string } = {}): Promise<IngestServer> {
   const socketPath = opts.socketPath ?? ingestSocket(ctx.config);
   mkdirSync(dirname(socketPath), { recursive: true });
+  // The liveness probe MUST use the same spelling the bind will use: over the 103-byte
+  // `sockaddr_un` limit `bindPath` shortens to a cwd-relative path, and connecting by the
+  // absolute spelling then always fails with ENOENT — which would make every concurrent
+  // instance mistake a live socket for a stale file and unlink the owner's socket (03 §2).
+  // `unlink`/`chmod` are ordinary path operations with no such limit, so they stay absolute.
+  const bound = bindPath(socketPath);
 
   // 03 §2: a stale socket file (no listener) is removed; a live listener means another instance
   // owns the socket — many servers share the cache, only one owns the socket.
   if (existsSync(socketPath)) {
-    if (await probeListener(socketPath)) {
-      ctx.log.info('ingest: another instance owns the socket', { socket: socketPath });
+    if (await probeListener(bound)) {
+      ctx.log.info('ingest: another instance owns the socket', { socket: socketPath, bound });
       return { socketPath, listening: false, close: async () => {} };
     }
     try {
@@ -202,7 +208,6 @@ export async function startIngestServer(ctx: AppMapContext, opts: { socketPath?:
     socket.on('error', (e) => ctx.log.debug('ingest: connection error', { error: e.message }));
   });
 
-  const bound = bindPath(socketPath);
   const listening = await new Promise<boolean>((resolveListen, rejectListen) => {
     server.once('error', (e: NodeJS.ErrnoException) => {
       // a live listener appeared between the probe and the bind: that instance owns the socket

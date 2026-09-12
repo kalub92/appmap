@@ -18,6 +18,7 @@ import { observedSignature } from '../signature.ts';
 import { normalizeTree } from '../tree.ts';
 import { isCanonical } from '../yaml/canonical.ts';
 import { validateAgainstSchema } from '../yaml/schemas.ts';
+import { forbiddenContentIssues } from '../validate.ts';
 import {
   collapseBacktracking, compileRecipe, focusedElement, inferPostconditions, markIntentCritical,
   optimizeEntry, parameterize, sliceTrajectory, translateSteps,
@@ -105,14 +106,18 @@ describe('compileRecipe — 04 §9: the pilot session compiles to create_invoice
     assert.deepEqual(recipe.verify, { screen: 'invoice_detail' });
     assert.deepEqual(recipe.provenance, { compiled_from: SESSION, compiled_by: 'app-map-mcp@0.1.0' });
     assert.equal(recipe.last_verified_build, undefined);
-    // the LLM still owns the prose (04 §3.8): `matches` is the task as a literal regex
-    assert.equal(recipe.matches.length, 1);
-    assert.equal(new RegExp(recipe.matches[0]!, 'i').test(TASK), true);
+    // the LLM still owns the prose (04 §3.8). The draft's placeholders come from the recipe ID,
+    // never the task text, so the draft itself satisfies 02 §10.8 / validate rule 8.
+    assert.equal(recipe.description, 'Create invoice');
+    assert.deepEqual(recipe.matches, ['create invoice']);
+    assert.equal(recipe.description.includes('$50'), false);
+    assert.equal(recipe.matches[0]!.includes('Acme'), false);
     assert.ok(recipe.matches[0]!.length <= 200, '07 §4: ≤200 chars');
+    assert.deepEqual(forbiddenContentIssues('draft.yaml', recipe), [], 'the compiler\'s own draft passes rule 8');
     assert.ok(r.warnings.some((w) => w.includes('mark_recipe')));
   });
 
-  it('a very long task is truncated to a 200-char literal regex that still compiles (07 §4)', () => {
+  it('a task full of data still yields a data-free draft that validates (02 §10.8, 07 §2)', () => {
     insert(trajectory());
     const long = `create an invoice ${'for $50 for Acme Corp (rush) '.repeat(20)}`;
     const r = compile({ task: long, values: { amount: 50, client: 'Acme Corp' } });
@@ -120,6 +125,7 @@ describe('compileRecipe — 04 §9: the pilot session compiles to create_invoice
     if (!r.ok) return;
     assert.ok(r.recipe.matches[0]!.length <= 200);
     assert.doesNotThrow(() => new RegExp(r.recipe.matches[0]!, 'i'));
+    assert.deepEqual(forbiddenContentIssues('draft.yaml', r.recipe), []);
     assert.deepEqual(validateAgainstSchema(schemaDir(t.config), 'recipe', r.recipe), []);
   });
 

@@ -47,6 +47,18 @@ await server.connect(new StdioServerTransport());
 `yaml` 2.9: `parse`, `stringify`. Canonical form (02 §2.3) is produced by our own serializer in
 `src/yaml/canonical.ts` (fixed key order, `id`-sorted lists, block style, 2-space indent, LF).
 
+## Local git hooks
+
+```sh
+git config core.hooksPath scripts/app-map/githooks   # 01 R8: lint-ids + validate + gen-ids --check
+git config merge.app-map-yaml.name   "app-map semantic YAML merge (02 §9)"
+git config merge.app-map-yaml.driver "tools/app-map-mcp/bin/app-map merge-driver %O %A %B %P"
+```
+
+Both are opt-in per clone: git runs neither a hooks path nor a merge driver it has not been told
+about. CI enforces the same checks (06 R1/R2), so a clone without them is never unsafe, only slower
+to find out.
+
 ## JSON Schema
 
 Ajv 8 (draft-07) + ajv-formats. Schemas live in `app-map/schema/*.schema.json` and are the

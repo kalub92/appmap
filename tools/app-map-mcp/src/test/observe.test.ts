@@ -248,12 +248,13 @@ describe('PII sweep on the two strings that survive (architecture §7 decision 1
     declareTask(ctx, SESSION, 'pay with card 4111 1111 1111 1111');
     recordHookPayload(ctx, tapPayload({ tool_name: 'mcp__argent__type_text', tool_input: { text: '4111 1111 1111 1111' } }));
     const obs = ctx.db.lastObservation(SESSION)!;
-    assert.equal(obs.input.text, REDACTED);
-    assert.equal(obs.task, REDACTED);
+    assert.equal(obs.input.text, REDACTED, 'the typed value is nothing but the card number');
+    // only the match is spliced out, so the instruction around it survives for 04 §3.4
+    assert.equal(obs.task, `pay with card ${REDACTED}`);
     assert.ok(!readFileSync(trajectoryFile(t.config, SESSION), 'utf8').includes('4111'));
     finishTask(ctx, SESSION, { ok: true, mode_end: 'explore' });
     const task = readEvents(t.config).events.find((e) => e.kind === 'task')!;
-    assert.equal(task.kind === 'task' && task.task, REDACTED);
+    assert.equal(task.kind === 'task' && task.task, `pay with card ${REDACTED}`);
   });
 
   it('an ordinary typed value is kept so the compiler can match it against a param (04 §3.4)', () => {
@@ -261,10 +262,10 @@ describe('PII sweep on the two strings that survive (architecture §7 decision 1
     assert.equal(ctx.db.lastObservation(SESSION)!.input.text, '50');
   });
 
-  it('the deny list is the 07 §2.3.4 one: a currency amount in the task redacts the whole string', () => {
+  it('the deny list is the 07 §2.3.4 one: a currency amount in the task is spliced out, the rest kept', () => {
     // `compile_recipe` reads the task from its own input, so the compiler is unaffected (04 §3.4)
     declareTask(ctx, SESSION, 'create an invoice for $50 for Acme Corp');
-    assert.equal(ctx.db.getSession(SESSION)!.task, REDACTED);
+    assert.equal(ctx.db.getSession(SESSION)!.task, `create an invoice for ${REDACTED} for Acme Corp`);
   });
 });
 

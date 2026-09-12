@@ -141,6 +141,21 @@ export function detectTreeShape(input: unknown): TreeShape {
 }
 
 /**
+ * Deepest node the converters will walk. A pathologically deep snapshot is a bad input, not an
+ * internal error: without this the recursive walk blows the stack with a raw `RangeError`, which
+ * reaches the caller as `code: internal` and no actionable hint (03 §11, 05 §6.2).
+ */
+export const MAX_TREE_DEPTH = 512;
+
+function assertDepth(depth: number): void {
+  if (depth <= MAX_TREE_DEPTH) return;
+  throw badInput(
+    `accessibility tree is deeper than ${MAX_TREE_DEPTH} levels`,
+    'ask the driver for a compact tree (05 §6.2)',
+  );
+}
+
+/**
  * Normalize any accepted shape to a raw `Tree` (never scrubbed). Throws `AppMapError(bad_input)`
  * with a hint naming the shape problem. `opts.source` defaults from the detected shape.
  */
@@ -222,7 +237,8 @@ export function fromArgentSnapshot(input: unknown, platform: Platform): Tree {
   return reorderTree(tree);
 }
 
-function convertArgentNode(n: Record<string, unknown>, parentType: string | undefined, vw: number, vh: number): TreeNode {
+function convertArgentNode(n: Record<string, unknown>, parentType: string | undefined, vw: number, vh: number, depth = 0): TreeNode {
+  assertDepth(depth);
   const type = typeof n['type'] === 'string' ? n['type'] : '';
   const kids = n['children'];
   const id = optString(n['identifier']);
@@ -246,7 +262,7 @@ function convertArgentNode(n: Record<string, unknown>, parentType: string | unde
   if (selected !== undefined) node.selected = selected;
   node.bbox_norm = normalizeBBox(num(frame['x']), num(frame['y']), num(frame['width']), num(frame['height']), vw, vh);
   if (Array.isArray(kids)) {
-    for (const k of kids) if (isRecord(k)) node.children.push(convertArgentNode(k, type, vw, vh));
+    for (const k of kids) if (isRecord(k)) node.children.push(convertArgentNode(k, type, vw, vh, depth + 1));
   }
   return node;
 }
@@ -322,8 +338,9 @@ export function fromMaestroHierarchy(input: unknown, platform: Platform): Tree {
 
 /** `rawSelected` records the driver's `selected` per node so the parent can decide which `false`s to keep. */
 function convertMaestroNode(
-  n: Record<string, unknown>, parentRole: Role | undefined, vw: number, vh: number, isRoot: boolean, rawSelected: Map<TreeNode, boolean>,
+  n: Record<string, unknown>, parentRole: Role | undefined, vw: number, vh: number, isRoot: boolean, rawSelected: Map<TreeNode, boolean>, depth = 0,
 ): TreeNode {
+  assertDepth(depth);
   const a = isRecord(n['attributes']) ? n['attributes'] : {};
   const cls = typeof a['class'] === 'string' ? a['class'] : '';
   let role: Role = androidRole(cls);
@@ -367,7 +384,7 @@ function convertMaestroNode(
 
   const kids = n['children'];
   if (Array.isArray(kids)) {
-    for (const k of kids) if (isRecord(k)) node.children.push(convertMaestroNode(k, role, vw, vh, false, rawSelected));
+    for (const k of kids) if (isRecord(k)) node.children.push(convertMaestroNode(k, role, vw, vh, false, rawSelected, depth + 1));
   }
   // `selected: false` is kept only when a same-role sibling is selected (a segmented control / tab bar)
   const selectedRoles = new Set(node.children.filter((c) => c.selected === true).map((c) => c.role));
@@ -427,7 +444,8 @@ function inUnit(x: unknown): x is number {
   return typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 1;
 }
 
-function nodeIssue(n: unknown, at: string): string | undefined {
+function nodeIssue(n: unknown, at: string, depth = 0): string | undefined {
+  if (depth > MAX_TREE_DEPTH) return `${at} exceeds the maximum tree depth of ${MAX_TREE_DEPTH}`;
   if (!isRecord(n)) return `${at} is not an object`;
   if (typeof n['role'] !== 'string' || !ROLE_SET.has(n['role'])) return `${at}.role ${JSON.stringify(n['role'])} is not a known role`;
   for (const k of ['a11y_id', 'label', 'value', 'text'] as const) {
@@ -443,7 +461,7 @@ function nodeIssue(n: unknown, at: string): string | undefined {
   const kids = n['children'];
   if (!Array.isArray(kids)) return `${at}.children must be an array`;
   for (let i = 0; i < kids.length; i++) {
-    const issue = nodeIssue(kids[i], `${at}.children[${i}]`);
+    const issue = nodeIssue(kids[i], `${at}.children[${i}]`, depth + 1);
     if (issue !== undefined) return issue;
   }
   return undefined;

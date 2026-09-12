@@ -1,5 +1,7 @@
 /** [B2] format.ts — get_screen block (03 §8), summary (03 §8, decision 25), SessionStart preamble (05 §3), step/fallback/candidate lines (04 §4–5). */
 import assert from 'node:assert/strict';
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import type { ElementDef, LoadedMap, RecipeFile, ScreenFile } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
@@ -170,6 +172,22 @@ const PREAMBLE = [
   '4. when a new task succeeds, call compile_recipe and review the draft.',
   'Recipes: create_invoice',
 ].join('\n');
+
+describe('formatSummary — a missing static string table is visible (03 §5 step 1, 07 §2.3.3)', () => {
+  it('warns in the summary and leaves the map otherwise intact', () => {
+    const t2 = makeTempAppMapDir();
+    try {
+      assert.equal(loadMap(t2.config).stringTablePresent, true);
+      assert.doesNotMatch(formatSummary(loadMap(t2.config)).text, /strings\.ios\.txt is missing/);
+      rmSync(join(t2.dir, '.local/strings.ios.txt'));
+      const without = loadMap(t2.config);
+      assert.equal(without.stringTablePresent, false);
+      assert.match(formatSummary(without).text, /strings\.ios\.txt is missing/);
+    } finally {
+      t2.cleanup();
+    }
+  });
+});
 
 describe('sessionStartPreamble / formatSessionStartContext (05 §3)', () => {
   it('is the fixed 05 §3 block with platform, build and recipe ids substituted', () => {

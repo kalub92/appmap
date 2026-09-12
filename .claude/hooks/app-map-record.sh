@@ -14,6 +14,10 @@ ROOT=${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}
 CLI="$ROOT/tools/app-map-mcp/bin/app-map"
 MAP_DIR=${APP_MAP_DIR:-$ROOT/app-map}
 SOCK="$MAP_DIR/.local/ingest.sock"
+# The CLI resolves the map from APP_MAP_DIR, else from its own CWD (config.ts). A hook does not
+# control its CWD, so without this the fallback path writes the observation into a stray
+# <cwd>/app-map/.local/ and the project map never sees it (05 §3).
+export APP_MAP_DIR="$MAP_DIR"
 DEADLINE=4
 
 umask 077
@@ -50,12 +54,15 @@ remaining() {
   [ "$r" -gt 0 ] && echo "$r" || echo 0
 }
 
+# `sockaddr_un` caps the CONNECT path at ~103 bytes, so the socket is always addressed by its bare
+# name from inside .local/ — a deep checkout would otherwise make the absolute spelling unusable
+# and silently push every observation onto the slow CLI path (03 §2).
 if [ -S "$SOCK" ]; then
   if command -v nc >/dev/null 2>&1; then
-    bounded 2 "$tmp" nc -U -w 2 "$SOCK" >/dev/null 2>&1 && exit 0
+    ( cd "$MAP_DIR/.local" 2>/dev/null && bounded 2 "$tmp" nc -U -w 2 ingest.sock >/dev/null 2>&1 ) && exit 0
   fi
   if command -v socat >/dev/null 2>&1; then
-    bounded 2 "$tmp" socat -T 2 - UNIX-CONNECT:"$SOCK" >/dev/null 2>&1 && exit 0
+    ( cd "$MAP_DIR/.local" 2>/dev/null && bounded 2 "$tmp" socat -T 2 - UNIX-CONNECT:ingest.sock >/dev/null 2>&1 ) && exit 0
   fi
 fi
 

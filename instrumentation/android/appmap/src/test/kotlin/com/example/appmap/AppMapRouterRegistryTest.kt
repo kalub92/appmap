@@ -94,4 +94,16 @@ class AppMapRouterRegistryTest {
     }
 
     private class InvoiceListScreen
+
+    // 01 R6: app_id must match the schema's reverse-DNS pattern, or `app-map import-router` rejects
+    // the whole export with a schema error. Mirrors AppMapRouterRegistry.unknownAppID on iOS.
+    @Test
+    fun unknownAppIdMatchesTheSchemaPattern() {
+        val pattern = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$")
+        assertTrue(pattern.matches(AppMapRouterRegistry.UNKNOWN_APP_ID))
+        assertFalse(pattern.matches("unknown"))
+        assertEquals("com.example.app", AppMapRouterRegistry.resolveAppId("com.example.app"))
+        assertEquals(AppMapRouterRegistry.UNKNOWN_APP_ID, AppMapRouterRegistry.resolveAppId(null))
+        assertEquals(AppMapRouterRegistry.UNKNOWN_APP_ID, AppMapRouterRegistry.resolveAppId("unknown"))
+    }
 }

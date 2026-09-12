@@ -3,7 +3,8 @@
  * file-level checks (02 §2.1) and the 07 §2.1 string-table warning.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { parse } from 'yaml';
@@ -11,7 +12,7 @@ import type { IdsRegistry, RecipeFile, ScreenFile, ValidationIssue } from '../ty
 import { canonicalYaml } from '../yaml/canonical.ts';
 import type { YamlKind } from '../paths.ts';
 import { crossReferenceIssues, forbiddenContentIssues, formatIssues, nonCanonicalFiles, safeRegexIssue, validateMap } from '../validate.ts';
-import { PILOT_APP_MAP_DIR, makeTempAppMapDir } from './helpers.ts';
+import { PILOT_APP_MAP_DIR, loadRouterExportFixture, makeTempAppMapDir } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
 /** parse → mutate → write canonically (so rule 7 stays quiet unless the test wants it) */
@@ -312,6 +313,28 @@ describe('rule 8 — forbidden content sweep (07 §2.3.4 backstop)', () => {
     assert.ok(forbiddenContentIssues('r.yaml', recipe).some((i) => i.location === '/steps/0/expect/text_present' && /SSN/.test(i.message)));
   });
 
+  // 07 §2.3 rule 6: the backstop must cover the two author/compiler-written free-text fields the
+  // sweep used to skip. `matches` is the worst to miss — compile.ts seeds it from the task text.
+  it('sweeps recipe matches[] and ids.yaml label_regex', () => {
+    const t = makeTempAppMapDir();
+    try {
+      editYaml<RecipeFile>(t, 'ios/recipes/create_invoice.yaml', 'recipe', (d) => {
+        d.matches = [...d.matches, 'bill jane\\.doe@example\\.com for \\$1,299\\.00'];
+      });
+      editYaml<IdsRegistry>(t, 'ids.yaml', 'ids', (d) => {
+        const el = d.elements.find((e) => e.id === 'invoice.list.table')!;
+        el.label_regex = '^jane\\.doe@example\\.com$';
+      });
+      const r = validateMap(t.config);
+      assert.equal(r.ok, false);
+      const m = errors(r.issues, 8).map((i) => `${i.file}:${i.location}`);
+      assert.ok(m.includes('ios/recipes/create_invoice.yaml:/matches/2'), formatIssues(r.issues));
+      assert.ok(m.some((x) => /^ids\.yaml:\/elements\/\d+\/label_regex$/.test(x)), formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('warns (never errors) when a title or label is missing from the string table, and on gate titles', () => {
     const t = makeTempAppMapDir();
     try {
@@ -360,5 +383,41 @@ describe('formatIssues', () => {
     ]);
     assert.equal(text, 'ios/screens/x.yaml:/elements/0/id rule 2: dangling\nids.yaml rule 8: warning: not in table');
     assert.equal(formatIssues([]), '');
+  });
+});
+
+// 02 §11: all five schemas are reachable from `app-map validate`; the router export is a build
+// artifact outside the map, so it is named explicitly.
+describe('router-export schema via --router (02 §11)', () => {
+  it('accepts the fixture and rejects a bad app_id / missing build', () => {
+    const t = makeTempAppMapDir();
+    const dir = mkdtempSync(join(tmpdir(), 'app-map-router-'));
+    try {
+      const good = join(dir, 'router-export.json');
+      const doc = loadRouterExportFixture() as unknown as Record<string, unknown>;
+      writeFileSync(good, JSON.stringify(doc));
+      const okResult = validateMap(t.config, { routerExports: [good] });
+      assert.deepEqual(errors(okResult.issues), [], formatIssues(okResult.issues));
+
+      const bad = join(dir, 'bad.json');
+      writeFileSync(bad, JSON.stringify({ ...doc, app_id: 'unknown' }));
+      const badResult = validateMap(t.config, { routerExports: [bad] });
+      assert.equal(badResult.ok, false);
+      assert.ok(errors(badResult.issues).some((i) => i.location === '/app_id'), formatIssues(badResult.issues));
+
+      const noBuild = join(dir, 'nobuild.json');
+      const { build: _build, ...withoutBuild } = doc;
+      writeFileSync(noBuild, JSON.stringify(withoutBuild));
+      assert.equal(validateMap(t.config, { routerExports: [noBuild] }).ok, false);
+
+      const broken = join(dir, 'broken.json');
+      writeFileSync(broken, 'not json');
+      const brokenResult = validateMap(t.config, { routerExports: [broken] });
+      assert.equal(brokenResult.ok, false);
+      assert.ok(errors(brokenResult.issues).some((i) => /not JSON/.test(i.message)));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      t.cleanup();
+    }
   });
 });

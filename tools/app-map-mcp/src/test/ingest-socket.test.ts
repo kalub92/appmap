@@ -10,7 +10,7 @@ import { createConnection, createServer } from 'node:net';
 import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
@@ -274,6 +274,34 @@ describe('startIngestServer (03 §2)', () => {
       assert.equal((await postToIngestSocket(t.config, tapPayload()))?.ok, true);
     } finally {
       await second.close();
+    }
+  });
+
+  // The probe must use the spelling the bind uses. Over the sun_path cap `bindPath` shortens to a
+  // cwd-relative path; probing the absolute one always got ENOENT, so the second instance decided
+  // the socket was stale, UNLINKED the owner's live socket and bound its own (03 §2).
+  it('a socket path over the sun_path cap still yields exactly one owner', async () => {
+    const deep = mkdtempSync(join(tmpdir(), 'app-map-sock-'));
+    // build a directory whose absolute socket path is comfortably over MAX_SOCKET_PATH_BYTES
+    let dir = deep;
+    while (Buffer.byteLength(join(dir, 'ingest.sock')) <= MAX_SOCKET_PATH_BYTES) dir = join(dir, 'nested-segment');
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, 'ingest.sock');
+    const cwd = process.cwd();
+    process.chdir(dir); // bindPath relativizes against the process cwd
+    let first: Awaited<ReturnType<typeof startIngestServer>> | undefined;
+    let second: Awaited<ReturnType<typeof startIngestServer>> | undefined;
+    try {
+      first = await startIngestServer(ctx, { socketPath: path });
+      assert.equal(first.listening, true, 'the first instance owns the socket');
+      second = await startIngestServer(ctx, { socketPath: path });
+      assert.equal(second.listening, false, 'the second instance must NOT take the socket over');
+      assert.equal(existsSync(path), true, "the owner's socket file survives");
+    } finally {
+      await second?.close();
+      await first?.close();
+      process.chdir(cwd);
+      rmSync(deep, { recursive: true, force: true });
     }
   });
 

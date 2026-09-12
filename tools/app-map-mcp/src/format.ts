@@ -145,6 +145,11 @@ export function formatSummary(map: LoadedMap, opts: { maxTokens?: number } = {})
     `screens: ${screens.length > 0 ? screens.map((s) => s.id).join(', ') : 'none'}`,
   ];
   if (gates.length > 0) lines.push(`gates: ${gates.join(', ')}`);
+  // 03 §5 step 1 / 07 §2.3.3: without the string table the scrubber drops OS-dialog copy, so gate
+  // detection stops working. Say so rather than reporting a healthy map.
+  if (!map.stringTablePresent) {
+    lines.push(`warning: .local/strings.${map.platform}.txt is missing — gate detection and label-based resolution are degraded; run scripts/app-map/strings-export.sh`);
+  }
   if (recipes.length > 0) {
     lines.push('recipes:');
     for (const r of recipes) lines.push(`  ${r.id} (${r.status}) — ${String(r.description ?? '').replace(/\s+/g, ' ').trim()}`);

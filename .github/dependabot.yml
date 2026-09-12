@@ -1,0 +1,36 @@
+# .github/dependabot.yml — 07 §5.1 "a dependency scanner" / 07 §5.5 "Renovate/Dependabot may open
+# bump PRs". `npm audit --audit-level=high` in the validate job catches KNOWN advisories at PR time;
+# this is the other half: scheduled SCA that opens the bump PR.
+#
+# Every PR it opens goes through the same gates as any other change (06 R1–R3 + CODEOWNERS, 07 §7):
+# nothing here can merge itself.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /tools/app-map-mcp
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    groups:
+      # one PR for the routine patch/minor noise; majors stay individual so they get read
+      app-map-mcp-minor:
+        update-types: [minor, patch]
+    labels:
+      - dependencies
+      - app-map
+
+  # 07 §5.2: a pinned action is only safe if someone is watching for advisories against the pin.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+      - ci

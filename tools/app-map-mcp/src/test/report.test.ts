@@ -248,6 +248,46 @@ describe('report(ctx) reads .local/events.jsonl and the CI artifacts', () => {
     }
   });
 
+  // 08 §8 "and the latest CI artifacts": the shipped workflow writes them to the REPO ROOT.
+  it('finds drift/heal reports outside .local via repoRoot and --artifacts-dir', () => {
+    const t = makeTempAppMapDir();
+    try {
+      writeFileSync(join(t.dir, 'drift-report.json'), JSON.stringify(loadDriftReportFixture()));
+      const ctx = openContext(t.config, { logSink: 'none', skipRetention: true });
+      try {
+        // `t.dir` is the map dir; nothing is in .local, so only the explicit dirs can find it
+        assert.deepEqual(report(ctx, { since: '36500d' }).alerts.filter((a) => a.startsWith('drift-report:')), []);
+        const viaRoot = report(ctx, { since: '36500d', repoRoot: t.dir });
+        const viaFlag = report(ctx, { since: '36500d', artifactsDir: t.dir });
+        for (const m of [viaRoot, viaFlag]) {
+          assert.ok(m.alerts.some((a) => a.startsWith('drift-report:')), JSON.stringify(m.alerts));
+        }
+      } finally {
+        ctx.close();
+      }
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  // 08 §4 wants 30 days; 07 §2.4 prunes events older than `retentionDays` on server start, so
+  // the DEFAULT window is clamped to what the data can actually fill (architecture §7).
+  it('clamps the default window to config.retentionDays, but honours an explicit --since', () => {
+    const t = makeTempAppMapDir({ env: { APP_MAP_RETENTION_DAYS: '14' } });
+    try {
+      const ctx = openContext(t.config, { logSink: 'none', skipRetention: true });
+      try {
+        const days = (m: ReportMetrics): number => Math.round((Date.parse(m.until) - Date.parse(m.since)) / 86_400_000);
+        assert.equal(days(report(ctx)), 14, 'default window = retention');
+        assert.equal(days(report(ctx, { since: '30d' })), 30, 'an explicit window is honoured verbatim');
+      } finally {
+        ctx.close();
+      }
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('a malformed artifact is ignored, not fatal', () => {
     const t = makeTempAppMapDir();
     try {

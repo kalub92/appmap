@@ -37,7 +37,7 @@ export const PII_PATTERNS: readonly RegExp[] = [
   /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/, // email
   /\+?\d[\d\s().-]{8,}\d/, // E.164 / US phone (10+ digits with separators)
   /\d(?:[ -]?\d){12,18}/, // 13–19 digit runs (cards)
-  /[$€£]\s?\d/, // currency
+  /[$€£]\s?\d[\d.,]*/, // currency — the whole amount, so redaction never leaves digits behind
   /\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,4})?\b/, // IBAN-like
   /\b\d{3}-\d{2}-\d{4}\b/, // SSN-like
 ];
@@ -185,13 +185,48 @@ export function scrub(tree: Tree, policy: ScrubPolicy): ScrubbedTree {
   return out as unknown as ScrubbedTree;
 }
 
-/** `[redacted]` when any pattern hits; pure. */
+/**
+ * Every matched SUBSTRING replaced by `[redacted]`; pure.
+ *
+ * Only the match is replaced, not the whole string: blanking the lot destroyed the surrounding
+ * structure the map actually needs — a label keeps its static copy, and the 04 §3.4 param
+ * inference can still see which words were typed (`create an invoice for [redacted] for Acme
+ * Corp`, not `[redacted]`). 07 §2.2's requirement is that the VALUE never reaches disk, which
+ * splicing satisfies exactly as well (architecture §7 decision 13).
+ */
 export function redactString(s: string, patterns: readonly RegExp[] = PII_PATTERNS): { value: string; hit: boolean } {
   if (typeof s !== 'string') return { value: '', hit: false };
-  for (const p of patterns) {
-    if (safeTest(p, s)) return { value: REDACTED, hit: true };
+  const spans = forbiddenSpans(s, patterns);
+  if (spans.length === 0) return { value: s, hit: false };
+  let out = '';
+  let cursor = 0;
+  for (const [start, end] of spans) {
+    out += s.slice(cursor, start) + REDACTED;
+    cursor = end;
   }
-  return { value: s, hit: false };
+  return { value: out + s.slice(cursor), hit: true };
+}
+
+/** Merged, ordered `[start, end)` spans of `text` that any pattern matches; pure. */
+function forbiddenSpans(text: string, patterns: readonly RegExp[]): Array<[number, number]> {
+  const raw: Array<[number, number]> = [];
+  for (const p of patterns) {
+    if (!safeTest(p, text)) continue; // keeps the ReDoS guard on the cheap path
+    const g = new RegExp(p.source, p.flags.includes('g') ? p.flags : `${p.flags}g`);
+    for (const m of text.matchAll(g)) {
+      if (m[0] === '') break; // never spin on an empty match
+      raw.push([m.index, m.index + m[0].length]);
+    }
+  }
+  if (raw.length === 0) return raw;
+  raw.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const merged: Array<[number, number]> = [raw[0]!];
+  for (const span of raw.slice(1)) {
+    const last = merged[merged.length - 1]!;
+    if (span[0] <= last[1]) last[1] = Math.max(last[1], span[1]);
+    else merged.push(span);
+  }
+  return merged;
 }
 
 /** Every substring of `text` that a pattern matches, with the pattern index — validate rule 8 (02 §10.8). */

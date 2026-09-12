@@ -60,7 +60,7 @@ describe('exportMap (03 §4 write path)', () => {
     withCtx((ctx, dir) => {
       const before = snapshotYaml(dir);
       const res = exportMap(ctx);
-      assert.deepEqual(res, { written: [], unchanged: [], conflicts: [], non_canonical: [] });
+      assert.deepEqual(res, { written: [], deleted: [], unchanged: [], conflicts: [], non_canonical: [] });
       assert.deepEqual(snapshotYaml(dir), before);
     });
   });
@@ -199,6 +199,47 @@ describe('exportMap (03 §4 write path)', () => {
       // the map reloads cleanly with the new screen registered (ids only; no screen file needed)
       ctx.reload();
       assert.equal(ctx.map.ids.screens.some((s) => s.id === 'settings'), true);
+    });
+  });
+
+  // 02 §8: a screen retired for one release is then DELETED — the dirty row carries the intent
+  // and export unlinks the file, so a reload no longer sees the screen.
+  it('a dirty DELETE row unlinks the YAML file and the screen is gone after a reload (02 §8)', () => {
+    withCtx((ctx, dir) => {
+      const file = join(dir, 'ios/screens/settings.yaml');
+      assert.equal(existsSync(join(dir, 'ios/screens/invoice_detail.yaml')), true);
+      ctx.db.deleteScreen('invoice_detail', { dirty: true, reason: 'import_router_purge' });
+      const dirty = ctx.db.listDirty();
+      assert.equal(dirty.length, 1);
+      assert.equal(dirty[0]!.kind, 'screen');
+      assert.equal(dirty[0]!.key, 'invoice_detail');
+      assert.equal(dirty[0]!.deleted, true);
+      const res = exportMap(ctx);
+      assert.deepEqual(res.deleted, ['ios/screens/invoice_detail.yaml']);
+      assert.deepEqual(res.written, []);
+      assert.equal(existsSync(join(dir, 'ios/screens/invoice_detail.yaml')), false);
+      assert.deepEqual(ctx.db.listDirty(), []);
+      assert.equal(ctx.db.getScreen('invoice_detail'), undefined);
+      // idempotent: a second export has nothing left to delete
+      assert.deepEqual(exportMap(ctx).deleted, []);
+      assert.equal(existsSync(file), false, 'nothing else was touched');
+      // the full cascade that keeps the map loadable after a purge is covered in router-import.test.ts
+    });
+  });
+
+  it('a DELETE refuses when the file changed on disk since load, unless --force (03 §4)', () => {
+    withCtx((ctx, dir) => {
+      const file = join(dir, 'ios/screens/invoice_detail.yaml');
+      ctx.db.deleteScreen('invoice_detail', { dirty: true, reason: 'import_router_purge' });
+      writeFileSync(file, `${readFileSync(file, 'utf8')}# edited underneath us\n`);
+      const res = exportMap(ctx);
+      assert.deepEqual(res.deleted, []);
+      assert.equal(res.conflicts.length, 1);
+      assert.match(res.conflicts[0]!.diff, /refusing to delete it/);
+      assert.equal(existsSync(file), true);
+      const forced = exportMap(ctx, { force: true });
+      assert.deepEqual(forced.deleted, ['ios/screens/invoice_detail.yaml']);
+      assert.equal(existsSync(file), false);
     });
   });
 

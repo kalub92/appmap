@@ -20,8 +20,13 @@
  *    dismiss control is app code — `invalid_map` listing them);
  *  - `opts.purgeRetired`: a screen already `retired` whose `meta.last_verified_build` (or the
  *    build it was retired on, tracked in `meta` via `last_verified_build` staying as-is) is
- *    older than the export's build is deleted (`db.deleteScreen`, file removed by `export`) —
- *    02 §8 "retired for one release, then deleted"; reported in `purged`;
+ *    older than the export's build is deleted (`db.deleteScreen(id, {dirty:true})`, whose YAML
+ *    file `export` then unlinks) — 02 §8 "retired for one release, then deleted"; reported in
+ *    `purged`. A purge must leave the map referentially whole (02 §10 rule 3), so it also
+ *    (a) drops the screen from `ids.yaml` (`screens[]`, dirty), (b) strips every surviving
+ *    screen's edges whose `to` is the purged screen (and their postconditions naming it), and
+ *    (c) deletes the recipes that were retired with it (`purged_recipes`) — they reference a
+ *    screen file that no longer exists;
  *  - the manifest `build` is refreshed from the export's `build` when newer
  *    (`db.putManifest`, `build_updated: true`).
  * Writes go to the cache as dirty; `export` produces the diff (06 R7 PR).
@@ -29,11 +34,13 @@
  * Layer: session (imports context, types, yaml/schemas, lifecycle).
  */
 import type { AppMapContext } from './context.ts';
-import type { BuildInfo, Edge, IdsRegistry, ImportRouterResult, Manifest, RecipeId, RouterExport, RouterExportScreen, ScreenFile, ScreenId, ScreenSource } from './types.ts';
+import type { BuildInfo, Edge, IdsRegistry, ImportRouterResult, Manifest, RecipeFile, RecipeId, RouterExport, RouterExportScreen, ScreenFile, ScreenId, ScreenSource } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
-import { schemaDir } from './paths.ts';
+import { schemaDir, screenFile } from './paths.ts';
+import { PLATFORMS } from './config.ts';
+import { existsSync } from 'node:fs';
 import { assertValid } from './yaml/schemas.ts';
-import { retireRecipesForScreen } from './recipes/lifecycle.ts';
+import { retireRecipesForScreen, screensReferenced } from './recipes/lifecycle.ts';
 
 export interface ImportRouterOptions {
   /** retire screens missing from the export (default true) */
@@ -53,6 +60,42 @@ function edgeKey(edge: Pick<Edge, 'action' | 'to'>): string {
   const target = 'element' in a && a.element !== undefined ? a.element : 'url' in a ? a.url : 'gate' in a ? a.gate : '';
   const direction = 'direction' in a && a.direction !== undefined ? a.direction : '';
   return `${a.type}|${target}|${direction}|${edge.to}`;
+}
+
+/** `retired` recipes that reference a purged screen — deleted with it (02 §8, decision 40) */
+function recipesToPurge(ctx: AppMapContext, purges: readonly ScreenId[]): RecipeId[] {
+  if (purges.length === 0) return [];
+  const purged = new Set<ScreenId>(purges);
+  const known = new Map<RecipeId, RecipeFile>();
+  for (const r of ctx.map.recipes.values()) known.set(r.id, r);
+  for (const r of ctx.db.listRecipes()) known.set(r.id, r);
+  const out: RecipeId[] = [];
+  for (const recipe of [...known.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
+    if (recipe.status !== 'retired') continue;
+    if (screensReferenced(recipe).some((id) => purged.has(id))) out.push(recipe.id);
+  }
+  return out;
+}
+
+/**
+ * A copy of `screen` with every edge to a purged screen removed (and, on the surviving edges,
+ * every pre/postcondition naming one), or `undefined` when nothing pointed at a purged screen.
+ */
+function stripPurgedTargets(screen: ScreenFile, purged: ReadonlySet<ScreenId>): ScreenFile | undefined {
+  const edges = screen.edges ?? [];
+  const kept = edges.filter((e) => !purged.has(e.to));
+  const rewritten = kept.map((e) => {
+    const pre = (e.preconditions ?? []).filter((c) => c.screen === undefined || !purged.has(c.screen));
+    const post = (e.postconditions ?? []).filter((c) => c.screen === undefined || !purged.has(c.screen));
+    if (pre.length === (e.preconditions ?? []).length && post.length === (e.postconditions ?? []).length) return e;
+    return {
+      ...e,
+      ...(e.preconditions !== undefined ? { preconditions: pre } : {}),
+      ...(e.postconditions !== undefined ? { postconditions: post } : {}),
+    };
+  });
+  const changed = kept.length !== edges.length || rewritten.some((e, i) => e !== kept[i]);
+  return changed ? { ...screen, edges: rewritten } : undefined;
 }
 
 /** build numbers compare numerically only when both parse as integers (architecture decision 18) */
@@ -172,7 +215,7 @@ export function importRouter(ctx: AppMapContext, doc: RouterExport, opts: Import
     );
   }
 
-  const result: ImportRouterResult = { created: [], updated: [], retired: [], unchanged: [], edges_added: 0, unregistered: [], purged: [], build_updated: false };
+  const result: ImportRouterResult = { created: [], updated: [], retired: [], unchanged: [], edges_added: 0, unregistered: [], purged: [], purged_recipes: [], build_updated: false };
   const exported = new Map<ScreenId, RouterExportScreen>();
   for (const rs of doc.screens) exported.set(rs.id, rs);
 
@@ -237,6 +280,7 @@ export function importRouter(ctx: AppMapContext, doc: RouterExport, opts: Import
   if (dryRun) {
     result.retired = retirements.map((s) => s.id);
     result.purged = purges;
+    result.purged_recipes = recipesToPurge(ctx, purges);
     result.build_updated = bumpBuild;
     return result;
   }
@@ -248,11 +292,40 @@ export function importRouter(ctx: AppMapContext, doc: RouterExport, opts: Import
     const recipes = retireRecipes(ctx, screen.id);
     if (recipes.length > 0) ctx.log.info('import-router: retired recipes for a retired screen', { screen: screen.id, recipes });
   }
-  for (const id of purges) {
-    ctx.db.deleteScreen(id);
-    result.purged.push(id);
+  let idsChanged = result.unregistered.length > 0;
+  if (purges.length > 0) {
+    const purged = new Set<ScreenId>(purges);
+    for (const id of purges) {
+      ctx.db.deleteScreen(id, { dirty: true, reason: 'import_router_purge' });
+      result.purged.push(id);
+    }
+    // (a) the registry must not name a screen with no file (02 §10 rule 1/3) — but `ids.yaml` is
+    // shared by every platform (01 R1), and a purge only deletes the served platform's file. An id
+    // another platform still has a screen file for stays registered, or that file is orphaned and
+    // validate rule 2 fails; it is unregistered when that platform's own export drops it too.
+    const stillOnAnotherPlatform = new Set<ScreenId>(
+      [...purged].filter((id) => PLATFORMS.some((p) => p !== ctx.config.platform && existsSync(screenFile(ctx.config, id, p)))),
+    );
+    for (const id of stillOnAnotherPlatform) {
+      ctx.log.info('import-router: keeping the id registered — another platform still has this screen', { screen: id });
+    }
+    const keptScreens = ids.screens.filter((s) => !purged.has(s.id) || stillOnAnotherPlatform.has(s.id));
+    if (keptScreens.length !== ids.screens.length) {
+      ids.screens = keptScreens;
+      idsChanged = true;
+    }
+    // (b) no surviving screen may still point at it
+    for (const screen of ctx.db.listScreens()) {
+      const stripped = stripPurgedTargets(screen, purged);
+      if (stripped !== undefined) ctx.db.putScreen(stripped, { dirty: true, reason: 'import_router_purge' });
+    }
+    // (c) the recipes retired with it go too
+    for (const id of recipesToPurge(ctx, purges)) {
+      ctx.db.deleteRecipe(id, { dirty: true, reason: 'import_router_purge' });
+      result.purged_recipes.push(id);
+    }
   }
-  if (result.unregistered.length > 0) ctx.db.putIds(ids, { dirty: true, reason: 'import_router' });
+  if (idsChanged) ctx.db.putIds(ids, { dirty: true, reason: 'import_router' });
   if (bumpBuild && manifest) {
     ctx.db.putManifest({ ...manifest, build: doc.build }, { dirty: true, reason: 'import_router' });
     result.build_updated = true;

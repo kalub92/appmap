@@ -41,6 +41,12 @@ export const THRESHOLDS = {
   /** failure rate over the last N runs above this auto-recompiles (08 §5 row 3, 04 §8) */
   recompile_failure_rate: 0.5,
   recompile_window_runs: 10,
+  /**
+   * … but only once the window holds a meaningful sample. 08 §5 row 3 reads "> 50 % of the last
+   * 10 runs"; without a floor a single failure on a recipe with no run history is 1/1 = 100 %
+   * and instantly demotes a freshly verified recipe.
+   */
+  recompile_min_runs: 3,
   /** heals pending review that force a recompile (04 §8) */
   recompile_pending_heals: 2,
   /** report alert: fallback rate per verified/ci_gate recipe on the current build (08 §4) */
@@ -74,8 +80,7 @@ export function decideTransition(recipe: RecipeFile, stats: RecipeStats): Lifecy
 
   // 04 §8 "any → candidate (recompile)" — checked before promotion so a failing recipe is
   // never promoted; reasons are tried in the order 04 §8 / 08 §5 list them
-  const failures = stats.last_runs.filter((ok) => !ok).length;
-  if (stats.last_runs.length > 0 && failures / stats.last_runs.length > THRESHOLDS.recompile_failure_rate) {
+  if (failureRateExceeded(stats)) {
     return { ...base, to: 'candidate', reason: 'recompile_failures' };
   }
   if (stats.heals_pending >= THRESHOLDS.recompile_pending_heals) {
@@ -96,6 +101,13 @@ export function decideTransition(recipe: RecipeFile, stats: RecipeStats): Lifecy
   return null;
 }
 
+/** Pure: 08 §5 row 3 / 04 §8 — > 50 % failures over a window of at least `recompile_min_runs`. */
+export function failureRateExceeded(stats: RecipeStats): boolean {
+  const runs = stats.last_runs.length;
+  if (runs < THRESHOLDS.recompile_min_runs) return false;
+  return stats.last_runs.filter((ok) => !ok).length / runs > THRESHOLDS.recompile_failure_rate;
+}
+
 /** Pure: 08 §5 row 1 — success ≥ 95 % across ≥ 3 builds. */
 export function eligibleForCiGate(stats: RecipeStats): boolean {
   if (!stats || !Array.isArray(stats.builds)) return false;
@@ -113,8 +125,7 @@ export function eligibleForCiGate(stats: RecipeStats): boolean {
 /** Pure: 04 §8 "any → candidate" predicate. */
 export function shouldRecompile(stats: RecipeStats): boolean {
   if (!stats) return false;
-  const failures = stats.last_runs.filter((ok) => !ok).length;
-  return (stats.last_runs.length > 0 && failures / stats.last_runs.length > THRESHOLDS.recompile_failure_rate)
+  return failureRateExceeded(stats)
     || stats.heals_pending >= THRESHOLDS.recompile_pending_heals
     || stats.fallback_rate_current_build > THRESHOLDS.recompile_fallback_rate;
 }
@@ -217,6 +228,13 @@ function recompileFrom(ctx: AppMapContext, recipe: RecipeFile, decision: Lifecyc
       verify: recipe.verify,
       status: 'candidate',
     };
+    // 04 §8: `version` increments on STRUCTURAL change only. A recompile that reproduces the
+    // same steps/params/entry (the common case — the failures were environmental) is a status
+    // change, not a new revision, so it must not bump the version.
+    if (!isStructuralChange(recipe, next)) {
+      next.version = recipe.version;
+      delete next.provenance.revision_of;
+    }
     ctx.db.putRecipe(next, { dirty: true, reason: `lifecycle:${decision.reason}` });
     ctx.log.info('recipe recompiled', { recipe: recipe.id, version: next.version, from_session: from.session });
   } catch (e) {
@@ -288,9 +306,25 @@ export function markRecipe(ctx: AppMapContext, input: MarkRecipeInput): MarkReci
   }
 
   if (input.status === 'ci_gate') {
-    // 07 §7: a reviewer who is not the author signs the promotion
+    // 07 §7: "a reviewer who is not the author". What this process can check is the two identities
+    // it actually holds — `provenance.compiled_by` and any previous `reviewed_by`. The real control
+    // is branch protection (a code-owner approval on the PR), because a local CLI cannot know who
+    // is typing; this rejects the obvious self-sign so the recorded `reviewed_by` means something.
     if (typeof input.reviewer !== 'string' || input.reviewer.trim() === '') {
       throw new AppMapError(ERROR_CODES.BAD_INPUT, 'mark_recipe: promoting to ci_gate requires `reviewer`', 'pass the reviewing human (07 §7); it is recorded in provenance.reviewed_by');
+    }
+    const reviewer = input.reviewer.trim();
+    const author = typeof next.provenance?.compiled_by === 'string' ? next.provenance.compiled_by : undefined;
+    if (author !== undefined && author.toLowerCase() === reviewer.toLowerCase()) {
+      throw new AppMapError(
+        ERROR_CODES.BAD_INPUT,
+        `mark_recipe: ${reviewer} compiled ${input.recipe_id} and cannot also review it`,
+        'promotion to ci_gate needs a reviewer who is not the author (07 §7)',
+      );
+    }
+    if (input.force === true) {
+      // the bypass skips the 08 §5 eligibility gate, so leave an audit line naming who took it
+      ctx.log.warn('mark_recipe: ci_gate eligibility bypassed with --force', { recipe: input.recipe_id, reviewer });
     }
     if (input.force !== true) {
       const stats = ctx.db.recipeStats(input.recipe_id, { currentBuild: ctx.build, lastN: THRESHOLDS.recompile_window_runs });
@@ -302,7 +336,7 @@ export function markRecipe(ctx: AppMapContext, input: MarkRecipeInput): MarkReci
         );
       }
     }
-    next = { ...next, provenance: { ...next.provenance, reviewed_by: input.reviewer.trim() } };
+    next = { ...next, provenance: { ...next.provenance, reviewed_by: reviewer } };
   }
 
   next = { ...next, status: input.status };

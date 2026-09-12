@@ -172,6 +172,35 @@ that the handler class is absent when `APP_MAP_DEBUG` is off, and `AppMapRouterR
 which asserts `-AppMapExport` is inert. On Android, `testReleaseUnitTest` asserts `AppMapDeepLink.parse`
 returns null and `exportJson` throws.
 
+**These run in CI** — `.github/workflows/app-map.yml`, jobs `ios-instrumentation` and
+`android-instrumentation`:
+
+```sh
+swift test --package-path instrumentation/ios/AppMapKit                      # Debug: surfaces present
+swift test -c release --package-path instrumentation/ios/AppMapKit   -Xswiftc -enable-testing                                                   # Release: surfaces absent
+./gradlew :appmap:testDebugUnitTest :appmap:testReleaseUnitTest
+```
+
+The iOS package is a standalone SwiftPM package, so its job runs on every PR with no app and no
+simulator. The Android module is an AGP *library* included from the host app's Gradle build, which
+supplies `settings.gradle.kts` and the wrapper — so its job is gated on `APP_MAP_HAS_APP` until that
+app is in the repo. Wiring it up is a Stage 1 item; until then the Android release proof is unrun.
+
+## 10. Local git hooks (01 R8 "lint-ids runs in CI **and pre-commit**")
+
+Git never runs hooks from a path it has not been told about, so this is opt-in once per clone —
+the same pattern as the 02 §9 merge driver in `.gitattributes`:
+
+```sh
+git config core.hooksPath scripts/app-map/githooks
+```
+
+`scripts/app-map/githooks/pre-commit` then runs `app-map lint-ids`, `app-map validate` and
+`scripts/app-map/gen-ids --check` whenever a commit touches `app-map/`, `instrumentation/`, app
+source or an MCP config, and refuses the commit on any error. Bypass one commit with
+`APP_MAP_SKIP_PRECOMMIT=1 git commit` (or `git commit -n`). CI runs the same commands, so the hook
+only moves the feedback earlier — it is never the only gate.
+
 ## Open questions (01 §5)
 
 - Verify that Argent surfaces Compose `testTag` values as resource ids when `testTagsAsResourceId` is

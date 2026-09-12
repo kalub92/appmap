@@ -8,6 +8,7 @@ package com.example.appmap
 
 import android.content.Context
 import android.os.Build
+import android.util.Log
 
 data class AppMapAction(val type: String, val element: String? = null) {
     companion object {
@@ -65,13 +66,29 @@ object AppMapRouterRegistry {
         gates[id] = dismiss
     }
 
+    /**
+     * Placeholder that still satisfies the schema's `app_id` pattern
+     * (`^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$`) when the caller has no application id.
+     * Mirrors `AppMapRouterRegistry.unknownAppID` on iOS: an id that fails the pattern makes
+     * `app-map import-router` reject the whole export with a schema error (01 R6).
+     */
+    const val UNKNOWN_APP_ID: String = "app.unknown"
+
+    /** Pure: `appId` when it looks like a reverse-DNS application id, else [UNKNOWN_APP_ID]. */
+    internal fun resolveAppId(appId: String?): String {
+        val pattern = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$")
+        if (appId != null && pattern.matches(appId)) return appId
+        Log.e("AppMap", "application id $appId is not a valid app_id; writing $UNKNOWN_APP_ID (01 R6)")
+        return UNKNOWN_APP_ID
+    }
+
     /** The 01 R6 document. Screens and gates are sorted by id. Throws in Release builds. */
     @Synchronized
     fun exportJson(appId: String, build: AppMapBuildInfo): String {
         check(BuildConfig.APP_MAP_DEBUG) { "router export is not available in release builds (01 §4)" }
         val doc = linkedMapOf<String, Any?>(
             "schema_version" to 1,
-            "app_id" to appId,
+            "app_id" to resolveAppId(appId),
             "platform" to "android",
             "build" to linkedMapOf(
                 "version" to build.version,

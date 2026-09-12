@@ -239,10 +239,19 @@ export function inferKindFromContent(doc: unknown): YamlKind | undefined {
  * writes the result to `oursPath`, returns the process exit code (0 clean, 1 conflict, 2 error).
  */
 export function runMergeDriver(basePath: string, oursPath: string, theirsPath: string, opts: { realPath?: string } = {}): number {
+  // %A and %B are read first and kept: every failure path below writes a whole-file conflict
+  // into %A, which is only honest if both sides are actually in hand.
+  let ours: string;
+  let theirs: string;
+  try {
+    ours = readFileSync(oursPath, 'utf8');
+    theirs = readFileSync(theirsPath, 'utf8');
+  } catch (e) {
+    process.stderr.write(`app-map merge-driver: cannot read the merge inputs: ${String(e)}\n`);
+    return 2;
+  }
   try {
     const base = readFileSync(basePath, 'utf8');
-    const ours = readFileSync(oursPath, 'utf8');
-    const theirs = readFileSync(theirsPath, 'utf8');
     let kind = inferKindFromPath(opts.realPath ?? oursPath);
     if (!kind) {
       for (const text of [ours, theirs, base]) {
@@ -255,8 +264,12 @@ export function runMergeDriver(basePath: string, oursPath: string, theirsPath: s
       }
     }
     if (!kind) {
-      process.stderr.write('app-map merge-driver: cannot infer the YAML kind; leaving the file for a textual merge\n');
-      return 2;
+      // git does NOT fall back to a textual merge when a driver fails: it marks the path unmerged
+      // and leaves whatever is in %A, i.e. OURS with no conflict markers. Resolving with a plain
+      // `git add` would then silently discard THEIRS, so write the unresolved state into the file.
+      writeFileSync(oursPath, wholeFileConflict(ours, theirs), 'utf8');
+      process.stderr.write(`app-map merge-driver: cannot infer the YAML kind of ${opts.realPath ?? oursPath}; wrote a whole-file conflict — resolve it by hand\n`);
+      return 1;
     }
     const result = mergeYamlDocuments(kind, base, ours, theirs);
     writeFileSync(oursPath, result.merged, 'utf8');
@@ -267,6 +280,19 @@ export function runMergeDriver(basePath: string, oursPath: string, theirsPath: s
     return 0;
   } catch (e) {
     process.stderr.write(`app-map merge-driver: ${AppMapError.is(e) ? `${e.message} (${e.hint})` : String(e)}\n`);
-    return 2;
+    // same reasoning as above: never leave OURS looking cleanly merged after a failure
+    try {
+      writeFileSync(oursPath, wholeFileConflict(ours, theirs), 'utf8');
+      process.stderr.write(`app-map merge-driver: wrote a whole-file conflict into ${opts.realPath ?? oursPath} — resolve it by hand\n`);
+      return 1;
+    } catch {
+      return 2;
+    }
   }
+}
+
+/** `<<<<<<< ours` … `=======` … `>>>>>>> theirs`, so the unresolved state is visible in the file. */
+export function wholeFileConflict(ours: string, theirs: string): string {
+  const body = (text: string): string => (text === '' || text.endsWith('\n') ? text : `${text}\n`);
+  return `<<<<<<< ours\n${body(ours)}=======\n${body(theirs)}>>>>>>> theirs\n`;
 }

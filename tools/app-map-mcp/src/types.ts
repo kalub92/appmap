@@ -1106,6 +1106,12 @@ export interface LoadedMap {
    * exists in the app's string tables may widen what the scrubber keeps).
    */
   staticLabels: ReadonlySet<string>;
+  /**
+   * Does `.local/strings.<platform>.txt` exist? Without it the scrubber keeps no OS-dialog copy,
+   * so 03 §5 step 1 gate detection and label-based resolution are silently degraded — callers
+   * surface this instead of letting it look like a clean load (03 §5, 03 §7).
+   */
+  stringTablePresent: boolean;
   /** git tree hash of `app-map/` at load time (03 §4 reload check); `undefined` outside a git repo */
   treeHash?: string;
   /** effective build number (config, driver or manifest) */
@@ -1207,6 +1213,8 @@ export interface MarkRecipeResult { recipe_id: RecipeId; from: RecipeStatus | nu
 export interface ExportResult {
   /** relative paths written */
   written: string[];
+  /** relative paths unlinked (02 §8 purge of a screen retired on an earlier release) */
+  deleted: string[];
   /** paths skipped because unchanged */
   unchanged: string[];
   /** paths refused because the git blob changed since load (03 §4); non-empty ⇒ rerun with --force or reload */
@@ -1236,6 +1244,8 @@ export interface ImportRouterResult {
   unregistered: ScreenId[];
   /** retired screens deleted by `purgeRetired` (02 §8 "retired for one release, then deleted") */
   purged: ScreenId[];
+  /** recipes deleted alongside a purged screen (they were retired with it; architecture §7 decision 40) */
+  purged_recipes: RecipeId[];
   /** manifest `build` refreshed from the export */
   build_updated: boolean;
 }

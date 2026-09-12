@@ -51,6 +51,15 @@ Scope: 01 for the pilot screens; 02 hand-written pilot files; 03 with `summary`,
 
 ### Stage 1 — Compile and replay (team on `main`)
 Scope: 04 in full; 06 R1–R3, R5; 07 scrubber + policy + CODEOWNERS; the replayer subagent.
+- [ ] `CODEOWNERS`: replace every `@ORG/platform-team` with the real GitHub team, and give that team
+      **write** access — GitHub silently ignores an owner it cannot resolve, so until this is done the
+      file parses but matches nobody and the 07 §7 review control is inert. The `validate` job fails
+      while the placeholder is present.
+- [ ] branch protection on `main` (GitHub setting, not in this repo — 07 §8): "Require a pull request
+      before merging", "Require review from Code Owners", **1** approval for an ordinary map change and
+      a `ci_gate` promotion by someone other than the author, **2** approvals when
+      `app-map intent-critical-diff` reports a `true → false` downgrade (07 §7); "Require status
+      checks": `validate` (and the mobile jobs once `APP_MAP_HAS_APP=true`).
 - [ ] `validate` job green on every PR (R1–R3); `APP_MAP_HAS_APP=true` set, R5 gate running
 - [ ] scrubber fixtures (email, phone, card-like, amount, fixture client name) redacted or dropped (07 §8)
 - [ ] `app-nav-replayer` completes `create_invoice` in guided mode on the cheap model
@@ -84,11 +93,11 @@ table, not the numbers.
 | recipe replay success ≥ 95% across ≥ 3 builds | eligible for `ci_gate` (human promotes via `mark_recipe`) | `src/recipes/lifecycle.ts` (04 §8 `verified → ci_gate` guard) |
 | `candidate → verified` | ≥ 3 successful replays across ≥ 2 sessions, no unresolved heals | `src/recipes/lifecycle.ts` |
 | recipe fallback rate > 20% on a build | force recompile from the latest successful trajectory | `src/recipes/lifecycle.ts` |
-| recipe failure > 50% of last 10 runs (or ≥ 2 heals pending review) | auto-recompile to a new `version` | `src/recipes/lifecycle.ts` |
+| recipe failure > 50% of last 10 runs, over a window of ≥ 3 runs (or ≥ 2 heals pending review) | auto-recompile; the `version` moves only if the recompiled structure differs (04 §8) | `src/recipes/lifecycle.ts` (`THRESHOLDS.recompile_min_runs`, `failureRateExceeded`) |
 | heal acceptance: score ≥ 0.75, runner-up ≥ 0.10 lower, `intent_critical` label identical, postcondition holds | apply heal, else fallback | `src/heal.ts` (04 §7.2) |
-| max 2 gate dismissals and 1 heal per step | fallback beyond that | `src/recipes/replay.ts` (04 §5) |
+| max 2 gate dismissals and 1 heal per step | fallback beyond that | `src/recipes/guided.ts` (`GUIDED_LIMITS`, 04 §5) and `src/recipes/headless.ts` |
 | screen `required_ids` missing in drift | block PR if `ci_gate`-referenced (`broken`); else warn (`degraded`) | `src/drift.ts` (06 R4 step 5) → non-zero exit in `.github/workflows/app-map.yml` |
-| screen hash changed, ids intact | auto-reverify lazily; confidence decays `base × 0.9^builds_since_verified`, floor 0.2 | `src/drift.ts` + decay in the identification scorer (02 §8, 03 §5) |
+| screen hash changed, ids intact | auto-reverify lazily; confidence decays `base × 0.9^builds_since_verified`, floor 0.2 | `src/drift.ts` + `src/identify.ts` (`DECAY_FACTOR`/`DECAY_FLOOR`, 02 §8, 03 §5) |
 | unknown-screen rate > 10% for a week | schedule an exploration session or check router import | `app-map report` (`src/report.ts`) — alert only, human acts |
 | `intent_critical` heal rejected | human review before anyone re-runs that recipe | `src/heal.ts` sets `fallback.reason: intent_critical_label_changed`; `scripts/app-map/open-heal-pr.sh` lists it under "needs human" |
 | identification `best score < 0.6` → `unknown` | enter explore mode | `src/identify.ts` (03 §5) |

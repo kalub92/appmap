@@ -95,6 +95,24 @@ describe('06 §5: R3 fails on a .mcp.json that adds an unlisted server', () => {
     }, { mcp: { mcpServers: { ...OK_MCP.mcpServers, 'app-map': { command: 'node', args: ['/somewhere/else.js'] } } } });
   });
 
+  it('a secret literal in a Codex headers table is caught (06 R3)', () => {
+    withRepo((f) => {
+      f.write('.codex/config.toml', [
+        '[mcp_servers.argent]',
+        'command = "npx"',
+        'args = ["-y", "@swmansion/argent@0.25.0"]',
+        '',
+        '[mcp_servers.argent.headers]',
+        'Authorization = "Bearer sk-abcdefghijklmnopqrstuvwx"',
+      ].join('\n'));
+      const r = f.check(['.codex/config.toml']);
+      assert.ok(
+        r.violations.some((v) => v.rule === 'secret_literal' && v.file === '.codex/config.toml' && /headers\.Authorization/.test(v.message)),
+        JSON.stringify(r.violations),
+      );
+    });
+  });
+
   it('an unlisted server in the generated Codex TOML is caught too', () => {
     withRepo((f) => {
       f.write('.codex/config.toml', '[mcp_servers.rogue]\ncommand = "node"\nargs = ["rogue.js"]\n');
@@ -268,6 +286,19 @@ describe('parseCodexToml (minimal reader)', () => {
     assert.deepEqual(Object.keys(parsed), ['odd name']);
     assert.equal(parsed['odd name']!.url, 'https://example.test/mcp');
     assert.deepEqual(parsed['odd name']!.env, { A: '1', 'B-KEY': '2' });
+  });
+
+  // 06 R3: "any literal that looks like a token/secret appears in env, headers, or url".
+  // gen-configs emits `[mcp_servers.<name>.headers]`, so the reader must see that table too.
+  it('reads a headers table', () => {
+    const parsed = parseCodexToml([
+      '[mcp_servers.remote]',
+      'url = "https://example.test/mcp"',
+      '',
+      '[mcp_servers.remote.headers]',
+      'Authorization = "Bearer ${ARGENT_TOKEN}"',
+    ].join('\n'));
+    assert.deepEqual(parsed.remote!.headers, { Authorization: 'Bearer ${ARGENT_TOKEN}' });
   });
 
   it('an empty document parses to an empty map', () => {

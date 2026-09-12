@@ -373,3 +373,19 @@ describe('maestroExport (03 §10, 06 R5)', () => {
     assert.throws(() => maestroExport(ctx, { recipes: ['nope'] }), (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.NOT_FOUND);
   });
 });
+
+describe('emitExpect — a scalar `visible` is bad_input, never a TypeError (architecture §1)', () => {
+  it('names the step and the field', () => {
+    const recipe: RecipeFile = {
+      id: 'x', version: 1, platform: 'ios', description: 'd', matches: ['x'], params: [],
+      entry: { deep_link: 'appmap://invoice_new' },
+      steps: [{ id: 's1', action: 'wait_for', expect: { visible: 'invoice.save.button' as unknown as string[] } }],
+      verify: { screen: 'invoice_new' }, status: 'verified',
+      provenance: { compiled_from: 't', compiled_by: 'app-map-mcp@0.1.0' },
+    };
+    assert.throws(
+      () => recipeToMaestroFlow(map, recipe, {}),
+      (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT && /s1: expect\.visible/.test(e.message),
+    );
+  });
+});

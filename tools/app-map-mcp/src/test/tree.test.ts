@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 import { parse as parseYaml } from 'yaml';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import {
+  MAX_TREE_DEPTH,
   allNodes, centerOf, compactJson, countNodes, detectTreeShape, extractSnapshot, findByA11yId, findMarkerNodes,
   fromArgentSnapshot, fromMaestroHierarchy, isNormalizedTree, labelOf, nodeAtPath, nodesWithRole, normalizeTree,
   parentOf, pathOf, rolePath, screenRoot, siblingIndex, walk,
@@ -381,5 +382,47 @@ describe('compactJson', () => {
     })) as Tree;
     assert.equal(compactJson(shuffled), s);
     assert.ok(s.startsWith('{"schema_version":1,"platform":"ios","source":"normalized","viewport":{"w":390,"h":844},"root":{"role":"application"'));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// depth bound (03 §11 structured errors, 05 §6.2 oversized snapshots)
+// ---------------------------------------------------------------------------------------------
+
+describe('normalizeTree — depth bound', () => {
+  const deepArgent = (n: number): unknown => {
+    const root: Record<string, unknown> = { type: 'Other', frame: { x: 0, y: 0, width: 10, height: 10 }, children: [] };
+    let cursor = root;
+    for (let i = 0; i < n; i += 1) {
+      const child: Record<string, unknown> = { type: 'Other', frame: { x: 0, y: 0, width: 10, height: 10 }, children: [] };
+      (cursor['children'] as unknown[]).push(child);
+      cursor = child;
+    }
+    return { root };
+  };
+
+  it('a tree within the bound normalizes', () => {
+    assert.ok(normalizeTree(deepArgent(MAX_TREE_DEPTH - 2), { platform: 'ios' }).root);
+  });
+
+  it('a pathologically deep tree is bad_input, not a RangeError', () => {
+    assert.throws(
+      () => normalizeTree(deepArgent(MAX_TREE_DEPTH + 5000), { platform: 'ios' }),
+      (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT && /deeper than/.test(e.message) && e.hint !== '',
+    );
+  });
+
+  it('a deep NORMALIZED tree is rejected by the structural check with a named issue', () => {
+    const tree = normalizeTree(deepArgent(1), { platform: 'ios' });
+    let tail: TreeNode = tree.root;
+    for (let i = 0; i < MAX_TREE_DEPTH + 10; i += 1) {
+      const next: TreeNode = { role: 'other', bbox_norm: { x: 0, y: 0, w: 0, h: 0 }, children: [] };
+      tail.children.push(next);
+      tail = next;
+    }
+    assert.throws(
+      () => normalizeTree(tree, { platform: 'ios' }),
+      (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT && /maximum tree depth/.test(e.message),
+    );
   });
 });

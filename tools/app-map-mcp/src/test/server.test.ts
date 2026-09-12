@@ -333,7 +333,7 @@ describe('match_recipe', () => {
 
   it('stores the task PII-redacted (architecture §7 decision 13, 07 §2.3)', async () => {
     ok(await call('match_recipe', { instruction: 'create an invoice for $50 for Acme Corp', session: SESSION }));
-    assert.equal(ctx.db.getSession(SESSION)?.task, '[redacted]');
+    assert.equal(ctx.db.getSession(SESSION)?.task, 'create an invoice for [redacted] for Acme Corp');
   });
 
   it('rejects an unknown platform and a missing instruction', async () => {
@@ -604,6 +604,32 @@ describe('03 §11 error contract', () => {
     // the zod shapes are permissive on purpose so the handler can answer with a hint
     const error = assertToolError(await call('get_screen', {}), ERROR_CODES.BAD_INPUT);
     assert.match(error.error, /screen_id/);
+  });
+
+  // 03 §11: a WRONG-TYPED argument must come back structured too. A typed zod field would make
+  // the SDK reject it before the handler runs, yielding a bare `MCP error -32602` text block.
+  it('reports a wrong-typed argument as bad_input with a hint, not as a zod transport error', async () => {
+    const cases: Array<[string, Record<string, unknown>, RegExp]> = [
+      ['report_step', { run_id: 'r', step_id: 's', ok: 'yes' }, /`ok`/],
+      ['get_screen', { screen_id: 123 }, /screen_id/],
+      ['name_screen', { screen_id: null }, /screen_id/],
+      ['find_element', { screen_id: 'invoice_list', element_id: [1, 2] }, /element_id/],
+      ['plan_path', { from: 1, to: 2 }, /from/],
+      ['run_recipe', { recipe_id: 'create_invoice', params: 'notanobject' }, /params/],
+      ['compile_recipe', { session: 's', task: 't', recipe_id: 'r', params: 'x' }, /params/],
+      ['record_observation', { tool: 42 }, /tool/],
+      ['mark_recipe', { recipe_id: 'create_invoice', status: 7 }, /status/],
+      ['match_recipe', { instruction: { a: 1 } }, /instruction/],
+    ];
+    for (const [name, args, expected] of cases) {
+      const answer = await call(name, args);
+      assert.ok(answer.structured !== undefined, `${name} returned no structuredContent`);
+      const error = assertToolError(answer, ERROR_CODES.BAD_INPUT);
+      assert.match(error.error, expected, `${name}: ${error.error}`);
+      assert.ok(typeof error.hint === 'string' && error.hint !== '', `${name} has no hint`);
+      assert.doesNotMatch(error.error, /Invalid arguments for tool/, `${name} was rejected by zod, not the handler`);
+    }
+    assert.equal((await call('summary')).isError, false, 'the server survived every wrong-typed call');
   });
 
   it('short-circuits every tool with the load error while the YAML is invalid, and export is the way out', async () => {

@@ -600,6 +600,34 @@ describe('a degraded resolution heals the next step and settles on the following
     assert.equal(ev.kind === 'heal' && ev.step, 's1');
   });
 
+  // 04 §9 bullet 4 / 03 §12 bullet 3: the id is REMOVED but the label is kept. The role_label
+  // fall-through sits exactly at DEGRADED_THRESHOLD, so it is degraded only because the authored
+  // top locator missed — without that the canonical drift scenario never triggers 04 §7 healing.
+  it('04 §9: removing the id while keeping the label heals by role_label and marks the element healed_pending_review', async () => {
+    const idRemovedLabelKept = (tree: Tree): void => { delete node(tree, byId('invoice.add.button')).a11y_id; };
+    ctx.db.putRecipe(OPEN_NEW, { dirty: true, reason: 'test' });
+    drive('invoice_list');
+    const started = await startGuidedRun(ctx, { recipe_id: OPEN_NEW.id, params: {} }, noHooks);
+    drive('invoice_list', { mutate: idRemovedLabelKept, url: 'appmap://invoice_list' });
+    const handed = await reportStep(ctx, { run_id: started.run_id, step_id: 's0', ok: true });
+    assert.equal(handed.status, 'ok');
+    const step = handed.status === 'ok' ? handed.step : ({} as RunStep);
+    assert.equal(step.id, 's1');
+    assert.equal(step.healing, true, 'a fall-through to role_label is degraded and must propose a heal');
+    assert.deepEqual(step.target, { by: 'role_label', role: 'button', label: 'New Invoice' });
+
+    drive('invoice_new');
+    const done = await reportStep(ctx, { run_id: started.run_id, step_id: 's1', ok: true });
+    assert.equal(done.status, 'done');
+    assert.equal(done.status === 'done' && done.verified, true);
+    assert.equal(done.status === 'done' ? done.heals.length : 0, 1);
+    const stored = ctx.db.getScreen('invoice_list')!.elements.find((e) => e.id === 'invoice.add.button')!;
+    assert.equal(stored.status, 'healed_pending_review');
+    assert.equal(stored.locators[0]?.strategy, 'role_label', 'the surviving locator is promoted to rank 0');
+    // 04 §9: the diff must be visible after export
+    assert.ok(ctx.db.listDirty().some((d) => d.kind === 'screen' && d.key === 'invoice_list'));
+  });
+
   it('the postcondition failing rejects the heal (postcondition_failed) and falls back', async () => {
     const { run_id } = await startHealRun();
     // the tap did nothing: still on the list

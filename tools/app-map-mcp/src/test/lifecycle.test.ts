@@ -15,7 +15,7 @@ import {
   THRESHOLDS, decideTransition, eligibleForCiGate, markRecipe, markVerified, recordRunOutcome,
   retireRecipesForScreen, screensReferenced, shouldRecompile,
 } from '../recipes/lifecycle.ts';
-import { makeTempAppMapDir } from './helpers.ts';
+import { loadTrajectoryFixture, makeTempAppMapDir } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
 // ---------------------------------------------------------------------------------------------
@@ -48,6 +48,7 @@ describe('THRESHOLDS are the 08 §5 numbers', () => {
       recompile_fallback_rate: 0.2,
       recompile_failure_rate: 0.5,
       recompile_window_runs: 10,
+      recompile_min_runs: 3,
       recompile_pending_heals: 2,
       alert_fallback_rate: 0.2,
       alert_pending_heals: 5,
@@ -122,6 +123,20 @@ describe('decideTransition / shouldRecompile — any → candidate (04 §8 row 4
   it('no runs at all means no decision', () => {
     assert.equal(shouldRecompile(stats()), false);
     assert.equal(decideTransition(recipe('verified'), stats()), null);
+  });
+
+  // 08 §5 row 3 is "> 50 % of the LAST 10 RUNS": a 1-of-1 or 2-of-2 window is not that sample,
+  // and without the floor a single bad run demoted a freshly verified recipe.
+  it('a window below recompile_min_runs never triggers, however bad it looks', () => {
+    for (const n of [1, 2]) {
+      const all = stats({ runs: n, last_runs: runsWith(n, n) });
+      assert.equal(shouldRecompile(all), false, `${n}/${n} failures is too small a sample`);
+      assert.equal(decideTransition(recipe('verified'), all), null);
+    }
+    // at the floor the rule applies again
+    const three = stats({ runs: 3, last_runs: runsWith(3, 2) });
+    assert.equal(shouldRecompile(three), true);
+    assert.equal(decideTransition(recipe('verified'), three)?.reason, 'recompile_failures');
   });
 });
 
@@ -236,6 +251,20 @@ describe('markRecipe — 04 §3.8 / 07 §7', () => {
     const r = markRecipe(ctx, { recipe_id: 'create_invoice', status: 'ci_gate', reviewer: 'dana', force: true });
     assert.deepEqual({ from: r.from, to: r.to }, { from: 'verified', to: 'ci_gate' });
     assert.equal(ctx.db.getRecipe('create_invoice')?.provenance.reviewed_by, 'dana');
+  });
+
+  // 07 §7 "a reviewer who is not the author": the CLI can only check the identities it holds; the
+  // real control is branch protection. Rejecting the obvious self-sign keeps `reviewed_by` honest.
+  it('the recipe author cannot sign their own ci_gate promotion (07 §7)', () => {
+    const authored = { ...ctx.map.recipes.get('create_invoice')!, provenance: { compiled_from: 't', compiled_by: 'caleb' } };
+    ctx.db.putRecipe(authored, { dirty: false });
+    assert.throws(
+      () => markRecipe(ctx, { recipe_id: 'create_invoice', status: 'ci_gate', reviewer: 'caleb', force: true }),
+      (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT && /cannot also review/.test(e.message),
+    );
+    assert.equal(ctx.db.getRecipe('create_invoice')?.status, 'verified', 'nothing was written');
+    // a different reviewer is fine
+    assert.equal(markRecipe(ctx, { recipe_id: 'create_invoice', status: 'ci_gate', reviewer: 'dana', force: true }).to, 'ci_gate');
   });
 
   it('ci_gate is allowed once the run record clears 08 §5 row 1', () => {
@@ -390,6 +419,31 @@ describe('recordRunOutcome — counters, the recipe_run event (08 §2) and the d
     assert.equal(decision?.recompile_from?.seq, 8, 'start_seq + 1 of the latest successful run');
     assert.ok(decision?.recompile_from?.session.startsWith('sess_ok_'));
     assert.equal(ctx.db.getRecipe('create_invoice')?.status, 'candidate');
+  });
+
+  // 04 §8: "version increments on every structural change". A recompile that reproduces the same
+  // steps/params/entry is not a structural change, so repeated failures must not walk the version.
+  it('repeated recompiles from the same trajectory do not bump the version (04 §8)', () => {
+    for (const o of loadTrajectoryFixture('create_invoice.session')) ctx.db.insertObservation(o);
+    const okSession = 'sess_2026-09-10_0007';
+    for (let i = 0; i < 4; i++) ctx.db.insertRun(finishedRun({ session: okSession, start_seq: 0 }));
+    const fail = (): void => {
+      const run = finishedRun({ session: `sess_bad_${Math.random().toString(36).slice(2, 8)}`, state: 'failed' });
+      ctx.db.insertRun(run);
+      recordRunOutcome(ctx, run, { ok: false, steps: 5, steps_done: 2, ms: 500 });
+    };
+    for (let i = 0; i < 6; i++) fail();
+    const afterFirst = ctx.db.getRecipe('create_invoice')!;
+    assert.equal(afterFirst.status, 'candidate');
+    assert.ok(
+      ctx.db.listDirty().some((d) => d.kind === 'recipe' && d.key === 'create_invoice' && d.reason === 'lifecycle:recompile_failures'),
+      'the recompile actually ran (otherwise this test proves nothing)',
+    );
+    const steps = JSON.stringify(afterFirst.steps);
+    for (let i = 0; i < 5; i++) fail();
+    const afterMore = ctx.db.getRecipe('create_invoice')!;
+    assert.equal(JSON.stringify(afterMore.steps), steps, 'the recompiled structure is unchanged');
+    assert.equal(afterMore.version, afterFirst.version, 'an unchanged structure keeps the version');
   });
 
   it('a run for a recipe the map does not know still logs the event and decides nothing', () => {

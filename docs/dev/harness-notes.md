@@ -39,11 +39,12 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
 
 | surface | assumed by | contract |
 |---|---|---|
-| `app-map summary --max-tokens N` | session-start hook | plain text on stdout, exit 0. The hook JSON-escapes it itself — **no `--hook-json` flag is assumed**. It greps a `build <n>` token best-effort for the preamble; print `build 4412` (or `build: 4412`) somewhere in the summary and a recipes block. |
+| `app-map summary --max-tokens N [--hook-json]` | session-start hook | plain text on stdout, exit 0. With `--hook-json` the CLI prints the whole 05 §3 envelope (`{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":…}}`) with the summary **and** the fixed preamble inside — that is what the hook uses, so the preamble exists in exactly one place. Without the flag the hook has no way to render the preamble itself (see D3). |
 | ingest socket `app-map/.local/ingest.sock` | record hook | newline-delimited JSON, one hook payload per line, exactly as Claude Code sent it (`tool_response` or `tool_error`). **Close the connection after reading the line** so `nc -U` exits immediately (it has a 2 s idle cap otherwise). |
 | `app-map record --stdin` | record hook fallback | reads one JSON line from stdin; exit code ignored. Must accept `PostToolUseFailure` payloads (`tool_error`, no `tool_response`). |
 | `app-map export` (no `--force`) | stop hook | prints written file paths, one per line; non-zero + diff on the 03 §4 conflict. Output is relayed to stderr. |
-| `app-map validate`, `export --check`, `lint-ids`, `gen-configs --check`, `policy-check`, `drift --platform P --router F --out F`, `maestro-export --platform P --status S --out D`, `run --all --status verified,ci_gate --headless --report F`, `import-router F` | CI workflow | names/flags as in 06 §3; `policy-check` is the 06 R3 job (not in the 03 §10 table). `drift` exits non-zero when a `ci_gate` screen is broken. |
+| `app-map validate`, `export --check`, `lint-ids`, `gen-configs --check`, `policy-check`, `intent-critical-diff <base-sha> --markdown`, `drift --platform P --router F --out F`, `maestro-export --platform P --status S --out D`, `run --all [--platform P] --status S --headless --report F`, `import-router F` | CI workflow | names/flags as in 06 §3; `policy-check` is the 06 R3 job and `intent-critical-diff` the 07 §7 one (neither is in the 03 §10 table). `drift` prints the 06 R4.4 table on stdout (the PR comment is `tee`'d from it) and exits non-zero only when a `ci_gate` screen is broken. `intent-critical-diff` exits **1** for "an element was downgraded" and other codes for usage/git failures — the workflow distinguishes them. |
+| `scripts/app-map/ci-params.sh --platform P` | CI workflow | writes `app-map/.local/ci-params.<platform>.json` from `$APP_MAP_CI_PARAMS`, `app-map/ci-params.<platform>.json` or `instrumentation/<platform>/fixtures/ci-params.json`. `maestro-export` and `run --all` refuse to guess param values (architecture §7 decision 36), so this step must precede both. |
 | `heal-report.json` | `scripts/app-map/open-heal-pr.sh` | as `app-map/schema/heal-report.schema.json`: `heals[]` = accepted (exported), `needs_human[]` = rejected, `runs[]` per recipe; each heal has `old_strategy`/`new_strategy`, optional `old_locator`/`new_locator {strategy, value, weight}`, `score`, `runner_up_score`, `reason` enum, `intent_critical`, `build`. The PR body renders exactly those. Contains ids and scores only (07 §2.4). |
 | router export | `scripts/app-map/router-export.sh` | file appears at the path given by `-AppMapExport` (iOS) / the broadcast result `data="…"` (Android); JSON has `schema_version`. The script passes the checkout's sha (`SIMCTL_CHILD_APP_MAP_GIT_SHA` / `--es git_sha`) because `build.git_sha` must be 7–40 hex; the packages write the placeholder `0000000` when nothing is wired. |
 | hook payload names | `app-map/schema/hook-payload.schema.json` vs the docs | the schema lists `error` and `source`; the current hooks reference names them **`tool_error`** (PostToolUseFailure) and **`matcher_value`** (SessionStart/PreCompact). `additionalProperties: true` keeps both valid — the server should read `tool_error ?? error` and `matcher_value ?? source`. |
@@ -59,12 +60,21 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
 - **D2 — hook timeouts.** 05 §3 sets `timeout: 5` only on the record hooks. The defaults are 600 s, so
   `.claude/settings.json` adds 30 s (SessionStart/PreCompact) and 60 s (Stop) to keep a stuck CLI from
   freezing a session. The scripts bound themselves tighter (`timeout`/watchdog) and always exit 0.
-- **D3 — preamble.** The 05 §3 preamble ends with `Recipes: create_invoice, filter_invoices, …`. The hook
-  cannot parse recipe ids reliably from free text, so it writes `Recipes: see the summary below.` and
-  appends the summary verbatim. Build number is grepped best-effort (`unknown` if absent).
-- **D4 — CI gating.** 06 §3 runs the mobile jobs on every PR. Here they run only when the repository
-  variable `APP_MAP_HAS_APP == 'true'` (skipped, not failed, otherwise) so the workflow is green before an
-  app exists. `validate` always runs.
+- **D3 — preamble.** The 05 §3 preamble ends with `Recipes: create_invoice, filter_invoices, …`, which the
+  hook cannot parse reliably out of free text. The CLI therefore owns it: `summary --hook-json`
+  (`src/format.ts formatSessionStartContext`) returns summary + preamble in the finished envelope, and the
+  hook just prints it. An earlier version built its own preamble in shell, which duplicated the four rules
+  inside `additionalContext` and cost ~60 % more tokens.
+- **D3a — hooks export `APP_MAP_DIR`.** The CLI resolves the map from `APP_MAP_DIR`, else from its own
+  CWD (`src/config.ts`), and a hook does not control its CWD. All three scripts therefore export
+  `APP_MAP_DIR=${APP_MAP_DIR:-$CLAUDE_PROJECT_DIR/app-map}`. Without it an off-root session wrote
+  observations into a stray `<cwd>/app-map/`, reported an empty map as "loaded", and exported nothing.
+- **D4 — CI gating.** 06 §3 runs the mobile jobs on every PR. The drift/gate/heal/import jobs run only
+  when the repository variable `APP_MAP_HAS_APP == 'true'` (skipped, not failed, otherwise) so the
+  workflow is green before an app exists. `validate` and `ios-instrumentation` always run — the latter is
+  the 01 §4 release proof (`swift test` + `swift test -c release` on the standalone SwiftPM package) and
+  needs no app; gating it was what left the release gate unverified. `android-instrumentation` is an AGP
+  library that needs the host app's Gradle build, so it stays behind the variable.
 - **D5 — router-export.sh handles Android too** (`--platform android`, via the export broadcast) so the
   Android CI job mirrors iOS with one script.
 - **D6 — AppMapDebugEndpoint is a UserDefaults probe, not an HTTP endpoint** (07 §3 leaves the transport

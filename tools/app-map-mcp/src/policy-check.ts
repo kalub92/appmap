@@ -210,11 +210,16 @@ export function looksLikeSecret(value: string): boolean {
   return SECRET_PATTERNS.some((re) => re.test(withoutRefs));
 }
 
-/** Pure: minimal TOML → `{ mcp_servers: { name: { command, args, env } } }` for the generated Codex file. */
-export function parseCodexToml(text: string): Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string }> {
-  const out: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string }> = {};
+/**
+ * Pure: minimal TOML → `{ mcp_servers: { name: { command, args, env, headers } } }` for the
+ * generated Codex file. `headers` is read as well as `env`: `gen-configs` emits
+ * `[mcp_servers.<name>.headers]`, and 06 R3 says a token literal in **env, headers or url** is a
+ * violation wherever it appears.
+ */
+export function parseCodexToml(text: string): Record<string, { command?: string; args?: string[]; env?: Record<string, string>; headers?: Record<string, string>; url?: string }> {
+  const out: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; headers?: Record<string, string>; url?: string }> = {};
   let server: string | undefined;
-  let section: 'root' | 'env' | 'other' = 'other';
+  let section: 'root' | 'env' | 'headers' | 'other' = 'other';
   for (const rawLine of text.split('\n')) {
     const line = rawLine.trim();
     if (line.length === 0 || line.startsWith('#')) continue;
@@ -223,7 +228,7 @@ export function parseCodexToml(text: string): Record<string, { command?: string;
       const parts = splitTomlKeyPath(header[1]!);
       if (parts.length >= 2 && parts[0] === 'mcp_servers') {
         server = parts[1]!;
-        section = parts.length === 2 ? 'root' : parts[2] === 'env' ? 'env' : 'other';
+        section = parts.length === 2 ? 'root' : parts[2] === 'env' ? 'env' : parts[2] === 'headers' ? 'headers' : 'other';
         out[server] ??= {};
       } else {
         server = undefined;
@@ -237,9 +242,12 @@ export function parseCodexToml(text: string): Record<string, { command?: string;
     const key = unquoteTomlKey(line.slice(0, eq).trim());
     const value = line.slice(eq + 1).trim();
     const target = out[server]!;
-    if (section === 'env') {
+    if (section === 'env' || section === 'headers') {
       const s = parseTomlScalar(value);
-      if (s !== undefined) (target.env ??= {})[key] = s;
+      if (s !== undefined) {
+        if (section === 'env') (target.env ??= {})[key] = s;
+        else (target.headers ??= {})[key] = s;
+      }
       continue;
     }
     if (key === 'command') {

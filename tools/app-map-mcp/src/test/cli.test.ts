@@ -472,6 +472,25 @@ describe('exit codes (03 §10: 0 ok · 1 failure · 2 usage)', () => {
 describe('parseArgs — the 03 §10 flag grammar', () => {
   it('rejects an unknown command with bad_input', () => {
     assert.throws(() => parseArgs(['nope']), /unknown command/);
+    assert.throws(() => parseArgs(['--platform', 'android', 'nope']), /unknown command: nope/);
+    assert.throws(() => parseArgs(['--platform', 'android']), /no command given/);
+  });
+
+  // 03 §10: the help text calls --dir/--platform/--max-tokens global, so they must parse on
+  // EITHER side of the command; a leading flag used to be read as the command itself.
+  it('accepts the global flags before the command', () => {
+    const a = parseArgs(['--platform', 'android', '--dir=/tmp/x', 'summary', '--max-tokens', '600']);
+    assert.equal(a.command, 'summary');
+    assert.equal(a.flags.platform, 'android');
+    assert.equal(a.flags.dir, '/tmp/x');
+    assert.equal(a.flags['max-tokens'], '600');
+    assert.deepEqual(a.positional, []);
+    const b = parseArgs(['--json', 'validate']);
+    assert.equal(b.command, 'validate');
+    assert.equal(b.flags.json, true);
+    const c = parseArgs(['--dir', '/tmp/y', 'import-router', 'export.json']);
+    assert.equal(c.command, 'import-router');
+    assert.deepEqual(c.positional, ['export.json']);
   });
 
   it('parses `--k v`, `--k=v`, booleans and `--`', () => {

@@ -49,6 +49,7 @@
  * Layer: top (imports everything).
  */
 import { readFileSync } from 'node:fs';
+import { relative, sep } from 'node:path';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
@@ -167,9 +168,10 @@ export function toolError(e: unknown): ToolResult & { isError: true; structuredC
 }
 
 // ---------------------------------------------------------------------------------------------
-// input helpers — every `inputSchema` field is optional on purpose: the SDK turns a zod failure
-// into a bare-text `isError` result, while 03 §11 demands `{error, hint, code}`. Validation
-// therefore happens in the handler, where the hint can name the fix.
+// input helpers — every `inputSchema` field is `z.unknown().optional()` on purpose: the SDK turns
+// a zod failure (a MISSING field *or* a wrong-typed one) into a bare-text `isError` result, while
+// 03 §11 demands `{error, hint, code}`. All validation — presence AND type — therefore happens in
+// the handler through these helpers, where the hint can name the fix.
 // ---------------------------------------------------------------------------------------------
 
 function requireString(v: unknown, field: string, tool: string, hint: string): string {
@@ -242,7 +244,7 @@ function toolSummary(ctx: AppMapContext): ToolResult {
   return toolText(formatSummary(map, { maxTokens: cap(ctx) }).text, cap(ctx));
 }
 
-function toolIdentifyScreen(ctx: AppMapContext, args: { snapshot?: unknown; session?: string }): ToolResult {
+function toolIdentifyScreen(ctx: AppMapContext, args: { snapshot?: unknown; session?: unknown }): ToolResult {
   const map = requireMap(ctx);
   const session = optionalString(args.session, 'session', 'identify_screen');
   if (args.snapshot !== undefined && args.snapshot !== null) {
@@ -286,7 +288,7 @@ function confidenceFor(ctx: AppMapContext, map: LoadedMap, screenId: ScreenId, s
   return since === undefined ? undefined : decayConfidence(1, since);
 }
 
-function toolGetScreen(ctx: AppMapContext, args: { screen_id?: string; session?: string }): ToolResult {
+function toolGetScreen(ctx: AppMapContext, args: { screen_id?: unknown; session?: unknown }): ToolResult {
   const map = requireMap(ctx);
   const screenId = requireString(args.screen_id, 'screen_id', 'get_screen', 'call summary for the screen list, or identify_screen for the current one');
   const session = optionalString(args.session, 'session', 'get_screen');
@@ -296,7 +298,7 @@ function toolGetScreen(ctx: AppMapContext, args: { screen_id?: string; session?:
   return toolText(formatGetScreen(map, screenId, { ...(confidence !== undefined ? { confidence } : {}), maxTokens }), maxTokens);
 }
 
-function toolFindElement(ctx: AppMapContext, args: { screen_id?: string; element_id?: string; intent?: string; session?: string }): ToolResult {
+function toolFindElement(ctx: AppMapContext, args: { screen_id?: unknown; element_id?: unknown; intent?: unknown; session?: unknown }): ToolResult {
   const map = requireMap(ctx);
   const screenId = requireString(args.screen_id, 'screen_id', 'find_element', 'the screen the element is on (identify_screen returns it)');
   const elementId = optionalString(args.element_id, 'element_id', 'find_element');
@@ -314,14 +316,14 @@ function toolFindElement(ctx: AppMapContext, args: { screen_id?: string; element
   return toolJson({ ...result }, cap(ctx));
 }
 
-function toolPlanPath(ctx: AppMapContext, args: { from?: string; to?: string }): ToolResult {
+function toolPlanPath(ctx: AppMapContext, args: { from?: unknown; to?: unknown }): ToolResult {
   const map = requireMap(ctx);
   const from = requireString(args.from, 'from', 'plan_path', 'the current screen id, or "unknown" when it is not identified');
   const to = requireString(args.to, 'to', 'plan_path', 'the screen you want to reach (summary lists them)');
   return toolJson({ ...planPath(map, from, to) }, cap(ctx));
 }
 
-function toolMatchRecipe(ctx: AppMapContext, args: { instruction?: string; platform?: string; session?: string }): ToolResult {
+function toolMatchRecipe(ctx: AppMapContext, args: { instruction?: unknown; platform?: unknown; session?: unknown }): ToolResult {
   const map = requireMap(ctx);
   const instruction = requireString(args.instruction, 'instruction', 'match_recipe', 'pass the user task text, e.g. "create an invoice for $50 for Acme Corp"');
   const platform = optionalString(args.platform, 'platform', 'match_recipe');
@@ -337,7 +339,7 @@ function toolMatchRecipe(ctx: AppMapContext, args: { instruction?: string; platf
   return toolJson({ ...result, ...(session !== undefined ? { session } : {}) }, cap(ctx));
 }
 
-async function toolRunRecipe(ctx: AppMapContext, args: { recipe_id?: string; params?: unknown; mode?: string; session?: string }, opts: ServerOptions): Promise<ToolResult> {
+async function toolRunRecipe(ctx: AppMapContext, args: { recipe_id?: unknown; params?: unknown; mode?: unknown; session?: unknown }, opts: ServerOptions): Promise<ToolResult> {
   requireMap(ctx);
   const recipeId = requireString(args.recipe_id, 'recipe_id', 'run_recipe', 'call match_recipe or summary for the recipes this platform has');
   const params = asRecord(args.params, 'params', 'run_recipe') as RecipeParams;
@@ -363,7 +365,7 @@ async function toolRunRecipe(ctx: AppMapContext, args: { recipe_id?: string; par
   return toolJson({ ...started, text: formatRunStep(started.step) }, cap(ctx));
 }
 
-async function toolReportStep(ctx: AppMapContext, args: { run_id?: string; step_id?: string; ok?: unknown; note?: string; snapshot?: unknown }): Promise<ToolResult> {
+async function toolReportStep(ctx: AppMapContext, args: { run_id?: unknown; step_id?: unknown; ok?: unknown; note?: unknown; snapshot?: unknown }): Promise<ToolResult> {
   requireMap(ctx);
   const runId = requireString(args.run_id, 'run_id', 'report_step', 'the run_id run_recipe returned');
   const stepId = requireString(args.step_id, 'step_id', 'report_step', 'the id of the step the server handed out');
@@ -382,7 +384,7 @@ async function toolReportStep(ctx: AppMapContext, args: { run_id?: string; step_
   return toolJson({ ...result, text }, cap(ctx));
 }
 
-function toolRecordObservation(ctx: AppMapContext, args: { tool?: string; input?: unknown; snapshot?: unknown; ok?: unknown; session?: string; error?: string; latency_ms?: unknown }): ToolResult {
+function toolRecordObservation(ctx: AppMapContext, args: { tool?: unknown; input?: unknown; snapshot?: unknown; ok?: unknown; session?: unknown; error?: unknown; latency_ms?: unknown }): ToolResult {
   requireMap(ctx);
   const tool = requireString(args.tool, 'tool', 'record_observation', 'the driver tool name, e.g. "mcp__argent__tap"');
   const session = optionalString(args.session, 'session', 'record_observation');
@@ -398,7 +400,7 @@ function toolRecordObservation(ctx: AppMapContext, args: { tool?: string; input?
   return toolJson({ ...result }, cap(ctx));
 }
 
-function toolNameScreen(ctx: AppMapContext, args: { screen_id?: string; title?: string; deep_link?: string; session?: string }): ToolResult {
+function toolNameScreen(ctx: AppMapContext, args: { screen_id?: unknown; title?: unknown; deep_link?: unknown; session?: unknown }): ToolResult {
   requireMap(ctx);
   const screenId = requireString(args.screen_id, 'screen_id', 'name_screen', 'a screen id registered in ids.yaml screens[] (01 R1)');
   const session = optionalString(args.session, 'session', 'name_screen');
@@ -428,7 +430,7 @@ function asParams(v: unknown): RecipeParam[] {
   return v as RecipeParam[];
 }
 
-function toolCompileRecipe(ctx: AppMapContext, args: { session?: string; task?: string; recipe_id?: string; params?: unknown; values?: unknown; revision_of?: unknown; from_seq?: unknown; to_seq?: unknown }): ToolResult {
+function toolCompileRecipe(ctx: AppMapContext, args: { session?: unknown; task?: unknown; recipe_id?: unknown; params?: unknown; values?: unknown; revision_of?: unknown; from_seq?: unknown; to_seq?: unknown }): ToolResult {
   requireMap(ctx);
   const recipeId = requireString(args.recipe_id, 'recipe_id', 'compile_recipe', 'the id the new recipe should get, e.g. "create_invoice"');
   const task = requireString(args.task, 'task', 'compile_recipe', 'the instruction the session carried out (04 §3)');
@@ -458,7 +460,7 @@ function toolCompileRecipe(ctx: AppMapContext, args: { session?: string; task?: 
   }, cap(ctx));
 }
 
-function toolMarkRecipe(ctx: AppMapContext, args: { recipe_id?: string; status?: string; recipe?: unknown; reviewer?: string; force?: unknown }): ToolResult {
+function toolMarkRecipe(ctx: AppMapContext, args: { recipe_id?: unknown; status?: unknown; recipe?: unknown; reviewer?: unknown; force?: unknown }): ToolResult {
   requireMap(ctx);
   const recipeId = requireString(args.recipe_id, 'recipe_id', 'mark_recipe', 'e.g. {recipe_id: "create_invoice", status: "candidate", recipe: <draft yaml>}');
   const status = requireString(args.status, 'status', 'mark_recipe', `one of ${RECIPE_STATUSES.join('|')} (02 §6)`);
@@ -485,7 +487,7 @@ function toolMarkRecipe(ctx: AppMapContext, args: { recipe_id?: string; status?:
 function toolExport(ctx: AppMapContext): ToolResult {
   // `export` is the one tool that runs with a `loadError` — it is the way out of one (03 §11).
   const result = exportMap(ctx); // never `force`; that is the CLI's (03 §4)
-  if (result.written.length > 0 || ctx.loadError !== null) {
+  if (result.written.length > 0 || result.deleted.length > 0 || ctx.loadError !== null) {
     try {
       ctx.reload();
     } catch (e) {
@@ -493,7 +495,7 @@ function toolExport(ctx: AppMapContext): ToolResult {
     }
   }
   return toolJson({
-    written: result.written, unchanged: result.unchanged,
+    written: result.written, deleted: result.deleted, unchanged: result.unchanged,
     conflicts: result.conflicts.map((c) => c.path),
     ...(result.conflicts.length > 0 ? { hint: 'a YAML file changed on disk since load; rerun `app-map export --force` or reload (03 §4)' } : {}),
   }, cap(ctx));
@@ -525,7 +527,7 @@ export function createServer(ctx: AppMapContext, opts: ServerOptions = {}): McpS
     }
   };
 
-  const sessionArg = { session: z.string().optional().describe('harness session_id; defaults to the newest observation') };
+  const sessionArg = { session: z.unknown().optional().describe('harness session_id; defaults to the newest observation') };
 
   server.registerTool('summary', {
     title: 'App-map summary',
@@ -537,118 +539,118 @@ export function createServer(ctx: AppMapContext, opts: ServerOptions = {}): McpS
     title: 'Identify screen',
     description: 'Identify the current screen from the last driver observation, or from a snapshot.',
     inputSchema: { snapshot: z.unknown().optional().describe('accessibility tree; omit to use the last observation'), ...sessionArg },
-  }, guarded('identify_screen', (args: { snapshot?: unknown; session?: string }) => toolIdentifyScreen(ctx, args)));
+  }, guarded('identify_screen', (args: { snapshot?: unknown; session?: unknown }) => toolIdentifyScreen(ctx, args)));
 
   server.registerTool('get_screen', {
     title: 'Get screen',
     description: 'Elements, gates and recipes of one screen (≤400 tokens).',
-    inputSchema: { screen_id: z.string().optional().describe('screen id, e.g. invoice_list'), ...sessionArg },
-  }, guarded('get_screen', (args: { screen_id?: string; session?: string }) => toolGetScreen(ctx, args)));
+    inputSchema: { screen_id: z.unknown().optional().describe('screen id, e.g. invoice_list'), ...sessionArg },
+  }, guarded('get_screen', (args: { screen_id?: unknown; session?: unknown }) => toolGetScreen(ctx, args)));
 
   server.registerTool('find_element', {
     title: 'Find element',
     description: 'Resolve an element id or intent on a screen to a driver locator.',
     inputSchema: {
-      screen_id: z.string().optional().describe('screen the element is on'),
-      element_id: z.string().optional().describe('registered element id'),
-      intent: z.string().optional().describe('what the element does, when the id is unknown'),
+      screen_id: z.unknown().optional().describe('screen the element is on'),
+      element_id: z.unknown().optional().describe('registered element id'),
+      intent: z.unknown().optional().describe('what the element does, when the id is unknown'),
       ...sessionArg,
     },
-  }, guarded('find_element', (args: { screen_id?: string; element_id?: string; intent?: string; session?: string }) => toolFindElement(ctx, args)));
+  }, guarded('find_element', (args: { screen_id?: unknown; element_id?: unknown; intent?: unknown; session?: unknown }) => toolFindElement(ctx, args)));
 
   server.registerTool('plan_path', {
     title: 'Plan path',
     description: 'Deep link or ordered edge list from one screen to another.',
     inputSchema: {
-      from: z.string().optional().describe('current screen id, or "unknown"'),
-      to: z.string().optional().describe('destination screen id'),
+      from: z.unknown().optional().describe('current screen id, or "unknown"'),
+      to: z.unknown().optional().describe('destination screen id'),
     },
-  }, guarded('plan_path', (args: { from?: string; to?: string }) => toolPlanPath(ctx, args)));
+  }, guarded('plan_path', (args: { from?: unknown; to?: unknown }) => toolPlanPath(ctx, args)));
 
   server.registerTool('match_recipe', {
     title: 'Match recipe',
     description: 'Find a recipe for a task instruction; also records the task on the session.',
     inputSchema: {
-      instruction: z.string().optional().describe('the user task text'),
-      platform: z.string().optional().describe('ios | android; defaults to the served platform'),
+      instruction: z.unknown().optional().describe('the user task text'),
+      platform: z.unknown().optional().describe('ios | android; defaults to the served platform'),
       ...sessionArg,
     },
-  }, guarded('match_recipe', (args: { instruction?: string; platform?: string; session?: string }) => toolMatchRecipe(ctx, args)));
+  }, guarded('match_recipe', (args: { instruction?: unknown; platform?: unknown; session?: unknown }) => toolMatchRecipe(ctx, args)));
 
   server.registerTool('run_recipe', {
     title: 'Run recipe',
     description: 'Start a recipe run: guided (one step at a time) or headless (Maestro).',
     inputSchema: {
-      recipe_id: z.string().optional().describe('recipe to run'),
-      params: z.record(z.string(), z.unknown()).optional().describe('recipe params, e.g. {amount: 50}'),
-      mode: z.string().optional().describe('guided (default) | headless'),
+      recipe_id: z.unknown().optional().describe('recipe to run'),
+      params: z.unknown().optional().describe('recipe params, e.g. {amount: 50}'),
+      mode: z.unknown().optional().describe('guided (default) | headless'),
       ...sessionArg,
     },
-  }, guarded('run_recipe', async (args: { recipe_id?: string; params?: unknown; mode?: string; session?: string }) => await toolRunRecipe(ctx, args, opts)));
+  }, guarded('run_recipe', async (args: { recipe_id?: unknown; params?: unknown; mode?: unknown; session?: unknown }) => await toolRunRecipe(ctx, args, opts)));
 
   server.registerTool('report_step', {
     title: 'Report step',
     description: 'Report a guided step; returns the next step, done, or a fallback.',
     inputSchema: {
-      run_id: z.string().optional().describe('run_recipe run id'),
-      step_id: z.string().optional().describe('the step the server handed out'),
-      ok: z.boolean().optional().describe('did the driver call succeed'),
-      note: z.string().optional().describe('one line of context on a failure'),
+      run_id: z.unknown().optional().describe('run_recipe run id'),
+      step_id: z.unknown().optional().describe('the step the server handed out'),
+      ok: z.unknown().optional().describe('did the driver call succeed'),
+      note: z.unknown().optional().describe('one line of context on a failure'),
       snapshot: z.unknown().optional().describe('only when hooks are unavailable (expensive)'),
     },
-  }, guarded('report_step', async (args: { run_id?: string; step_id?: string; ok?: unknown; note?: string; snapshot?: unknown }) => await toolReportStep(ctx, args)));
+  }, guarded('report_step', async (args: { run_id?: unknown; step_id?: unknown; ok?: unknown; note?: unknown; snapshot?: unknown }) => await toolReportStep(ctx, args)));
 
   server.registerTool('record_observation', {
     title: 'Record observation',
     description: 'Record a driver call and its snapshot. Only when the hook is unavailable.',
     inputSchema: {
-      tool: z.string().optional().describe('driver tool name, e.g. mcp__argent__tap'),
-      input: z.record(z.string(), z.unknown()).optional().describe('the driver input'),
+      tool: z.unknown().optional().describe('driver tool name, e.g. mcp__argent__tap'),
+      input: z.unknown().optional().describe('the driver input'),
       snapshot: z.unknown().optional().describe('accessibility tree after the call'),
-      ok: z.boolean().optional().describe('did the call succeed (default true)'),
-      error: z.string().optional(),
-      latency_ms: z.number().optional(),
+      ok: z.unknown().optional().describe('did the call succeed (default true)'),
+      error: z.unknown().optional(),
+      latency_ms: z.unknown().optional(),
       ...sessionArg,
     },
-  }, guarded('record_observation', (args: { tool?: string; input?: unknown; snapshot?: unknown; ok?: unknown; session?: string; error?: string; latency_ms?: unknown }) => toolRecordObservation(ctx, args)));
+  }, guarded('record_observation', (args: { tool?: unknown; input?: unknown; snapshot?: unknown; ok?: unknown; session?: unknown; error?: unknown; latency_ms?: unknown }) => toolRecordObservation(ctx, args)));
 
   server.registerTool('name_screen', {
     title: 'Name screen',
     description: 'Name the unknown screen of the last observation (explore mode only).',
     inputSchema: {
-      screen_id: z.string().optional().describe('id registered in ids.yaml screens[]'),
-      title: z.string().optional(),
-      deep_link: z.string().optional().describe('appmap://<id>, or none'),
+      screen_id: z.unknown().optional().describe('id registered in ids.yaml screens[]'),
+      title: z.unknown().optional(),
+      deep_link: z.unknown().optional().describe('appmap://<id>, or none'),
       ...sessionArg,
     },
-  }, guarded('name_screen', (args: { screen_id?: string; title?: string; deep_link?: string; session?: string }) => toolNameScreen(ctx, args)));
+  }, guarded('name_screen', (args: { screen_id?: unknown; title?: unknown; deep_link?: unknown; session?: unknown }) => toolNameScreen(ctx, args)));
 
   server.registerTool('compile_recipe', {
     title: 'Compile recipe',
     description: 'Compile the session trajectory into a draft recipe for review.',
     inputSchema: {
-      session: z.string().optional().describe('session whose trajectory to compile'),
-      task: z.string().optional().describe('the instruction that was carried out'),
-      recipe_id: z.string().optional().describe('id for the new recipe'),
-      params: z.array(z.unknown()).optional().describe('[{name, type, required?}] (02 §6)'),
-      values: z.record(z.string(), z.unknown()).optional().describe('the concrete values used, e.g. {amount: 50}'),
-      revision_of: z.number().optional().describe('version being revised (04 §8)'),
-      from_seq: z.number().optional(),
-      to_seq: z.number().optional(),
+      session: z.unknown().optional().describe('session whose trajectory to compile'),
+      task: z.unknown().optional().describe('the instruction that was carried out'),
+      recipe_id: z.unknown().optional().describe('id for the new recipe'),
+      params: z.unknown().optional().describe('[{name, type, required?}] (02 §6)'),
+      values: z.unknown().optional().describe('the concrete values used, e.g. {amount: 50}'),
+      revision_of: z.unknown().optional().describe('version being revised (04 §8)'),
+      from_seq: z.unknown().optional(),
+      to_seq: z.unknown().optional(),
     },
-  }, guarded('compile_recipe', (args: { session?: string; task?: string; recipe_id?: string; params?: unknown; values?: unknown; revision_of?: unknown; from_seq?: unknown; to_seq?: unknown }) => toolCompileRecipe(ctx, args)));
+  }, guarded('compile_recipe', (args: { session?: unknown; task?: unknown; recipe_id?: unknown; params?: unknown; values?: unknown; revision_of?: unknown; from_seq?: unknown; to_seq?: unknown }) => toolCompileRecipe(ctx, args)));
 
   server.registerTool('mark_recipe', {
     title: 'Mark recipe',
     description: 'Promote or demote a recipe (candidate | verified | ci_gate | retired).',
     inputSchema: {
-      recipe_id: z.string().optional(),
-      status: z.string().optional().describe('candidate | verified | ci_gate | retired'),
+      recipe_id: z.unknown().optional(),
+      status: z.unknown().optional().describe('candidate | verified | ci_gate | retired'),
       recipe: z.unknown().optional().describe('the reviewed draft (YAML text or object); required for a new candidate'),
-      reviewer: z.string().optional().describe('required for ci_gate (07 §7)'),
-      force: z.boolean().optional(),
+      reviewer: z.unknown().optional().describe('required for ci_gate (07 §7)'),
+      force: z.unknown().optional(),
     },
-  }, guarded('mark_recipe', (args: { recipe_id?: string; status?: string; recipe?: unknown; reviewer?: string; force?: unknown }) => toolMarkRecipe(ctx, args)));
+  }, guarded('mark_recipe', (args: { recipe_id?: unknown; status?: unknown; recipe?: unknown; reviewer?: unknown; force?: unknown }) => toolMarkRecipe(ctx, args)));
 
   server.registerTool('export', {
     title: 'Export',
@@ -665,12 +667,18 @@ export function createServer(ctx: AppMapContext, opts: ServerOptions = {}): McpS
     return p;
   };
   const one = (value: unknown): string => (Array.isArray(value) ? String(value[0]) : String(value));
-  /** 03 §9: the YAML file verbatim from disk */
+  /**
+   * 03 §9: the YAML file verbatim from disk. The error names the path RELATIVE to the map dir —
+   * the absolute path is the developer's checkout location and has no business in a response
+   * that leaves the process (07 §2); it goes to the log instead.
+   */
   const readYaml = (path: string, what: string): string => {
     try {
       return readFileSync(path, 'utf8');
-    } catch {
-      throw new AppMapError(ERROR_CODES.NOT_FOUND, `${what} has no YAML file at ${path}`, 'call summary for what this platform has');
+    } catch (e) {
+      const rel = relative(ctx.config.dir, path).split(sep).join('/');
+      ctx.log.debug('resource not found', { what, path, error: (e as Error).message });
+      throw new AppMapError(ERROR_CODES.NOT_FOUND, `${what} has no YAML file at ${rel}`, 'call summary for what this platform has');
     }
   };
 

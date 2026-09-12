@@ -109,25 +109,34 @@ export function resolve(map: LoadedMap, element: ElementDef, tree: AnyTree, opts
 
   const locators = Array.isArray(element.locators) ? element.locators : [];
   const tried: ResolveMiss['tried'] = [];
-  for (const locator of locators) {
+  for (let rank = 0; rank < locators.length; rank += 1) {
+    const locator = locators[rank]!;
     if (!locator || typeof locator !== 'object' || !(LOCATOR_STRATEGIES as readonly string[]).includes(locator.strategy)) continue;
     let matches = queryLocator(tree, locator, scope);
     if (excluded.size > 0) matches = matches.filter((n) => !excluded.has(n));
     tried.push({ strategy: locator.strategy, matches: matches.length });
     const weight = weightOf(locator);
     if (matches.length === 1) {
-      return hit(tree, element, matches[0]!, locator, weight, false);
+      return hit(tree, element, matches[0]!, locator, weight, false, rank);
     }
     if (matches.length > 1 && (locator.strategy === 'a11y_id' || locator.strategy === 'role_label')) {
       // 03 §6: fingerprint disambiguation, confidence × 0.9
       const picked = disambiguate(tree, matches, element.fingerprint);
-      if (picked !== undefined) return hit(tree, element, picked, locator, round4(weight * DISAMBIGUATION_FACTOR), true);
+      if (picked !== undefined) return hit(tree, element, picked, locator, round4(weight * DISAMBIGUATION_FACTOR), true, rank);
     }
   }
   return miss(tree, element, scope, excluded, tried);
 }
 
-function hit(tree: AnyTree, element: ElementDef, node: TreeNode, locator: Locator, confidence: number, disambiguated: boolean): ResolveHit {
+function hit(
+  tree: AnyTree,
+  element: ElementDef,
+  node: TreeNode,
+  locator: Locator,
+  confidence: number,
+  disambiguated: boolean,
+  rank: number,
+): ResolveHit {
   return {
     status: 'hit',
     element: element.id,
@@ -136,8 +145,11 @@ function hit(tree: AnyTree, element: ElementDef, node: TreeNode, locator: Locato
     strategy: locator.strategy,
     locator,
     confidence,
-    // 02 §5.2: a hit below the threshold proceeds but is a degraded match (heal proposal)
-    degraded: confidence < DEGRADED_THRESHOLD,
+    // 02 §5.2: a hit below the threshold proceeds but is a degraded match (heal proposal).
+    // 03 §12 / 04 §9 additionally treat a fall-through as degraded: the authored top locator
+    // (rank 0, normally a11y_id at weight 1.0) missed, so the element drifted even though the
+    // runner-up strategy's own weight is not below the threshold.
+    degraded: confidence < DEGRADED_THRESHOLD || rank > 0,
     disambiguated,
     target: targetFor(tree, node, locator.strategy),
   };

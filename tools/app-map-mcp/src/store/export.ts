@@ -14,6 +14,9 @@
  *   and is written only if it does not exist on disk (else conflict).
  * - Dirty kinds: `screen`, `recipe`, `ids` (import-router registered screens, 06 R7) and
  *   `manifest` (build refresh). Paths come from paths.ts for `ctx.config.platform`.
+ * - Deletions (02 §8): a dirty row carrying `deleted` (written by `db.deleteScreen(id, {dirty:true})`
+ *   from `import-router --purge-retired`) unlinks the YAML file instead of writing it, behind the
+ *   same recorded-blob-sha conflict check, and is reported in `deleted`.
  * - `check`: reload every YAML, re-serialize canonically, report `non_canonical` paths; writes
  *   nothing (06 R1). Exit code for the CLI: 1 when `conflicts` or `non_canonical` is non-empty.
  * - Idempotent: a second export writes nothing (02 §11).
@@ -21,7 +24,7 @@
  * Layer: store (imports context types + yaml/*).
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { AppMapContext } from '../context.ts';
 import type { Platform } from '../config.ts';
@@ -79,7 +82,7 @@ function loadEntity(ctx: AppMapContext, row: DirtyRow): { kind: YamlKind; entity
 }
 
 export function exportMap(ctx: AppMapContext, opts: ExportOptions = {}): ExportResult {
-  const result: ExportResult = { written: [], unchanged: [], conflicts: [], non_canonical: [] };
+  const result: ExportResult = { written: [], deleted: [], unchanged: [], conflicts: [], non_canonical: [] };
   if (opts.check) {
     // 06 R1: every YAML must already be canonical; nothing is written in check mode
     result.non_canonical = nonCanonicalFiles(ctx.config);
@@ -90,8 +93,34 @@ export function exportMap(ctx: AppMapContext, opts: ExportOptions = {}): ExportR
   for (const row of ctx.db.listDirty()) {
     const loaded = loadEntity(ctx, row);
     if (!loaded) {
-      // the entity was deleted from the cache after being marked (purge); nothing to write
-      if (!dryRun) ctx.db.clearDirty(row.kind, row.key);
+      const rel = relPathFor(platform, row.kind, row.key);
+      const abs = join(ctx.config.dir, rel);
+      const current = gitBlobHash(abs); // undefined when the file does not exist
+      if (row.deleted !== true) {
+        // the entity vanished from the cache without a delete intent; nothing to write
+        if (!dryRun) ctx.db.clearDirty(row.kind, row.key);
+        continue;
+      }
+      if (current === undefined) {
+        // 02 §8: already gone from disk — the purge is complete
+        if (!dryRun) {
+          ctx.db.clearDirty(row.kind, row.key);
+          ctx.db.setBlobSha(row.kind, row.key, undefined);
+        }
+        continue;
+      }
+      // 03 §4 conflict safety applies to a delete exactly as it does to a write
+      const recordedForDelete = row.blob_sha ?? ctx.db.getBlobSha(row.kind, row.key) ?? ctx.map.files.get(rel)?.blob_sha;
+      if (!opts.force && recordedForDelete !== undefined && recordedForDelete !== current) {
+        result.conflicts.push({ path: rel, diff: `${rel} changed on disk since it was loaded; refusing to delete it\n${unifiedDiff(readFileSync(abs, 'utf8'), '', rel)}` });
+        continue;
+      }
+      if (!dryRun) {
+        if (existsSync(abs)) unlinkSync(abs);
+        ctx.db.clearDirty(row.kind, row.key);
+        ctx.db.setBlobSha(row.kind, row.key, undefined);
+      }
+      result.deleted.push(rel);
       continue;
     }
     const rel = relPathFor(platform, row.kind, row.key);

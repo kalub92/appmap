@@ -22,7 +22,7 @@ import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { cacheFile, localDir } from '../paths.ts';
 
 /** bump when the SQL schema changes; a mismatch drops and recreates the cache */
-export const DB_SCHEMA_VERSION = 1;
+export const DB_SCHEMA_VERSION = 2;
 
 /** architecture §5: writers wait up to 2 s for a WAL lock held by another instance (03 §2) */
 export const DB_BUSY_TIMEOUT_MS = 2000;
@@ -33,7 +33,20 @@ export type CounterName = 'hits' | 'misses' | 'heals' | 'runs' | 'replay_success
 
 /** `ids` = ids.yaml (import-router registers new screens, 06 R7); `manifest` = build refresh */
 export type DirtyKind = 'screen' | 'recipe' | 'ids' | 'manifest';
-export interface DirtyRow { kind: DirtyKind; key: string; reason: string; ts: Timestamp }
+export interface DirtyRow {
+  kind: DirtyKind;
+  key: string;
+  reason: string;
+  ts: Timestamp;
+  /** 02 §8 purge: the entity was deleted from the cache and its YAML file must be unlinked by `export` */
+  deleted?: boolean;
+  /**
+   * Only on a `deleted` row: the blob sha the deleted entity was last loaded/written at. The
+   * entity row that normally carries it is gone, so `export` reads it from here for the 03 §4
+   * conflict check before unlinking.
+   */
+  blob_sha?: string;
+}
 
 export interface SessionRow {
   session: SessionId;
@@ -335,9 +348,11 @@ export class AppMapDb {
       .run(kind, blobSha ?? null, JSON.stringify(doc), dirty ? 1 : 0, blobSha === undefined ? 0 : 1);
   }
 
-  private markDirty(kind: DirtyKind, key: string, reason: string): void {
-    this.stmt('INSERT INTO dirty (kind, key, reason, ts) VALUES (?, ?, ?, ?) ON CONFLICT(kind, key) DO UPDATE SET reason = excluded.reason, ts = excluded.ts')
-      .run(kind, key, reason, now());
+  private markDirty(kind: DirtyKind, key: string, reason: string, deleted = false, blobSha?: string): void {
+    this.stmt(`INSERT INTO dirty (kind, key, reason, ts, deleted, blob_sha) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(kind, key) DO UPDATE SET reason = excluded.reason, ts = excluded.ts,
+        deleted = excluded.deleted, blob_sha = excluded.blob_sha`)
+      .run(kind, key, reason, now(), deleted ? 1 : 0, blobSha ?? null);
   }
 
   private deleteScreenRows(id: ScreenId): void {
@@ -456,16 +471,43 @@ export class AppMapDb {
       if (opts.dirty) this.markDirty('manifest', 'manifest', opts.reason ?? 'put_manifest');
     }));
   }
-  /** delete a screen row (+ its elements) — only `import-router --purge-retired` (02 §8) */
-  deleteScreen(id: ScreenId): void {
+  /**
+   * Delete a recipe row — only `import-router --purge-retired` (02 §8), for a recipe already
+   * `retired` because the purged screen was retired. `opts.dirty` records the DELETE intent so
+   * `export` unlinks the YAML file.
+   */
+  deleteRecipe(id: RecipeId, opts: { dirty?: boolean; reason?: string } = {}): void {
     this.assertWritable();
-    this.guard(() => this.transaction(() => this.deleteScreenRows(id)));
+    this.guard(() => this.transaction(() => {
+      const sha = opts.dirty ? this.getBlobSha('recipe', id) : undefined;
+      this.stmt('DELETE FROM recipes WHERE id = ?').run(id);
+      this.stmt("DELETE FROM dirty WHERE kind = 'recipe' AND key = ?").run(id);
+      if (opts.dirty) this.markDirty('recipe', id, opts.reason ?? 'delete_recipe', true, sha);
+    }));
+  }
+
+  /**
+   * Delete a screen row (+ its elements) — only `import-router --purge-retired` (02 §8).
+   * `opts.dirty` records a DELETE intent in the dirty table so `export` unlinks the YAML file
+   * (02 §8 "retired … for one release, then deleted"); without it the cache row is simply dropped.
+   */
+  deleteScreen(id: ScreenId, opts: { dirty?: boolean; reason?: string } = {}): void {
+    this.assertWritable();
+    this.guard(() => this.transaction(() => {
+      const sha = opts.dirty ? this.getBlobSha('screen', id) : undefined;
+      this.deleteScreenRows(id);
+      if (opts.dirty) this.markDirty('screen', id, opts.reason ?? 'delete_screen', true, sha);
+    }));
   }
 
   // ---- dirty tracking (03 §4) -----------------------------------------------------------------
   listDirty(): DirtyRow[] {
-    return this.guard(() => (this.stmt('SELECT kind, key, reason, ts FROM dirty ORDER BY ts, kind, key').all() as Row[])
-      .map((r) => ({ kind: str(r, 'kind') as DirtyKind, key: str(r, 'key'), reason: str(r, 'reason'), ts: str(r, 'ts') })));
+    return this.guard(() => (this.stmt('SELECT kind, key, reason, ts, deleted, blob_sha FROM dirty ORDER BY ts, kind, key').all() as Row[])
+      .map((r) => ({
+        kind: str(r, 'kind') as DirtyKind, key: str(r, 'key'), reason: str(r, 'reason'), ts: str(r, 'ts'),
+        ...(Number(r['deleted'] ?? 0) === 1 ? { deleted: true } : {}),
+        ...(optStr(r, 'blob_sha') !== undefined ? { blob_sha: optStr(r, 'blob_sha') as string } : {}),
+      })));
   }
   clearDirty(kind: DirtyKind, key: string): void {
     this.assertWritable();
@@ -786,5 +828,6 @@ CREATE TABLE IF NOT EXISTS counters (
   kind TEXT NOT NULL, key TEXT NOT NULL, name TEXT NOT NULL, value INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (kind, key, name));
 CREATE TABLE IF NOT EXISTS dirty (
-  kind TEXT NOT NULL, key TEXT NOT NULL, reason TEXT NOT NULL, ts TEXT NOT NULL, PRIMARY KEY (kind, key));
+  kind TEXT NOT NULL, key TEXT NOT NULL, reason TEXT NOT NULL, ts TEXT NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0, blob_sha TEXT, PRIMARY KEY (kind, key));
 `;

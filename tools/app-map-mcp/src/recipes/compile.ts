@@ -32,7 +32,8 @@
  *     `missing_postcondition`;
  *  7. `intent_critical: true` on steps touching `intent_critical` elements;
  *  8. emit `RecipeFile` (version 1, or `revision_of + 1` for revisions) with provenance
- *     `{compiled_from: session, compiled_by: app-map-mcp@<pkg version>}`, `matches: []`
+ *     `{compiled_from: session, compiled_by: app-map-mcp@<pkg version>}`, a placeholder `matches` derived from the recipe id (never the raw task text,
+ *     which 02 §10 rule 8 would reject)
  *     placeholder replaced by `[task]` escaped as a literal regex, and canonical YAML text;
  *     emit a `compile` event (08 §2).
  *
@@ -440,6 +441,24 @@ export function markIntentCritical(map: LoadedMap, steps: readonly RecipeStep[])
 // Step 8 — emit (04 §3.8)
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * 04 §3.8 placeholders for the two fields the LLM must author (`description`, `matches`).
+ *
+ * They are derived from the recipe ID — map structure, never task data — because the task text
+ * routinely names a client or an amount and `description`/`matches` are structure-only fields
+ * (02 §10.8, 07 §2): seeding them from `input.task` made the compiler's own draft fail
+ * `validate` rule 8, so `mark_recipe` rejected it. The schema requires a non-empty description
+ * and at least one match, so the placeholder is the humanised id rather than an empty value.
+ */
+export function placeholderDescription(recipeId: string): string {
+  const words = recipeId.replace(/_/g, ' ').trim();
+  return words === '' ? 'TODO: describe this recipe' : `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+export function placeholderMatches(recipeId: string): string[] {
+  const words = recipeId.replace(/_/g, ' ').trim();
+  return [literalRegex(words === '' ? 'TODO' : words)];
+}
+
 /** the task text as a literal regex, bounded by the schema's 200-char limit (07 §4) */
 function literalRegex(task: string): string {
   let out = '';
@@ -554,14 +573,16 @@ export function compileRecipe(ctx: AppMapContext, input: CompileRecipeInput): Co
     return fail(ctx, input, version, 'unknown_screen', 'the final screen of the trajectory could not be identified, so `verify` cannot be written');
   }
   const verify: Expect = previous?.verify ?? { screen: lastScreen };
-  const description = previous?.description ?? input.task.trim();
+  // 04 §3.8: `description` and `matches` are the LLM's to author; a fresh compile emits a
+  // structure-only placeholder so the draft itself never carries task data (02 §10.8, 07 §2).
+  const description = previous?.description ?? placeholderDescription(input.recipe_id);
   const recipe: RecipeFile = {
     id: input.recipe_id,
     version,
     platform: ctx.map.platform,
     description,
     // the LLM replaces this with real patterns before mark_recipe (04 §3.8)
-    matches: previous?.matches ?? [literalRegex(input.task)],
+    matches: previous?.matches ?? placeholderMatches(input.recipe_id),
     params,
     ...(loggedIn ? { preconditions: [{ auth: 'logged_in' as const }] } : {}),
     entry: optimized.entry,
@@ -574,7 +595,7 @@ export function compileRecipe(ctx: AppMapContext, input: CompileRecipeInput): Co
       ...(input.revision_of !== undefined ? { revision_of: input.revision_of } : {}),
     },
   };
-  if (previous === undefined) warnings.push('review `description` and `matches`, and add `verify.visible` assertions, before mark_recipe (04 §3.8)');
+  if (previous === undefined) warnings.push('`description` and `matches` are placeholders derived from the recipe id — write real ones (structure only, never task data), and add `verify.visible` assertions, before mark_recipe (04 §3.8, 02 §10.8)');
   if (collapsed.removed.length > 0) warnings.push(`collapsed ${collapsed.removed.length} backtracking observation(s): seq ${collapsed.removed.join(', ')}`);
 
   const yaml = canonicalYaml('recipe', recipe);

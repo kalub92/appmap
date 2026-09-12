@@ -6,7 +6,11 @@
  *    / `AppMapId.Screen.<UPPER_SNAKE>`, naming as in scripts/app-map/gen-ids) is not referenced
  *    in a platform's source tree — reported PER PLATFORM (`platform: ios|android`, 01 R8 "in iOS
  *    and Android source"); `opts.platforms` scopes the check to the instrumented platforms
- *    (Stage 0 is iOS-only, 08 §6) and a platform whose source dirs do not exist is skipped;
+ *    (Stage 0 is iOS-only, 08 §6) and a platform whose source dirs do not exist is skipped. A
+ *    platform whose sources reference NO marker is reported as one `warning` ("not instrumented
+ *    yet") unless it is listed in `opts.instrumentedPlatforms`
+ *    (`APP_MAP_INSTRUMENTED_PLATFORMS` / `--instrumented`), in which case every screen is an
+ *    error — the rule must never disable itself by counting;
  *  - `bad_id`: any id in `ids.yaml` violating 01 R2 (`SCREEN_ID_REGEX`, `GATE_ID_REGEX`,
  *    `GATE_DISMISS_REGEX`, `ELEMENT_ID_REGEX` for `elements[]`) — error. The last segment is NOT
  *    required to equal the registry `kind` (01 R1's example is `invoice.list.table` with
@@ -31,13 +35,22 @@ import type { AppMapConfig, Platform } from './config.ts';
 import { PLATFORMS } from './config.ts';
 import type { ElementKind, IdsElement, IdsGate, IdsRegistry, IdsScreen, LintIdsResult } from './types.ts';
 import { ELEMENT_ID_REGEX, GATE_DISMISS_REGEX, GATE_ID_REGEX, ID_REGEX, SCREEN_ID_REGEX, markerOfScreen } from './types.ts';
-import { idsFile } from './paths.ts';
+import { idsFile, stringsFile } from './paths.ts';
 import { parseYamlFile } from './yaml/load.ts';
 
 export interface LintIdsOptions {
   repoRoot: string;
   /** platforms whose source trees must reference every marker (default: both; `--platform ios`) */
   platforms?: Platform[];
+  /**
+   * Platforms whose app source lives in THIS repo (`APP_MAP_INSTRUMENTED_PLATFORMS`, or
+   * `--instrumented ios`). For an instrumented platform a source tree that references no marker
+   * at all is an error like any other — the implicit "0 of N referenced ⇒ not instrumented"
+   * shortcut is what let a refactor that deleted every reference turn the rule off silently.
+   * Left unset, such a platform produces one `warning` naming the state instead (08 §6 Stage 0:
+   * the pilot app is not in this repo).
+   */
+  instrumentedPlatforms?: Platform[];
   /** directories scanned for Swift/ObjC (default `instrumentation/ios`, `ios`) */
   iosDirs?: string[];
   /** directories scanned for Kotlin/Java (default `instrumentation/android`, `android`) */
@@ -107,12 +120,24 @@ export function lintIds(config: Pick<AppMapConfig, 'dir'>, opts: LintIdsOptions)
       } else registered.add(g.dismiss);
     }
   }
+  // 01 R2: "Ids MUST NOT contain copy text or localized strings." The regex only fixes the SHAPE,
+  // so `invoice.save_invoice_button_en.button` passes it while being exactly what R2 forbids.
+  const copy = copyVocabulary(config);
+  const idContent = (id: string, what: string): void => {
+    for (const reason of copyLikeSegments(id, copy)) {
+      issues.push({ rule: 'bad_id', severity: 'warning', message: `${what} "${id}": ${reason} — ids carry structure, never copy or localized strings (01 R2)` });
+    }
+  };
+  for (const s of ids.screens ?? []) if (SCREEN_ID_REGEX.test(s.id)) idContent(s.id, 'screen id');
+  for (const g of ids.gates ?? []) if (GATE_ID_REGEX.test(g.id)) idContent(g.id, 'gate id');
+
   for (const e of ids.elements ?? []) {
     if (!ELEMENT_ID_REGEX.test(e.id)) {
       issues.push(err('bad_id', `element id "${e.id}" must be <feature>.<name>.<kind> (${ELEMENT_ID_REGEX.source}) — 01 R2`));
       continue;
     }
     registered.add(e.id);
+    idContent(e.id, 'element id');
     // architecture decision 38: the last segment need not equal the registry kind (01 R1's own
     // example is `invoice.list.table` with `kind: list`), so a non-synonym is a warning only.
     const last = e.id.slice(e.id.lastIndexOf('.') + 1);
@@ -131,6 +156,8 @@ export function lintIds(config: Pick<AppMapConfig, 'dir'>, opts: LintIdsOptions)
   const platforms = opts.platforms ?? [...PLATFORMS];
   const dirsFor = (p: Platform): string[] => (p === 'ios' ? opts.iosDirs ?? [...DEFAULT_IOS_DIRS] : opts.androidDirs ?? [...DEFAULT_ANDROID_DIRS]);
   const extsFor = (p: Platform): ReadonlySet<string> => (p === 'ios' ? IOS_EXTENSIONS : ANDROID_EXTENSIONS);
+
+  const instrumented = new Set<Platform>(opts.instrumentedPlatforms ?? []);
 
   const sources = new Map<Platform, ScannedSource[]>();
   for (const platform of platforms) {
@@ -154,9 +181,17 @@ export function lintIds(config: Pick<AppMapConfig, 'dir'>, opts: LintIdsOptions)
     if (files.length === 0) continue; // no source tree for this platform → skipped (module doc)
     const screens = (ids.screens ?? []).filter((s) => SCREEN_ID_REGEX.test(s.id));
     const unreferenced = screens.filter((s) => !markerReferenced(files, s.id, platform));
-    // 08 §6 Stage 0: a platform whose sources reference NO marker at all is not instrumented yet
-    // (the app source is not in this repo); reporting every screen would be noise, so skip it.
-    if (unreferenced.length === screens.length) continue;
+    // A platform whose sources reference NO marker at all is either (a) not instrumented yet —
+    // 08 §6 Stage 0, the app source is not in this repo — or (b) an instrumented app someone just
+    // stripped every constant out of, which is the exact regression 01 R8 exists to catch. The
+    // two are only distinguishable by declaration, never by counting, so say which one it is.
+    if (screens.length > 0 && unreferenced.length === screens.length && !instrumented.has(platform)) {
+      issues.push({
+        rule: 'marker_unreferenced', severity: 'warning', platform,
+        message: `no ${platform} marker constant is referenced in ${dirsFor(platform).join(', ')} — treating ${platform} as not instrumented yet (08 §6). Set APP_MAP_INSTRUMENTED_PLATFORMS=${platform} (or --instrumented ${platform}) to make this an error`,
+      });
+      continue;
+    }
     for (const s of unreferenced) {
       const name = constantNames(markerOfScreen(s.id))[platform === 'ios' ? 'swift' : 'kotlin'];
       const holder = platform === 'ios' ? `AppMapID.Screen.${name}` : `AppMapId.Screen.${name}`;
@@ -184,6 +219,62 @@ export function lintIds(config: Pick<AppMapConfig, 'dir'>, opts: LintIdsOptions)
   }
 
   return { ok: issues.every((i) => i.severity !== 'error'), issues };
+}
+
+// ---------------------------------------------------------------------------------------------
+// 01 R2 id content ("no copy text or localized strings")
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A locale suffix on an id segment (`save_button_en`, `title_pt_BR`): the giveaway that an id was
+ * generated from a localized resource name.
+ */
+// `id` (Indonesian) and `no` (Norwegian) are deliberately absent: in an element id a trailing
+// `_id`/`_no` is almost always "identifier"/"number", so including them flags real ids
+// (`invoice.client_id.field`) as localized copy.
+const LOCALE_SUFFIX = /_(?:aa|ab|af|ar|az|be|bg|bn|bs|ca|cs|cy|da|de|el|en|es|et|eu|fa|fi|fr|ga|gl|he|hi|hr|hu|hy|is|it|iw|ja|ka|kk|km|ko|lt|lv|mk|ml|mn|ms|mt|nb|ne|nl|nn|pa|pl|pt|ro|ru|si|sk|sl|sq|sr|sv|sw|ta|te|th|tl|tr|uk|ur|uz|vi|zh)(?:_[a-z]{2})?$/;
+
+/** lowercased app copy from `.local/strings.<platform>.txt` for both platforms (07 §2.3.3) */
+function copyVocabulary(config: Pick<AppMapConfig, 'dir'>): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const platform of PLATFORMS) {
+    const file = stringsFile({ ...config, platform }, platform);
+    if (!existsSync(file)) continue;
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+      const normalized = normalizeCopy(line);
+      // one- and two-character strings ("OK", "9:41") are not distinctive enough to accuse an id
+      if (normalized.length > 2) out.add(normalized);
+    }
+  }
+  return out;
+}
+
+/** lowercase, `_`/punctuation → single spaces, trimmed — the form ids and copy are compared in */
+function normalizeCopy(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** Pure: the 01 R2 content problems of one id, as reasons; empty when the id is structural. */
+export function copyLikeSegments(id: string, copy: ReadonlySet<string>): string[] {
+  const reasons: string[] = [];
+  const segments = id.split('.');
+  for (const segment of segments) {
+    const locale = LOCALE_SUFFIX.exec(segment);
+    if (locale !== null) reasons.push(`segment "${segment}" ends in the locale suffix "${locale[0]}"`);
+  }
+  if (copy.size > 0) {
+    // Only MULTI-WORD matches accuse an id: a single structural word (`client`, `cancel`,
+    // `settings`) is ordinary vocabulary that happens to be a button label too, whereas
+    // `new_invoice` reading exactly "New Invoice" is a label that was pasted into an id.
+    const candidates = new Map<string, string>();
+    for (const segment of segments) candidates.set(normalizeCopy(segment), `segment "${segment}"`);
+    candidates.set(normalizeCopy(segments.slice(1).join(' ')), 'the id');
+    candidates.set(normalizeCopy(id), 'the id');
+    for (const [normalized, what] of candidates) {
+      if (normalized.includes(' ') && copy.has(normalized)) reasons.push(`${what} is verbatim app copy in the static string table`);
+    }
+  }
+  return reasons;
 }
 
 /**

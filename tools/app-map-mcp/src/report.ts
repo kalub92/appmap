@@ -1,10 +1,14 @@
 /**
  * [D2] `app-map report [--since]` (08 §4, 08 §8): every steady-state metric from
  * `.local/events.jsonl` plus the latest CI artifacts (`drift-report.json` / `heal-report.json`
- * next to the map or passed via `opts.artifacts`). Rolling 30 days by default, per platform.
+ * next to the map, at the repo root where CI writes them, or passed via `opts.artifacts`).
+ * Rolling 30 days by default (08 §4), clamped to `config.retentionDays` — 07 §2.4 prunes older
+ * events, so a wider default window would print a header the data cannot fill.
  *
  * Definitions (08 §4), all over `recipe_run`/`heal`/`identify`/`task`/`drift` events in the window:
- *  - replay_rate = runs (guided+headless) with `fallbacks === 0` ÷ all runs;
+ *  - replay_rate = runs (guided+headless) with `fallbacks === 0` ÷ all runs. 08 §4's "÷ all task
+ *    runs" means all RUNS performed for tasks, not the count of `task` events: a task routinely
+ *    takes several runs, so a `task`-event denominator would exceed 100 % (architecture §7);
  *  - fallback_rate_per_recipe[r] = runs of r with `fallbacks ≥ 1` ÷ runs of r (current build);
  *    alert when > THRESHOLDS.alert_fallback_rate for a `verified`/`ci_gate` recipe;
  *  - heal_rate_per_100_runs = heal events × 100 ÷ runs; pending_review_heals from
@@ -225,13 +229,22 @@ export function formatReport(metrics: ReportMetrics): string {
 }
 
 /** Read events (events.readEvents) + db + artifacts, then `computeMetrics`. `since` accepts ISO or `<n>d`. */
-export function report(ctx: AppMapContext, opts: { since?: string; artifactsDir?: string } = {}): ReportMetrics {
+export function report(ctx: AppMapContext, opts: { since?: string; artifactsDir?: string; repoRoot?: string } = {}): ReportMetrics {
   const until = new Date();
-  const since = parseSince(opts.since, until);
+  // 08 §4 asks for a rolling 30 days, but 07 §2.4 deletes every events.jsonl line older than
+  // `retentionDays` (default 14) on server start, so a 30-day header over ≤14 days of data is a
+  // lie. The DEFAULT window is therefore clamped to what retention can actually hold; an
+  // explicit `--since` is honoured verbatim (the developer may have kept an export).
+  const since = opts.since === undefined || opts.since.trim() === ''
+    ? new Date(until.getTime() - Math.min(DEFAULT_WINDOW_DAYS, ctx.config.retentionDays) * DAY_MS)
+    : parseSince(opts.since, until);
   const sinceTs = iso(since);
   const untilTs = iso(until);
   const { events } = readEvents(ctx.config, { since: sinceTs, until: untilTs });
-  const artifactsDir = opts.artifactsDir ?? localDir(ctx.config);
+  // CI writes drift-report.json / heal-report.json to the REPO ROOT (that is what the workflow
+  // uploads), while the local copies live in `.local/` — look in both (08 §8 "and the latest CI
+  // artifacts").
+  const dirs = [opts.artifactsDir, localDir(ctx.config), opts.repoRoot].filter((d): d is string => typeof d === 'string' && d !== '');
   return computeMetrics(events, {
     platform: ctx.config.platform,
     since: sinceTs,
@@ -239,11 +252,20 @@ export function report(ctx: AppMapContext, opts: { since?: string; artifactsDir?
     map: ctx.map,
     pendingHeals: safePendingHeals(ctx),
     artifacts: {
-      ...readArtifact<DriftReport>(join(artifactsDir, 'drift-report.json'), 'drift'),
-      ...readArtifact<HealReport>(join(artifactsDir, 'heal-report.json'), 'heal'),
-      ...readArtifact<RouterExport>(join(artifactsDir, 'router-export.json'), 'router'),
+      ...firstArtifact<DriftReport>(dirs, 'drift-report.json', 'drift'),
+      ...firstArtifact<HealReport>(dirs, 'heal-report.json', 'heal'),
+      ...firstArtifact<RouterExport>(dirs, 'router-export.json', 'router'),
     },
   });
+}
+
+/** the first `name` that exists across `dirs`, in order */
+function firstArtifact<T>(dirs: readonly string[], name: string, key: 'drift' | 'heal' | 'router'): Record<string, T> {
+  for (const dir of dirs) {
+    const found = readArtifact<T>(join(dir, name), key);
+    if (Object.keys(found).length > 0) return found;
+  }
+  return {};
 }
 
 function safePendingHeals(ctx: AppMapContext): number {

@@ -112,7 +112,7 @@ public final class AppMapRouterRegistry {
 
         let export = AppMapRouterExport(
             schemaVersion: 1,
-            appId: appID ?? Bundle.main.bundleIdentifier ?? "unknown",
+            appId: Self.resolvedAppID(appID),
             platform: "ios",
             build: build,
             screens: screenList,
@@ -122,6 +122,19 @@ public final class AppMapRouterRegistry {
         encoder.keyEncodingStrategy = .convertToSnakeCase
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(export)
+    }
+    /// Placeholder that still satisfies the schema's `app_id` pattern
+    /// (`^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$`) when no bundle identifier is available —
+    /// reachable from a test host or a command-line launch context. The literal `"unknown"` did NOT
+    /// match it, so the export was rejected by `app-map import-router` with a schema error instead of
+    /// something a developer could act on (01 R6), unlike `unknownGitSha` which was chosen to fit.
+    public static let unknownAppID = "app.unknown"
+
+    static func resolvedAppID(_ appID: String?) -> String {
+        if let appID, !appID.isEmpty { return appID }
+        if let bundleID = Bundle.main.bundleIdentifier, !bundleID.isEmpty { return bundleID }
+        AppMapLog.error("bundle identifier unavailable; writing app_id \(unknownAppID) (01 R6)")
+        return unknownAppID
     }
     #endif
 }

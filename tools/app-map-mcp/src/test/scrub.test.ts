@@ -144,7 +144,12 @@ describe('scrub rule 4 (PII deny list) and scrub_hits', () => {
     const out = scrub(raw, iosPolicy());
     const ids = allNodes(out).map((n) => n.a11y_id);
     assert.ok(!ids.includes('cell_billing@acme.example') && !ids.includes('cell_4111111111111111'));
-    assert.equal(ids.filter((i) => i === REDACTED).length, 2);
+    // only the embedded row data is spliced out; whatever the match did not cover survives
+    // (the email pattern's local part swallows the `cell_` prefix, the card pattern does not)
+    assert.deepEqual(
+      ids.filter((i) => typeof i === 'string' && i.includes(REDACTED)).sort(),
+      [REDACTED, `cell_${REDACTED}`],
+    );
     assert.ok(ids.includes('row_plain'), 'an unregistered id without PII is kept');
     assert.equal(ids.filter((i) => i === 'invoice.list.cell').length, 2);
     assert.ok(ids.includes('screen.invoice_list'));
@@ -281,15 +286,28 @@ describe('redactString / findForbiddenContent (07 §2.3.4)', () => {
       ['123-45-6789', 5],
     ];
     for (const [s, idx] of hits) {
-      assert.deepEqual(redactString(s), { value: REDACTED, hit: true }, s);
+      const r = redactString(s);
+      assert.equal(r.hit, true, s);
+      // 07 §2.2: the VALUE never survives — only the matched substring is spliced out, so a
+      // string that is nothing but the value still comes back fully redacted.
+      assert.equal(r.value.includes(REDACTED), true, s);
+      assert.deepEqual(findForbiddenContent(r.value), [], `${s} -> ${r.value} still carries a value`);
       assert.ok(PII_PATTERNS[idx]!.test(s), `pattern ${idx} matches ${s}`);
     }
+    // surrounding structure survives (04 §3.4 param inference, 08 §2 task text)
+    assert.deepEqual(redactString('Total: $5'), { value: `Total: ${REDACTED}`, hit: true });
+    assert.deepEqual(
+      redactString('create an invoice for $50 for Acme Corp'),
+      { value: `create an invoice for ${REDACTED} for Acme Corp`, hit: true },
+    );
+    assert.deepEqual(redactString('mail a@b.co and c@d.co'), { value: `mail ${REDACTED} and ${REDACTED}`, hit: true });
     for (const s of ['New Invoice', 'Sign in with Face ID', '9:41', 'Don’t Allow', 'Version 2.0.1', 'Order #12', '3 invoices', 'Invoice 4412', '']) {
       assert.deepEqual(redactString(s), { value: s, hit: false }, s);
     }
     assert.deepEqual(redactString('anything', []), { value: 'anything', hit: false });
     assert.deepEqual(redactString('secret', [/secret/g]), { value: REDACTED, hit: true });
     assert.deepEqual(redactString('secret', [/secret/g]), { value: REDACTED, hit: true }, 'a global pattern stays stateless');
+    assert.deepEqual(redactString('a secret b', [/secret/g]), { value: `a ${REDACTED} b`, hit: true });
     assert.ok(PII_PATTERNS.every((p) => !p.global && !p.sticky), 'deny-list patterns carry no g/y flag');
   });
 
@@ -298,7 +316,7 @@ describe('redactString / findForbiddenContent (07 §2.3.4)', () => {
     assert.deepEqual(found.map((f) => f.pattern), [0, 1, 3]);
     assert.equal(found[0]!.match, 'a@b.co');
     assert.equal(found[1]!.match, '+1 415 555 0142');
-    assert.equal(found[2]!.match, '$1');
+    assert.equal(found[2]!.match, '$12', 'the currency pattern spans the whole amount');
     assert.deepEqual(findForbiddenContent(''), []);
     assert.deepEqual(findForbiddenContent('New Invoice'), []);
     assert.equal(findForbiddenContent('a@b.co c@d.io').length, 2);

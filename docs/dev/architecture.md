@@ -297,9 +297,26 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     the `task` event; trajectories are local-only with 14-day retention (07 §2.4) and recipes run
     only against fixture accounts (07 §3), so the fixture values (`50`, `Acme Corp`) are fixture
     data by definition.
+    `redactString` splices `[redacted]` over **each matched substring**, not over the whole
+    string: blanking the lot destroyed exactly the structure this decision exists to keep (param
+    inference and the 08 §2 `task` field), while 07 §2.2's requirement — the value never reaches
+    disk — is met either way. The currency pattern spans the whole amount (`[$€£]\s?\d[\d.,]*`)
+    so a splice never leaves digits behind. An amount written with **no** currency symbol
+    (`1299.00`) is deliberately NOT on the deny list: a bare-number pattern would redact every
+    build number, count and version in the map. Those strings only ever reach local-only
+    trajectories with 14-day retention (07 §2.4), never a committed file — where validate rule 8
+    is the backstop.
 14. **`invoice_list.no_ids` fixture drops every id including the marker**: identify → `unknown`
     with `invoice_list` as top candidate via `title` (0.4); `find_element` with an explicit
     `screen_id` resolves by `role_label` and reports `degraded` (03 §12).
+    **02 §5.2 vs 03 §12 / 04 §9 — resolved in favour of 03 §12**: 02 §5.2 defines a degraded
+    match as `confidence < 0.6`, but every authored `role_label` locator sits at exactly 0.6, so
+    a literal reading makes the canonical drift scenario (id removed, label kept) neither a miss
+    nor degraded, and 04 §7 healing could never fire from a real replay. `resolve.hit()` therefore
+    marks a hit degraded when `confidence < DEGRADED_THRESHOLD` **or** the locator's rank > 0 —
+    i.e. the authored top locator missed and the cascade fell through. A rank-0 hit still follows
+    02 §5.2 exactly, so the only behaviour change is on fall-through, which is precisely what
+    03 §12 bullet 3 and 04 §9 bullet 4 require.
 15. **First observation of a session has `screen_before: 'unknown'`**.
 16. **`sessions` table** added to the spec's list (02 §7 leaves the schema to 03).
 17. **Entry steps in guided runs**: `s0` = `open_link entry.deep_link`; without a deep link the
@@ -379,6 +396,14 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     `unregistered`; `--strict` errors instead. `--purge-retired` deletes screens retired on an
     earlier build (02 §8 "retired for one release, then deleted"); the manifest build refresh is
     a dirty `manifest` row.
+    **The purge is a cascade**, because 02 §8's "then deleted" has to leave a map that still
+    passes 02 §10 rule 3: `db.deleteScreen(id, {dirty: true})` records a DELETE intent on the
+    dirty row (`dirty.deleted`, plus the `blob_sha` the entity was last loaded/written at, since
+    the row that normally carries it is gone), which `exportMap` honours by `unlink`ing the YAML
+    behind the same conflict check as a write and reporting it in `ExportResult.deleted`. The
+    same import also drops the screen from `ids.yaml`, strips every surviving screen's edges (and
+    conditions) that point at it, and deletes the recipes that were retired with it
+    (`purged_recipes`) — a retired recipe whose screen file is gone can never validate again.
 41. **heal-report / drift-report carry closed codes only** (07 §2.4): `HeadlessReport.error_code`
     (`HEADLESS_ERROR_CODES`) + `failed_command_index` replace free-text `error` and `flow_path`;
     drift `reason` is `DRIFT_REASONS`. Maestro output goes to `.local/server.log` at `debug`.
@@ -403,6 +428,37 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 50. **Tests run from source** (`npm test` = `node --test "src/test/**/*.test.ts"`, Node ≥ 22.18
     type stripping, docs/dev/toolchain.md); `src/test/**` is still type-checked and compiled into
     `dist/test` (harmless, `npm run test:dist` runs it) rather than excluded from the build.
+51. **`report`'s default window is `min(30, retentionDays)`** — 08 §4 asks for a rolling 30 days,
+    07 §2.4 deletes every `events.jsonl` line older than `retentionDays` (default 14) on server
+    start, so a 30-day header over ≤14 days of data would misreport. An explicit `--since` is
+    honoured verbatim. The two CI artifacts are looked for in `--artifacts-dir`, then
+    `app-map/.local/`, then the repo root — the shipped workflow writes them at the root.
+52. **`replay_rate`'s denominator is all `recipe_run` events.** 08 §4's "÷ all task runs" means
+    the runs performed for tasks, not the number of `task` events: one task routinely takes
+    several runs, so a `task`-event denominator would exceed 100 %. No code change; recorded
+    here because the wording invites the other reading.
+53. **`marker_unreferenced` never disables itself by counting** (01 R8): a platform with zero
+    referenced markers is one `warning` ("not instrumented yet", 08 §6 Stage 0) unless the
+    platform is declared in `APP_MAP_INSTRUMENTED_PLATFORMS` / `--instrumented`, in which case
+    every screen is an error. `bad_id` additionally carries an R2 CONTENT heuristic (severity
+    `warning`): a locale suffix on any segment, or a multi-word segment that is verbatim app copy
+    in `.local/strings.<platform>.txt`. Single-word collisions (`client`, `cancel`) are ignored —
+    they are ordinary structural vocabulary.
+
+54. **The pilot deliberately ships no `ci_gate` recipe.** `app-map/ios/recipes/create_invoice.yaml`
+    is `status: verified`. 07 §7 makes promotion a human act that needs a reviewer who is not the
+    author **and** a green R5 run against the build — neither is possible without the real app, and
+    `mark_recipe --force` would fake both. The consequence is that 06 R4's blocking rule
+    (`summary.blocking` only on a broken screen a `ci_gate` recipe references) and 06 R5
+    (`maestro-export --status ci_gate` → "(no recipes matched)", exit 0) are inert on the committed
+    map; `src/test/drift.test.ts` promotes the recipe in a temp map to exercise 06 §5. Promoting it
+    for real is a Stage 1 exit item (docs/dev/rollout.md §2).
+55. **07 §7's "a reviewer who is not the author" is enforced in two places.** `markRecipe` rejects a
+    reviewer equal to `provenance.compiled_by` — the only identity this process holds — and logs a
+    `warn` naming the reviewer whenever `--force` bypasses the 08 §5 eligibility gate. Everything
+    else (that the reviewer is a real person, that they approved the PR, the two approvals for an
+    `intent_critical` downgrade) is branch protection, which has no representation in this repo;
+    docs/dev/rollout.md §2 Stage 1 lists the exact settings.
 
 ## 8. How to implement your module
 

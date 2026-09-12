@@ -185,12 +185,38 @@ describe('runMergeDriver (git entry point)', () => {
     }
   });
 
-  it('exits 2 on unreadable input or undecidable kind, leaving %A untouched', () => {
+  // git performs NO textual fallback when a driver fails: the path is left unmerged holding %A.
+  // Returning 2 with %A untouched therefore looks like a clean OURS and silently drops THEIRS,
+  // so both failure paths write a whole-file conflict and return 1 (02 §9).
+  it('an undecidable kind writes a whole-file conflict into %A and returns 1', () => {
     const f = setup('a: [\n', 'a: 1\n', 'a: 2\n');
     try {
-      assert.equal(runMergeDriver(f.b, f.o, f.t), 2);
+      assert.equal(runMergeDriver(f.b, f.o, f.t), 1);
+      const out = readFileSync(f.o, 'utf8');
+      assert.equal(out, '<<<<<<< ours\na: 1\n=======\na: 2\n>>>>>>> theirs\n');
+      assert.ok(out.includes('a: 2'), "theirs' content is not lost");
+    } finally {
+      rmSync(f.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('an unreadable %O leaves a visible conflict holding both sides, not a clean OURS', () => {
+    const f = setup('a: [\n', 'a: 1\n', 'a: 2\n');
+    try {
+      assert.equal(runMergeDriver(join(f.dir, 'missing.yaml'), f.o, f.t, { realPath: 'app-map/ids.yaml' }), 1);
+      const out = readFileSync(f.o, 'utf8');
+      assert.match(out, /^<<<<<<< ours$/m);
+      assert.ok(out.includes('a: 1') && out.includes('a: 2'), 'both sides survive');
+    } finally {
+      rmSync(f.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('unreadable merge inputs (%A/%B) still return 2 and touch nothing', () => {
+    const f = setup('a: 0\n', 'a: 1\n', 'a: 2\n');
+    try {
+      assert.equal(runMergeDriver(f.b, join(f.dir, 'gone.yaml'), f.t), 2);
       assert.equal(readFileSync(f.o, 'utf8'), 'a: 1\n');
-      assert.equal(runMergeDriver(join(f.dir, 'missing.yaml'), f.o, f.t, { realPath: 'app-map/ids.yaml' }), 2);
     } finally {
       rmSync(f.dir, { recursive: true, force: true });
     }

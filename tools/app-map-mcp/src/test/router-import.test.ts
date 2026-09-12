@@ -1,5 +1,7 @@
 /** [C3] router-import.ts — seed/refresh screens from the app's router export (01 R6, 02 §8, 06 R7). */
 import assert from 'node:assert/strict';
+import { existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { RouterExport, ScreenFile } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
@@ -8,6 +10,7 @@ import type { AppMapContext } from '../context.ts';
 import { schemaDir } from '../paths.ts';
 import { validateAgainstSchema } from '../yaml/schemas.ts';
 import { importRouter, mergeRouterScreen, routerScreenToScreenFile } from '../router-import.ts';
+import { exportMap } from '../store/export.ts';
 import { loadRouterExportFixture, makeTempAppMapDir } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
@@ -174,6 +177,54 @@ describe('importRouter — retirement and purge (02 §8)', () => {
     const result = importRouter(ctx, withoutLogin('4413'), { ...spy, purgeRetired: true });
     assert.deepEqual(result.purged, ['login']);
     assert.equal(ctx.db.getScreen('login'), undefined);
+  });
+
+  // 02 §8 second half: the purge must leave a map that still loads and validates — the file is
+  // unlinked by `export`, the registry entry goes, inbound edges are stripped and the recipes
+  // that were retired with it are deleted.
+  it('purgeRetired cascades: ids.yaml, inbound edges and the retired recipes, and export unlinks the file', () => {
+    const withoutDetail = (build: string): RouterExport => ({
+      ...doc, build: { ...doc.build, build_number: build }, screens: doc.screens.filter((s) => s.id !== 'invoice_detail'),
+    });
+    importRouter(ctx, withoutDetail('4412'), {});
+    assert.equal(screenOf('invoice_detail').meta.status, 'retired');
+    assert.equal(ctx.db.getRecipe('create_invoice')?.status, 'retired');
+    exportMap(ctx);
+
+    const result = importRouter(ctx, withoutDetail('4413'), { purgeRetired: true });
+    assert.deepEqual(result.purged, ['invoice_detail']);
+    assert.deepEqual(result.purged_recipes, ['create_invoice']);
+    // `ids.yaml` is shared by both platforms (01 R1) and this purge only deleted the ios file, so
+    // the id stays registered while android/screens/invoice_detail.yaml exists — unregistering it
+    // here would orphan that file and fail validate rule 2.
+    assert.ok(existsSync(join(t.dir, 'android/screens/invoice_detail.yaml')), 'android still has the screen');
+    assert.equal(ctx.db.getIds()?.screens.some((sc) => sc.id === 'invoice_detail'), true, 'still registered for android');
+    assert.equal(screenOf('invoice_list').edges.some((e) => e.to === 'invoice_detail'), false, 'inbound edge stripped');
+    assert.equal(screenOf('invoice_new').edges.some((e) => e.to === 'invoice_detail'), false, 'inbound edge stripped');
+
+    const exported = exportMap(ctx);
+    assert.ok(exported.deleted.includes('ios/screens/invoice_detail.yaml'));
+    assert.ok(exported.deleted.includes('ios/recipes/create_invoice.yaml'));
+    assert.equal(existsSync(join(t.dir, 'ios/screens/invoice_detail.yaml')), false);
+    assert.equal(existsSync(join(t.dir, 'ios/recipes/create_invoice.yaml')), false);
+    // 02 §10: the map still loads and cross-references cleanly, and the screen stays gone
+    ctx.reload();
+    assert.equal(ctx.map.screens.has('invoice_detail'), false);
+    assert.equal(ctx.db.getScreen('invoice_detail'), undefined);
+  });
+
+  // The other half of the shared-registry rule: when no other platform holds the screen, the
+  // purge must unregister the id, or the registry names a screen no platform has.
+  it('purging the last platform holding a screen unregisters the id', () => {
+    const withoutDetail = (build: string): RouterExport => ({
+      ...doc, build: { ...doc.build, build_number: build }, screens: doc.screens.filter((s) => s.id !== 'invoice_detail'),
+    });
+    rmSync(join(t.dir, 'android/screens/invoice_detail.yaml'));   // android already dropped it
+    importRouter(ctx, withoutDetail('4412'), {});
+    exportMap(ctx);
+    const result = importRouter(ctx, withoutDetail('4413'), { purgeRetired: true });
+    assert.deepEqual(result.purged, ['invoice_detail']);
+    assert.equal(ctx.db.getIds()?.screens.some((sc) => sc.id === 'invoice_detail'), false, 'no platform has it now');
   });
 
   it('a screen that comes back into the export stops being retired', () => {

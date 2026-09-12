@@ -5,7 +5,7 @@
  *
  * | command                                                     | used by            | body                                              |
  * |-------------------------------------------------------------|--------------------|---------------------------------------------------|
- * | validate [--platform p]                                     | CI, pre-commit     | validate.validateMap → issues, exit 1 on error     |
+ * | validate [--platform p] [--router path]                     | CI, pre-commit     | validate.validateMap → issues, exit 1 on error     |
  * | export [--force] [--check]                                  | dev, Stop hook, CI | store/export.exportMap                            |
  * | record --stdin                                              | PostToolUse hook   | ingest-socket.postToIngestSocket ‖ observe.recordHookPayload; ALWAYS exit 0 |
  * | summary [--max-tokens N] [--hook-json]                      | SessionStart hook  | format.formatSessionStartContext; `--hook-json` wraps in `SessionStartHookOutput` |
@@ -46,7 +46,7 @@ import { formatIssues, validateMap } from './validate.ts';
 import { exportMap } from './store/export.ts';
 import { formatRunStep, formatSessionStartContext } from './format.ts';
 import { recordHookPayload } from './observe.ts';
-import { postToIngestSocket } from './ingest-socket.ts';
+import { parseRequestLine, postToIngestSocket } from './ingest-socket.ts';
 import { importRouter } from './router-import.ts';
 import { compileRecipe } from './recipes/compile.ts';
 import { markRecipe } from './recipes/lifecycle.ts';
@@ -88,7 +88,7 @@ const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   'purge-retired', 'hook-json', 'markdown', 'help', 'guided',
 ]);
 /** flags that collect every following non-flag token (`--params a=1 b=2`, `--param x:string --param y:money`) */
-const LIST_FLAGS: ReadonlySet<string> = new Set(['param', 'params', 'src']);
+const LIST_FLAGS: ReadonlySet<string> = new Set(['param', 'params', 'src', 'instrumented']);
 
 /** A usage error (exit 2) as opposed to a command failure (exit 1) — 03 §10. */
 class UsageError extends AppMapError {
@@ -98,19 +98,48 @@ class UsageError extends AppMapError {
   }
 }
 
+/**
+ * Index of the command token in `argv`, skipping any leading flags with their values, so the
+ * flags `help` calls global (`--dir`, `--platform`, …) work on either side of the command
+ * (`app-map --platform android summary` used to be `unknown command: --platform`). `-1` when
+ * argv holds no command token.
+ */
+function commandIndex(argv: readonly string[]): number {
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i]!;
+    if (token === '--') return -1;
+    if (!token.startsWith('-')) return i;
+    if (token.startsWith('--') && token.includes('=')) continue;
+    const name = token.startsWith('--') ? token.slice(2) : '';
+    if (token === '-h' || BOOLEAN_FLAGS.has(name)) continue;
+    if (LIST_FLAGS.has(name)) {
+      while (i + 1 < argv.length && !argv[i + 1]!.startsWith('--')) i++;
+      continue;
+    }
+    i++; // `--k v`: the value is not the command
+  }
+  return -1;
+}
+
 /** Pure: argv → command + positionals + flags (`--k v`, `--k=v`, repeated `--params k=v`). Throws `bad_input` on unknown command. */
 export function parseArgs(argv: readonly string[]): ParsedArgs {
   const first = argv[0];
   if (first === undefined || first === '--help' || first === '-h' || first === 'help') {
     return { command: 'help', positional: [], flags: {} };
   }
-  if (!(COMMANDS as readonly string[]).includes(first)) {
-    throw new UsageError(`unknown command: ${first}`, `known commands: ${COMMANDS.join(', ')}`);
+  const at = commandIndex(argv);
+  const commandToken = at < 0 ? undefined : argv[at]!;
+  if (commandToken === undefined) {
+    throw new UsageError('no command given', `known commands: ${COMMANDS.join(', ')}`);
   }
-  const command = first as Command;
+  if (commandToken === 'help') return { command: 'help', positional: [], flags: {} };
+  if (!(COMMANDS as readonly string[]).includes(commandToken)) {
+    throw new UsageError(`unknown command: ${commandToken}`, `known commands: ${COMMANDS.join(', ')}`);
+  }
+  const command = commandToken as Command;
   const positional: string[] = [];
   const flags: Record<string, string | boolean | string[]> = {};
-  const rest = argv.slice(1);
+  const rest = [...argv.slice(0, at), ...argv.slice(at + 1)];
   for (let i = 0; i < rest.length; i++) {
     const token = rest[i]!;
     if (token === '--') {
@@ -229,10 +258,14 @@ function configFor(args: ParsedArgs, io: CliIo): AppMapConfig {
 }
 
 /** CLI contexts log to stderr — stdout is the command's output (03 §11). */
-function withContext<T>(config: AppMapConfig, opts: { readOnly?: boolean }, fn: (ctx: AppMapContext) => T): T {
+function withContext<T>(config: AppMapConfig, opts: { readOnly?: boolean; skipRetention?: boolean }, fn: (ctx: AppMapContext) => T): T {
   // `readOnly` never creates the cache, so fall back when a fresh clone has none yet.
   const readOnly = opts.readOnly === true && existsSync(cacheFile(config));
-  const ctx = openContext(config, { logSink: 'stderr', ...(readOnly ? { readOnly: true } : {}) });
+  const ctx = openContext(config, {
+    logSink: 'stderr',
+    ...(readOnly ? { readOnly: true } : {}),
+    ...(opts.skipRetention === true ? { skipRetention: true } : {}),
+  });
   try {
     return fn(ctx);
   } finally {
@@ -342,7 +375,14 @@ function readJsonFile<T>(path: string): T {
 function cmdValidate(args: ParsedArgs, io: CliIo): number {
   const config = configFor(args, io);
   const platforms = platformsFlag(args);
-  const result = validateMap(config, platforms !== undefined ? { platforms } : {});
+  // 02 §11: `--router <path>` brings the fifth schema (router-export) under `validate`; the file
+  // is a build artifact outside the map, so it has to be named explicitly.
+  const router = str(args, 'router');
+  const routerExports = router === undefined ? [] : [absPath(io, router)];
+  const result = validateMap(config, {
+    ...(platforms !== undefined ? { platforms } : {}),
+    ...(routerExports.length > 0 ? { routerExports } : {}),
+  });
   emit(io, args, result, `${formatIssues(result.issues)}\n${result.ok ? 'ok' : 'FAILED'} — ${result.files_checked} file(s) checked`);
   return result.ok ? 0 : 1;
 }
@@ -360,9 +400,12 @@ function cmdExport(args: ParsedArgs, io: CliIo): number {
       io.stderr(`${result.conflicts.map((c) => `conflict: ${c.path}\n${c.diff}`).join('\n')}\n`);
       return 1;
     }
-    // harness contract: written paths, one per line, on stdout
+    // harness contract: written paths, one per line, on stdout (deletions marked, 02 §8)
     if (bool(args, 'json')) io.stdout(`${JSON.stringify(result, null, 2)}\n`);
-    else for (const p of result.written) io.stdout(`${p}\n`);
+    else {
+      for (const p of result.written) io.stdout(`${p}\n`);
+      for (const p of result.deleted) io.stdout(`deleted ${p}\n`);
+    }
     return 0;
   });
 }
@@ -382,7 +425,10 @@ async function cmdRecord(args: ParsedArgs, io: CliIo): Promise<number> {
     } catch {
       // socket unavailable / not implemented → fall through to the direct path
     }
-    withContext(config, {}, (ctx) => recordHookPayload(ctx, payload));
+    // 07 §2.4 puts the retention sweep on SERVER START; this is the ≤50 ms per-driver-call hook
+    // path (05 §3), and the sweep is O(events.jsonl). context.ts documents `skipRetention` for
+    // exactly this case.
+    withContext(config, { skipRetention: true }, (ctx) => recordHookPayload(ctx, payload));
   } catch (e) {
     io.stderr(`${JSON.stringify(toErrorJson(e))}\n`);
   }
@@ -402,7 +448,11 @@ function parseHookPayload(text: string): HookPayload | undefined {
   } catch {
     const line = text.split('\n').find((l) => l.trim().length > 0);
     if (line === undefined) return undefined;
-    return JSON.parse(line) as HookPayload;
+    // the ingest socket is the same logical entry point for the same bytes, so it must give the
+    // same structured answer (03 §11) — `parseRequestLine` owns that wording
+    const parsed = parseRequestLine(line);
+    if ('error' in parsed) throw new AppMapError(parsed.error.code, parsed.error.error, parsed.error.hint);
+    return parsed.payload;
   }
 }
 
@@ -442,10 +492,14 @@ function cmdImportRouter(args: ParsedArgs, io: CliIo): number {
       `retired ${result.retired.length}: ${result.retired.join(', ') || '-'}`,
       `unregistered ${result.unregistered.length}: ${result.unregistered.join(', ') || '-'}`,
       `purged ${result.purged.length}: ${result.purged.join(', ') || '-'}`,
+      `purged_recipes ${result.purged_recipes.length}: ${result.purged_recipes.join(', ') || '-'}`,
       `edges_added ${result.edges_added}`,
-      ...(exported === undefined ? ['(dry run — nothing written)'] : exported.written.map((p) => `wrote ${p}`)),
+      ...(exported === undefined ? ['(dry run — nothing written)'] : [
+        ...exported.written.map((p) => `wrote ${p}`),
+        ...exported.deleted.map((p) => `deleted ${p}`),
+      ]),
     ].join('\n');
-    emit(io, args, { ...result, written: exported?.written ?? [] }, text);
+    emit(io, args, { ...result, written: exported?.written ?? [], deleted: exported?.deleted ?? [] }, text);
     return 0;
   });
 }
@@ -590,8 +644,15 @@ async function cmdDrift(args: ParsedArgs, io: CliIo): Promise<number> {
 function cmdReport(args: ParsedArgs, io: CliIo): number {
   const config = configFor(args, io);
   const since = str(args, 'since');
+  const artifactsDir = str(args, 'artifacts-dir');
   return withContext(config, { readOnly: true }, (ctx) => {
-    const metrics = buildReport(ctx, since !== undefined ? { since } : {});
+    const metrics = buildReport(ctx, {
+      ...(since !== undefined ? { since } : {}),
+      // 08 §8: the CI artifacts. `--artifacts-dir` names where they were downloaded to; the repo
+      // root is where the shipped workflow writes them.
+      ...(artifactsDir !== undefined ? { artifactsDir: absPath(io, artifactsDir) } : {}),
+      repoRoot: repoRootFor(io),
+    });
     emit(io, args, metrics, formatReport(metrics));
     return 0;
   });
@@ -612,9 +673,16 @@ function cmdLintIds(args: ParsedArgs, io: CliIo): number {
   const repoRoot = repoRootFor(io);
   const platforms = platformsFlag(args);
   const src = list(args, 'src').map((d) => absPath(io, d));
+  // 01 R8: platforms whose app source is in THIS repo — a missing marker there is an error, not
+  // an "not instrumented yet" warning.
+  const instrumented = [
+    ...list(args, 'instrumented'),
+    ...(io.env.APP_MAP_INSTRUMENTED_PLATFORMS ?? '').split(','),
+  ].map((p) => p.trim()).filter((p): p is Platform => isPlatform(p));
   const result = lintIds(config, {
     repoRoot,
     ...(platforms !== undefined ? { platforms } : {}),
+    ...(instrumented.length > 0 ? { instrumentedPlatforms: [...new Set(instrumented)] } : {}),
     // `--src dir…` extends the defaults for both platforms; the extension filter separates them
     ...(src.length > 0 ? { iosDirs: [...DEFAULT_IOS_DIRS, ...src], androidDirs: [...DEFAULT_ANDROID_DIRS, ...src] } : {}),
   });
@@ -626,7 +694,10 @@ function cmdLintIds(args: ParsedArgs, io: CliIo): number {
 }
 
 function cmdPolicyCheck(args: ParsedArgs, io: CliIo): number {
-  const repoRoot = repoRootFor(io);
+  // 03 §10: a security command must never report on a repo it did not read. An explicit
+  // positional names the root to check; without one it is the repo the cwd belongs to.
+  const repoRoot = args.positional[0] !== undefined ? absPath(io, args.positional[0]) : repoRootFor(io);
+  if (args.positional.length > 1) throw new UsageError('policy-check takes at most one repo root');
   const config = configFor(args, io);
   // an explicit `--dir` (tests, a map outside the repo) also chooses the allowlist to check against
   const result = policyCheck(repoRoot, str(args, 'dir') !== undefined ? { allowlist: readAllowlist(config) } : {});
@@ -690,7 +761,7 @@ function cmdMigrateId(args: ParsedArgs, io: CliIo): number {
 export const USAGE = `app-map <command> [options]
 
 commands:
-  validate                       02 §10 rules; exit 1 on any error
+  validate [--router path]       02 §10 rules (+ router-export.schema.json); exit 1 on any error
   export [--force] [--check]     cache → canonical YAML (03 §4)
   record --stdin                 ingest one hook payload (05 §3); always exits 0
   summary [--max-tokens N] [--hook-json]
@@ -699,15 +770,16 @@ commands:
   run R --params k=v ... [--headless] [--params-file f] | run --all --status s,... --headless [--params-file f] [--report path]
   maestro-export [R | --all] [--status s,...] [--params-file f] --out DIR
   drift [--build B] [--router path] [--out path]
-  report [--since ISO|30d] [--json]
+  report [--since ISO|30d] [--artifacts-dir DIR] [--json]
   gen-configs [--check]
-  lint-ids [--platform ios,android] [--src dir ...]
-  policy-check
+  lint-ids [--platform ios,android] [--src dir ...] [--instrumented ios,android]
+  policy-check [REPO_ROOT]
   intent-critical-diff <base-ref> [--markdown]
   mark R STATUS [--reviewer NAME] [--recipe-file path] [--force]
   merge-driver %O %A %B [%P]
   migrate-id OLD NEW [--dry-run]
-global: --dir, --platform, --build, --json, --quiet
+global (before or after the command): --dir, --platform, --build, --json, --quiet
+env: APP_MAP_INSTRUMENTED_PLATFORMS (lint-ids: platforms whose app source is in this repo)
 `;
 
 if (process.argv[1] && /(^|[/\\])cli\.(ts|js)$/.test(process.argv[1])) {
