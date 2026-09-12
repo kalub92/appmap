@@ -1,0 +1,37 @@
+{
+  "name": "app-map-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "App-map MCP server and CLI: screen identification, locator resolution, recipes, replay, healing.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "bin": {
+    "app-map": "./bin/app-map"
+  },
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"src/test/**/*.test.ts\"",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test:dist": "npm run build && node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"dist/test/**/*.test.js\"",
+    "validate-pilot": "node scripts/validate-pilot.mjs"
+  },
+  "appMap": {
+    "maestroVersion": ">=1.39.0"
+  },
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "yaml": "2.9.0",
+    "zod": "4.6.2"
+  }
+}

@@ -1,0 +1,541 @@
+{
+  "schema_version": 1,
+  "platform": "android",
+  "source": "normalized",
+  "viewport": {
+    "w": 412,
+    "h": 915
+  },
+  "root": {
+    "role": "application",
+    "label": "Invoices",
+    "bbox_norm": {
+      "x": 0,
+      "y": 0,
+      "w": 1,
+      "h": 1
+    },
+    "children": [
+      {
+        "role": "window",
+        "bbox_norm": {
+          "x": 0,
+          "y": 0,
+          "w": 1,
+          "h": 1
+        },
+        "children": [
+          {
+            "role": "other",
+            "label": "status bar",
+            "bbox_norm": {
+              "x": 0,
+              "y": 0,
+              "w": 1,
+              "h": 0.0514
+            },
+            "children": [
+              {
+                "role": "staticText",
+                "label": "9:41",
+                "bbox_norm": {
+                  "x": 0.0583,
+                  "y": 0.0153,
+                  "w": 0.0971,
+                  "h": 0.0219
+                },
+                "children": []
+              }
+            ]
+          },
+          {
+            "role": "sheet",
+            "a11y_id": "screen.client_picker",
+            "bbox_norm": {
+              "x": 0,
+              "y": 0.0514,
+              "w": 1,
+              "h": 0.9486
+            },
+            "children": [
+              {
+                "role": "navigationBar",
+                "label": "Choose Client",
+                "bbox_norm": {
+                  "x": 0,
+                  "y": 0.0732,
+                  "w": 1,
+                  "h": 0.0481
+                },
+                "children": [
+                  {
+                    "role": "staticText",
+                    "label": "Choose Client",
+                    "bbox_norm": {
+                      "x": 0.3155,
+                      "y": 0.0852,
+                      "w": 0.3155,
+                      "h": 0.024
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "button",
+                    "a11y_id": "client.picker.cancel.button",
+                    "label": "Cancel",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0.7524,
+                      "y": 0.0776,
+                      "w": 0.1699,
+                      "h": 0.0393
+                    },
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "role": "searchField",
+                "a11y_id": "client.picker.search.field",
+                "label": "Search clients",
+                "value": "",
+                "enabled": true,
+                "focused": false,
+                "bbox_norm": {
+                  "x": 0.0388,
+                  "y": 0.129,
+                  "w": 0.8689,
+                  "h": 0.0393
+                },
+                "children": [
+                  {
+                    "role": "image",
+                    "label": "search",
+                    "bbox_norm": {
+                      "x": 0.0583,
+                      "y": 0.1377,
+                      "w": 0.0485,
+                      "h": 0.0219
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "staticText",
+                    "label": "Search clients",
+                    "bbox_norm": {
+                      "x": 0.1214,
+                      "y": 0.1388,
+                      "w": 0.2913,
+                      "h": 0.0197
+                    },
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "role": "staticText",
+                "label": "All clients",
+                "bbox_norm": {
+                  "x": 0.0388,
+                  "y": 0.1814,
+                  "w": 0.2427,
+                  "h": 0.0197
+                },
+                "children": []
+              },
+              {
+                "role": "list",
+                "a11y_id": "client.picker.list",
+                "enabled": true,
+                "bbox_norm": {
+                  "x": 0,
+                  "y": 0.2077,
+                  "w": 1,
+                  "h": 0.7148
+                },
+                "children": [
+                  {
+                    "role": "cell",
+                    "a11y_id": "client.picker.cell",
+                    "label": "Acme Corp, billing@acme.example",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0,
+                      "y": 0.2077,
+                      "w": 1,
+                      "h": 0.0699
+                    },
+                    "children": [
+                      {
+                        "role": "image",
+                        "label": "avatar",
+                        "bbox_norm": {
+                          "x": 0.0388,
+                          "y": 0.2208,
+                          "w": 0.0971,
+                          "h": 0.0437
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "Acme Corp",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.2208,
+                          "w": 0.6068,
+                          "h": 0.0219
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "billing@acme.example",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.247,
+                          "w": 0.6068,
+                          "h": 0.0175
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "a11y_id": "client.picker.cell",
+                    "label": "Globex LLC, ap@globex.example",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0,
+                      "y": 0.2776,
+                      "w": 1,
+                      "h": 0.0699
+                    },
+                    "children": [
+                      {
+                        "role": "image",
+                        "label": "avatar",
+                        "bbox_norm": {
+                          "x": 0.0388,
+                          "y": 0.2907,
+                          "w": 0.0971,
+                          "h": 0.0437
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "Globex LLC",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.2907,
+                          "w": 0.6068,
+                          "h": 0.0219
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "ap@globex.example",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.3169,
+                          "w": 0.6068,
+                          "h": 0.0175
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "a11y_id": "client.picker.cell",
+                    "label": "Hooli, finance@hooli.example",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0,
+                      "y": 0.3475,
+                      "w": 1,
+                      "h": 0.0699
+                    },
+                    "children": [
+                      {
+                        "role": "image",
+                        "label": "avatar",
+                        "bbox_norm": {
+                          "x": 0.0388,
+                          "y": 0.3607,
+                          "w": 0.0971,
+                          "h": 0.0437
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "Hooli",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.3607,
+                          "w": 0.6068,
+                          "h": 0.0219
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "finance@hooli.example",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.3869,
+                          "w": 0.6068,
+                          "h": 0.0175
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "a11y_id": "client.picker.cell",
+                    "label": "Initech, accounts@initech.example",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0,
+                      "y": 0.4175,
+                      "w": 1,
+                      "h": 0.0699
+                    },
+                    "children": [
+                      {
+                        "role": "image",
+                        "label": "avatar",
+                        "bbox_norm": {
+                          "x": 0.0388,
+                          "y": 0.4306,
+                          "w": 0.0971,
+                          "h": 0.0437
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "Initech",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.4306,
+                          "w": 0.6068,
+                          "h": 0.0219
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "accounts@initech.example",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.4568,
+                          "w": 0.6068,
+                          "h": 0.0175
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "a11y_id": "client.picker.cell",
+                    "label": "Stark Industries, pepper@stark.example",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0,
+                      "y": 0.4874,
+                      "w": 1,
+                      "h": 0.0699
+                    },
+                    "children": [
+                      {
+                        "role": "image",
+                        "label": "avatar",
+                        "bbox_norm": {
+                          "x": 0.0388,
+                          "y": 0.5005,
+                          "w": 0.0971,
+                          "h": 0.0437
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "Stark Industries",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.5005,
+                          "w": 0.6068,
+                          "h": 0.0219
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "pepper@stark.example",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.5268,
+                          "w": 0.6068,
+                          "h": 0.0175
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "a11y_id": "client.picker.cell",
+                    "label": "Umbrella Co, ap@umbrella.example",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0,
+                      "y": 0.5574,
+                      "w": 1,
+                      "h": 0.0699
+                    },
+                    "children": [
+                      {
+                        "role": "image",
+                        "label": "avatar",
+                        "bbox_norm": {
+                          "x": 0.0388,
+                          "y": 0.5705,
+                          "w": 0.0971,
+                          "h": 0.0437
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "Umbrella Co",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.5705,
+                          "w": 0.6068,
+                          "h": 0.0219
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "ap@umbrella.example",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.5967,
+                          "w": 0.6068,
+                          "h": 0.0175
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "a11y_id": "client.picker.cell",
+                    "label": "Vandelay Industries, art@vandelay.example",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0,
+                      "y": 0.6273,
+                      "w": 1,
+                      "h": 0.0699
+                    },
+                    "children": [
+                      {
+                        "role": "image",
+                        "label": "avatar",
+                        "bbox_norm": {
+                          "x": 0.0388,
+                          "y": 0.6404,
+                          "w": 0.0971,
+                          "h": 0.0437
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "Vandelay Industries",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.6404,
+                          "w": 0.6068,
+                          "h": 0.0219
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "art@vandelay.example",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.6667,
+                          "w": 0.6068,
+                          "h": 0.0175
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "a11y_id": "client.picker.cell",
+                    "label": "Wayne Enterprises, lucius@wayne.example",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0,
+                      "y": 0.6973,
+                      "w": 1,
+                      "h": 0.0699
+                    },
+                    "children": [
+                      {
+                        "role": "image",
+                        "label": "avatar",
+                        "bbox_norm": {
+                          "x": 0.0388,
+                          "y": 0.7104,
+                          "w": 0.0971,
+                          "h": 0.0437
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "Wayne Enterprises",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.7104,
+                          "w": 0.6068,
+                          "h": 0.0219
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "lucius@wayne.example",
+                        "bbox_norm": {
+                          "x": 0.1748,
+                          "y": 0.7366,
+                          "w": 0.6068,
+                          "h": 0.0175
+                        },
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

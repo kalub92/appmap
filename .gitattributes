@@ -1,0 +1,18 @@
+# .gitattributes — app-map merge rules (02 §9).
+#
+# Semantic 3-way merge for app-map YAML: merges per key and per id-keyed list item and
+# conflicts only on same-key changes. Opt in once per clone (git never runs a driver it
+# has not been told about):
+#
+#   git config merge.app-map-yaml.name   "app-map semantic YAML merge (02 §9)"
+#   git config merge.app-map-yaml.driver "tools/app-map-mcp/bin/app-map merge-driver %O %A %B"
+#
+# Without that config git falls back to its normal text merge. GitHub's web merge ignores
+# custom drivers, so `app-map validate` in CI (06 R1) remains the backstop. Never merge
+# app-map/.local/ — it is git-ignored.
+app-map/**/*.yaml   merge=app-map-yaml
+
+# Canonical serialization is LF, 2-space, block style (02 §2.3); keep line endings stable.
+app-map/**/*.yaml   text eol=lf
+*.sh                text eol=lf
+scripts/app-map/*   text eol=lf

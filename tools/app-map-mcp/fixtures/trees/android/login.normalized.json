@@ -1,0 +1,370 @@
+{
+  "schema_version": 1,
+  "platform": "android",
+  "source": "normalized",
+  "viewport": {
+    "w": 412,
+    "h": 915
+  },
+  "root": {
+    "role": "application",
+    "label": "Invoices",
+    "bbox_norm": {
+      "x": 0,
+      "y": 0,
+      "w": 1,
+      "h": 1
+    },
+    "children": [
+      {
+        "role": "window",
+        "bbox_norm": {
+          "x": 0,
+          "y": 0,
+          "w": 1,
+          "h": 1
+        },
+        "children": [
+          {
+            "role": "other",
+            "label": "status bar",
+            "bbox_norm": {
+              "x": 0,
+              "y": 0,
+              "w": 1,
+              "h": 0.0514
+            },
+            "children": [
+              {
+                "role": "staticText",
+                "label": "9:41",
+                "bbox_norm": {
+                  "x": 0.0583,
+                  "y": 0.0153,
+                  "w": 0.0971,
+                  "h": 0.0219
+                },
+                "children": []
+              }
+            ]
+          },
+          {
+            "role": "container",
+            "a11y_id": "screen.login",
+            "bbox_norm": {
+              "x": 0,
+              "y": 0.0514,
+              "w": 1,
+              "h": 0.9486
+            },
+            "children": [
+              {
+                "role": "image",
+                "label": "logo",
+                "bbox_norm": {
+                  "x": 0.3762,
+                  "y": 0.1311,
+                  "w": 0.1942,
+                  "h": 0.0874
+                },
+                "children": []
+              },
+              {
+                "role": "staticText",
+                "label": "Welcome back",
+                "bbox_norm": {
+                  "x": 0.0583,
+                  "y": 0.2404,
+                  "w": 0.8301,
+                  "h": 0.0372
+                },
+                "children": []
+              },
+              {
+                "role": "staticText",
+                "label": "Sign in to Invoices",
+                "bbox_norm": {
+                  "x": 0.0583,
+                  "y": 0.282,
+                  "w": 0.8301,
+                  "h": 0.0219
+                },
+                "children": []
+              },
+              {
+                "role": "container",
+                "bbox_norm": {
+                  "x": 0.0583,
+                  "y": 0.3279,
+                  "w": 0.8301,
+                  "h": 0.2404
+                },
+                "children": [
+                  {
+                    "role": "staticText",
+                    "label": "Email",
+                    "bbox_norm": {
+                      "x": 0.0583,
+                      "y": 0.3279,
+                      "w": 0.2427,
+                      "h": 0.0197
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "field",
+                    "a11y_id": "login.email.field",
+                    "label": "Email",
+                    "value": "",
+                    "enabled": true,
+                    "focused": false,
+                    "bbox_norm": {
+                      "x": 0.0583,
+                      "y": 0.3519,
+                      "w": 0.8301,
+                      "h": 0.0481
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "staticText",
+                    "label": "Password",
+                    "bbox_norm": {
+                      "x": 0.0583,
+                      "y": 0.4153,
+                      "w": 0.2427,
+                      "h": 0.0197
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "secureField",
+                    "a11y_id": "login.password.field",
+                    "label": "Password",
+                    "value": "",
+                    "enabled": true,
+                    "focused": false,
+                    "bbox_norm": {
+                      "x": 0.0583,
+                      "y": 0.4393,
+                      "w": 0.8301,
+                      "h": 0.0481
+                    },
+                    "children": [
+                      {
+                        "role": "button",
+                        "label": "Show password",
+                        "bbox_norm": {
+                          "x": 0.7816,
+                          "y": 0.4503,
+                          "w": 0.0874,
+                          "h": 0.0262
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "role": "staticText",
+                    "a11y_id": "login.error.text",
+                    "label": "",
+                    "bbox_norm": {
+                      "x": 0.0583,
+                      "y": 0.494,
+                      "w": 0.8301,
+                      "h": 0.0197
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "link",
+                    "a11y_id": "login.forgot.link",
+                    "label": "Forgot password?",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0.0583,
+                      "y": 0.5202,
+                      "w": 0.3398,
+                      "h": 0.0219
+                    },
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "role": "button",
+                "a11y_id": "login.submit.button",
+                "label": "Sign In",
+                "enabled": true,
+                "bbox_norm": {
+                  "x": 0.0583,
+                  "y": 0.5902,
+                  "w": 0.8301,
+                  "h": 0.0546
+                },
+                "children": [
+                  {
+                    "role": "staticText",
+                    "label": "Sign In",
+                    "bbox_norm": {
+                      "x": 0.4126,
+                      "y": 0.6066,
+                      "w": 0.1214,
+                      "h": 0.0219
+                    },
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "role": "button",
+                "a11y_id": "login.biometric.button",
+                "label": "Sign in with Face ID",
+                "enabled": true,
+                "bbox_norm": {
+                  "x": 0.0583,
+                  "y": 0.6579,
+                  "w": 0.8301,
+                  "h": 0.0546
+                },
+                "children": [
+                  {
+                    "role": "image",
+                    "label": "faceid",
+                    "bbox_norm": {
+                      "x": 0.267,
+                      "y": 0.6721,
+                      "w": 0.0583,
+                      "h": 0.0262
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "staticText",
+                    "label": "Sign in with Face ID",
+                    "bbox_norm": {
+                      "x": 0.3398,
+                      "y": 0.6743,
+                      "w": 0.3641,
+                      "h": 0.0219
+                    },
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "role": "container",
+                "label": "divider",
+                "bbox_norm": {
+                  "x": 0.0583,
+                  "y": 0.7322,
+                  "w": 0.8301,
+                  "h": 0.0219
+                },
+                "children": [
+                  {
+                    "role": "other",
+                    "bbox_norm": {
+                      "x": 0.0583,
+                      "y": 0.7421,
+                      "w": 0.3398,
+                      "h": 0.0011
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "staticText",
+                    "label": "or",
+                    "bbox_norm": {
+                      "x": 0.449,
+                      "y": 0.7322,
+                      "w": 0.0485,
+                      "h": 0.0197
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "other",
+                    "bbox_norm": {
+                      "x": 0.5485,
+                      "y": 0.7421,
+                      "w": 0.3398,
+                      "h": 0.0011
+                    },
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "role": "link",
+                "label": "Create an account",
+                "bbox_norm": {
+                  "x": 0.2913,
+                  "y": 0.765,
+                  "w": 0.3641,
+                  "h": 0.0219
+                },
+                "children": []
+              },
+              {
+                "role": "container",
+                "bbox_norm": {
+                  "x": 0.0583,
+                  "y": 0.8306,
+                  "w": 0.8301,
+                  "h": 0.0437
+                },
+                "children": [
+                  {
+                    "role": "staticText",
+                    "label": "By signing in you agree to the",
+                    "bbox_norm": {
+                      "x": 0.0583,
+                      "y": 0.8306,
+                      "w": 0.8301,
+                      "h": 0.0197
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "link",
+                    "label": "Terms",
+                    "bbox_norm": {
+                      "x": 0.2913,
+                      "y": 0.8525,
+                      "w": 0.1214,
+                      "h": 0.0197
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "staticText",
+                    "label": "and",
+                    "bbox_norm": {
+                      "x": 0.4272,
+                      "y": 0.8525,
+                      "w": 0.0728,
+                      "h": 0.0197
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "link",
+                    "label": "Privacy Policy",
+                    "bbox_norm": {
+                      "x": 0.5097,
+                      "y": 0.8525,
+                      "w": 0.2184,
+                      "h": 0.0197
+                    },
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,108 @@
+schema_version: 1
+screens:
+  - id: client_picker
+    title: Choose Client
+    deep_link: none
+  - id: invoice_detail
+    title: Invoice
+    deep_link: appmap://invoice_detail
+  - id: invoice_list
+    title: Invoices
+    deep_link: appmap://invoice_list
+  - id: invoice_new
+    title: New Invoice
+    deep_link: appmap://invoice_new
+  - id: login
+    title: Sign In
+    deep_link: appmap://login
+gates:
+  - id: gate.biometric_prompt
+    dismiss: gate.biometric_prompt.cancel
+  - id: gate.push_permission
+    dismiss: gate.push_permission.deny
+elements:
+  - id: client.picker.cancel.button
+    kind: button
+    intent_critical: false
+  - id: client.picker.cell
+    kind: cell
+    dynamic: true
+  - id: client.picker.list
+    kind: list
+    dynamic: true
+  - id: client.picker.search.field
+    kind: field
+  - id: invoice.add.button
+    kind: button
+    intent_critical: false
+  - id: invoice.amount.field
+    kind: field
+  - id: invoice.cancel.button
+    kind: button
+    intent_critical: false
+  - id: invoice.client.picker
+    kind: picker
+  - id: invoice.detail.amount.text
+    kind: text
+    dynamic: true
+  - id: invoice.detail.back.button
+    kind: button
+    intent_critical: false
+  - id: invoice.detail.client.text
+    kind: text
+    dynamic: true
+  - id: invoice.detail.edit.button
+    kind: button
+    intent_critical: false
+  - id: invoice.detail.item.cell
+    kind: cell
+    dynamic: true
+  - id: invoice.detail.items.list
+    kind: list
+    dynamic: true
+  - id: invoice.detail.send.button
+    kind: button
+    intent_critical: true
+  - id: invoice.detail.status.text
+    kind: text
+    dynamic: true
+  - id: invoice.due.picker
+    kind: picker
+  - id: invoice.filter.button
+    kind: button
+    intent_critical: false
+  - id: invoice.list.cell
+    kind: cell
+    dynamic: true
+  - id: invoice.list.collection
+    kind: list
+    dynamic: true
+  - id: invoice.list.table
+    kind: list
+    dynamic: true
+  - id: invoice.note.field
+    kind: field
+  - id: invoice.save.button
+    kind: button
+    intent_critical: true
+  - id: login.biometric.button
+    kind: button
+    intent_critical: false
+  - id: login.email.field
+    kind: field
+  - id: login.error.text
+    kind: text
+    dynamic: true
+  - id: login.forgot.link
+    kind: link
+  - id: login.password.field
+    kind: field
+  - id: login.submit.button
+    kind: button
+    intent_critical: false
+  - id: nav.clients.tab
+    kind: tab
+  - id: nav.invoices.tab
+    kind: tab
+  - id: nav.settings.tab
+    kind: tab

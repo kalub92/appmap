@@ -1,0 +1,47 @@
+Sign In
+Welcome back
+Email
+Password
+Sign in with Face ID
+Forgot password?
+By signing in you agree to the
+Terms
+Privacy Policy
+Invoices
+New Invoice
+Filter
+Clients
+Settings
+All
+Draft
+Sent
+Paid
+Overdue
+Cancel
+Save
+Amount
+Client
+Select a client
+Note
+Due date
+Add a note
+Choose Client
+Search clients
+Search
+Recent
+All clients
+Invoice
+Edit
+Status
+Line items
+Send Invoice
+Share
+Delete
+Allow
+Don’t Allow
+Don't Allow
+Would Like to Send You Notifications
+Notifications may include alerts, sounds, and icon badges. These can be configured in Settings.
+Face ID
+Use Passcode
+Sign in to Invoices

@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "app-map": {
+      "command": "node",
+      "args": ["${CLAUDE_PROJECT_DIR:-.}/tools/app-map-mcp/dist/index.js"],
+      "env": {
+        "APP_MAP_DIR": "${CLAUDE_PROJECT_DIR:-.}/app-map",
+        "APP_MAP_PLATFORM": "${APP_MAP_PLATFORM:-ios}",
+        "APP_MAP_LOG_LEVEL": "${APP_MAP_LOG_LEVEL:-info}"
+      }
+    },
+    "argent": {
+      "command": "npx",
+      "args": ["-y", "@swmansion/argent@0.25.0"]
+    }
+  }
+}

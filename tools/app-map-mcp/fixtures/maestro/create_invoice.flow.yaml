@@ -1,0 +1,42 @@
+appId: com.example.app
+---
+- openLink: appmap://invoice_new?fixture=logged_in
+- extendedWaitUntil:
+    visible:
+      id: screen.invoice_new
+    timeout: 10000
+- tapOn:
+    id: invoice.amount.field
+- assertVisible:
+    id: invoice.amount.field
+    focused: true
+- tapOn:
+    id: invoice.amount.field
+- inputText: "50"
+- tapOn:
+    id: invoice.client.picker
+- extendedWaitUntil:
+    visible:
+      id: screen.client_picker
+    timeout: 10000
+- scrollUntilVisible:
+    element:
+      text: Acme Corp
+- tapOn:
+    text: Acme Corp
+- extendedWaitUntil:
+    visible:
+      id: screen.invoice_new
+    timeout: 10000
+- tapOn:
+    id: invoice.save.button
+- extendedWaitUntil:
+    visible:
+      id: screen.invoice_detail
+    timeout: 10000
+- extendedWaitUntil:
+    visible:
+      id: screen.invoice_detail
+    timeout: 10000
+- assertVisible:
+    id: invoice.detail.amount.text

@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://app-map.local/schema/manifest.schema.json",
+  "title": "app-map manifest",
+  "description": "02 §3 — app-map/<platform>/manifest.yaml",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "app_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$"
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "ios",
+        "android"
+      ]
+    },
+    "deep_link_scheme": {
+      "const": "appmap",
+      "description": "fixed by 01 R5; every deep-link pattern in the schemas hard-codes appmap://"
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "build_number": {
+          "type": "string",
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
+          "description": "build number as a string (02 §8)"
+        },
+        "git_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,40}$"
+        }
+      },
+      "required": [
+        "version",
+        "build_number",
+        "git_sha"
+      ]
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "generator": {
+      "type": "string",
+      "pattern": "^app-map-mcp@[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.\\-]+)?$"
+    }
+  },
+  "required": [
+    "schema_version",
+    "app_id",
+    "platform",
+    "deep_link_scheme",
+    "build",
+    "generated_at",
+    "generator"
+  ]
+}

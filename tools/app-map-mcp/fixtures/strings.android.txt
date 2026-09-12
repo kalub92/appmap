@@ -1,0 +1,48 @@
+Sign In
+Welcome back
+Email
+Password
+Sign in with biometrics
+Forgot password?
+By signing in you agree to the
+Terms
+Privacy Policy
+Invoices
+New Invoice
+Filter
+Clients
+Settings
+All
+Draft
+Sent
+Paid
+Overdue
+Cancel
+Save
+Amount
+Client
+Select a client
+Note
+Due date
+Add a note
+Choose Client
+Search clients
+Search
+Recent
+All clients
+Invoice
+Edit
+Status
+Line items
+Send Invoice
+Share
+Delete
+Allow
+Don't allow
+Don’t allow
+Deny
+Allow Invoices to send you notifications?
+Verify your identity
+Biometric
+Use PIN
+Sign in to Invoices

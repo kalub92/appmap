@@ -1,0 +1,388 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://app-map.local/schema/router-export.schema.json",
+  "title": "router export",
+  "description": "01 R6 — debug-only navigation graph dump",
+  "definitions": {
+    "screenId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "01 R2: snake_case screen id"
+    },
+    "elementId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$",
+      "description": "01 R2: <feature>.<name>.<kind> (dotted, lowercase)"
+    },
+    "gateId": {
+      "type": "string",
+      "pattern": "^gate\\.[a-z0-9_]+$",
+      "description": "01 R2: gate.<name>"
+    },
+    "edgeAction": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "tap"
+            },
+            "element": {
+              "$ref": "#/definitions/elementId"
+            }
+          },
+          "required": [
+            "type",
+            "element"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "type"
+            },
+            "element": {
+              "$ref": "#/definitions/elementId"
+            }
+          },
+          "required": [
+            "type",
+            "element"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "select"
+            },
+            "element": {
+              "$ref": "#/definitions/elementId"
+            }
+          },
+          "required": [
+            "type",
+            "element"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "swipe"
+            },
+            "direction": {
+              "type": "string",
+              "enum": [
+                "up",
+                "down",
+                "left",
+                "right"
+              ]
+            },
+            "element": {
+              "$ref": "#/definitions/elementId"
+            }
+          },
+          "required": [
+            "type",
+            "direction"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "open_link"
+            },
+            "url": {
+              "type": "string",
+              "pattern": "^(appmap://[a-z][a-z0-9_]*(\\?[A-Za-z0-9_.=&%\\-]*)?|none)$"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "dismiss_gate"
+            },
+            "gate": {
+              "$ref": "#/definitions/gateId"
+            }
+          },
+          "required": [
+            "type",
+            "gate"
+          ]
+        }
+      ],
+      "description": "edge action (tap|type|select|swipe|open_link|dismiss_gate)"
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "auth": {
+          "type": "string",
+          "enum": [
+            "logged_in",
+            "logged_out",
+            "any"
+          ]
+        },
+        "screen": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "flag": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "platform_version": {
+          "type": "string",
+          "pattern": "^(>=|<=|>|<|=)?[0-9]+(\\.[0-9]+)*$"
+        }
+      },
+      "required": [],
+      "minProperties": 1,
+      "description": "02 §4.1 pre/postcondition; 02 §4.3 variant `when`"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "application",
+        "window",
+        "container",
+        "navigationBar",
+        "tabBar",
+        "toolbar",
+        "scrollView",
+        "list",
+        "cell",
+        "button",
+        "link",
+        "tab",
+        "toggle",
+        "field",
+        "secureField",
+        "searchField",
+        "picker",
+        "staticText",
+        "image",
+        "alert",
+        "sheet",
+        "keyboard",
+        "key",
+        "other"
+      ]
+    },
+    "roleLabelValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "$ref": "#/definitions/role"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label_regex": {
+          "type": "string",
+          "minLength": 1,
+          "format": "regex",
+          "maxLength": 200,
+          "description": "user-authored regex source; ≤200 chars and no nested quantifiers (validate rule 1 safe-regex check, 07 §4)"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label"
+          ]
+        },
+        {
+          "properties": {
+            "label_regex": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label_regex"
+          ]
+        }
+      ]
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "app_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$"
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "ios",
+        "android"
+      ]
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "build_number": {
+          "type": "string",
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
+          "description": "build number as a string (02 §8)"
+        },
+        "git_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,40}$"
+        }
+      },
+      "required": [
+        "version",
+        "build_number",
+        "git_sha"
+      ]
+    },
+    "screens": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/definitions/screenId"
+          },
+          "route": {
+            "type": "string",
+            "pattern": "^(appmap://[a-z][a-z0-9_]*(\\?[A-Za-z0-9_.=&%\\-]*)?|none)$"
+          },
+          "view_type": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_.]*$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "$ref": "#/definitions/edgeAction"
+                },
+                "to": {
+                  "type": "string",
+                  "pattern": "^([a-z][a-z0-9_]*|_previous)$"
+                }
+              },
+              "required": [
+                "action",
+                "to"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "route",
+          "view_type"
+        ]
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/definitions/gateId"
+          },
+          "dismiss": {
+            "$ref": "#/definitions/elementId"
+          }
+        },
+        "required": [
+          "id",
+          "dismiss"
+        ]
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "app_id",
+    "platform",
+    "build",
+    "screens"
+  ]
+}

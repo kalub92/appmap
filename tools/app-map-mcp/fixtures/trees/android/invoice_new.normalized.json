@@ -1,0 +1,410 @@
+{
+  "schema_version": 1,
+  "platform": "android",
+  "source": "normalized",
+  "viewport": {
+    "w": 412,
+    "h": 915
+  },
+  "root": {
+    "role": "application",
+    "label": "Invoices",
+    "bbox_norm": {
+      "x": 0,
+      "y": 0,
+      "w": 1,
+      "h": 1
+    },
+    "children": [
+      {
+        "role": "window",
+        "bbox_norm": {
+          "x": 0,
+          "y": 0,
+          "w": 1,
+          "h": 1
+        },
+        "children": [
+          {
+            "role": "other",
+            "label": "status bar",
+            "bbox_norm": {
+              "x": 0,
+              "y": 0,
+              "w": 1,
+              "h": 0.0514
+            },
+            "children": [
+              {
+                "role": "staticText",
+                "label": "9:41",
+                "bbox_norm": {
+                  "x": 0.0583,
+                  "y": 0.0153,
+                  "w": 0.0971,
+                  "h": 0.0219
+                },
+                "children": []
+              }
+            ]
+          },
+          {
+            "role": "container",
+            "a11y_id": "screen.invoice_new",
+            "bbox_norm": {
+              "x": 0,
+              "y": 0.0514,
+              "w": 1,
+              "h": 0.9486
+            },
+            "children": [
+              {
+                "role": "navigationBar",
+                "label": "New Invoice",
+                "bbox_norm": {
+                  "x": 0,
+                  "y": 0.0514,
+                  "w": 1,
+                  "h": 0.0481
+                },
+                "children": [
+                  {
+                    "role": "button",
+                    "a11y_id": "invoice.cancel.button",
+                    "label": "Cancel",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0.0388,
+                      "y": 0.0557,
+                      "w": 0.1699,
+                      "h": 0.0393
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "staticText",
+                    "label": "New Invoice",
+                    "bbox_norm": {
+                      "x": 0.3398,
+                      "y": 0.0634,
+                      "w": 0.267,
+                      "h": 0.024
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "button",
+                    "a11y_id": "invoice.save.button",
+                    "label": "Save",
+                    "enabled": false,
+                    "bbox_norm": {
+                      "x": 0.7767,
+                      "y": 0.0557,
+                      "w": 0.1456,
+                      "h": 0.0393
+                    },
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "role": "scrollView",
+                "bbox_norm": {
+                  "x": 0,
+                  "y": 0.0995,
+                  "w": 1,
+                  "h": 0.7322
+                },
+                "children": [
+                  {
+                    "role": "container",
+                    "label": "form",
+                    "bbox_norm": {
+                      "x": 0,
+                      "y": 0.1202,
+                      "w": 1,
+                      "h": 0.459
+                    },
+                    "children": [
+                      {
+                        "role": "container",
+                        "bbox_norm": {
+                          "x": 0.0388,
+                          "y": 0.1202,
+                          "w": 0.8689,
+                          "h": 0.0656
+                        },
+                        "children": [
+                          {
+                            "role": "staticText",
+                            "label": "Amount",
+                            "bbox_norm": {
+                              "x": 0.0777,
+                              "y": 0.129,
+                              "w": 0.1942,
+                              "h": 0.0197
+                            },
+                            "children": []
+                          },
+                          {
+                            "role": "field",
+                            "a11y_id": "invoice.amount.field",
+                            "label": "Amount",
+                            "value": "",
+                            "enabled": true,
+                            "focused": false,
+                            "bbox_norm": {
+                              "x": 0.0777,
+                              "y": 0.1508,
+                              "w": 0.7913,
+                              "h": 0.0306
+                            },
+                            "children": []
+                          },
+                          {
+                            "role": "staticText",
+                            "label": "USD",
+                            "bbox_norm": {
+                              "x": 0.7767,
+                              "y": 0.1552,
+                              "w": 0.0874,
+                              "h": 0.0197
+                            },
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "role": "container",
+                        "bbox_norm": {
+                          "x": 0.0388,
+                          "y": 0.1945,
+                          "w": 0.8689,
+                          "h": 0.0656
+                        },
+                        "children": [
+                          {
+                            "role": "staticText",
+                            "label": "Client",
+                            "bbox_norm": {
+                              "x": 0.0777,
+                              "y": 0.2033,
+                              "w": 0.1942,
+                              "h": 0.0197
+                            },
+                            "children": []
+                          },
+                          {
+                            "role": "picker",
+                            "a11y_id": "invoice.client.picker",
+                            "label": "Client",
+                            "value": "Select a client",
+                            "enabled": true,
+                            "bbox_norm": {
+                              "x": 0.0777,
+                              "y": 0.2251,
+                              "w": 0.7913,
+                              "h": 0.0306
+                            },
+                            "children": [
+                              {
+                                "role": "staticText",
+                                "label": "Select a client",
+                                "bbox_norm": {
+                                  "x": 0.0777,
+                                  "y": 0.2295,
+                                  "w": 0.4854,
+                                  "h": 0.0219
+                                },
+                                "children": []
+                              },
+                              {
+                                "role": "image",
+                                "label": "chevron",
+                                "bbox_norm": {
+                                  "x": 0.8398,
+                                  "y": 0.2295,
+                                  "w": 0.0291,
+                                  "h": 0.0219
+                                },
+                                "children": []
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "role": "container",
+                        "bbox_norm": {
+                          "x": 0.0388,
+                          "y": 0.2689,
+                          "w": 0.8689,
+                          "h": 0.0656
+                        },
+                        "children": [
+                          {
+                            "role": "staticText",
+                            "label": "Due date",
+                            "bbox_norm": {
+                              "x": 0.0777,
+                              "y": 0.2776,
+                              "w": 0.1942,
+                              "h": 0.0197
+                            },
+                            "children": []
+                          },
+                          {
+                            "role": "picker",
+                            "a11y_id": "invoice.due.picker",
+                            "label": "Due date",
+                            "value": "Oct 10, 2026",
+                            "enabled": true,
+                            "bbox_norm": {
+                              "x": 0.0777,
+                              "y": 0.2995,
+                              "w": 0.7913,
+                              "h": 0.0306
+                            },
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "role": "container",
+                        "bbox_norm": {
+                          "x": 0.0388,
+                          "y": 0.3432,
+                          "w": 0.8689,
+                          "h": 0.1311
+                        },
+                        "children": [
+                          {
+                            "role": "staticText",
+                            "label": "Note",
+                            "bbox_norm": {
+                              "x": 0.0777,
+                              "y": 0.3519,
+                              "w": 0.1942,
+                              "h": 0.0197
+                            },
+                            "children": []
+                          },
+                          {
+                            "role": "field",
+                            "a11y_id": "invoice.note.field",
+                            "label": "Note",
+                            "value": "",
+                            "enabled": true,
+                            "focused": false,
+                            "bbox_norm": {
+                              "x": 0.0777,
+                              "y": 0.3738,
+                              "w": 0.7913,
+                              "h": 0.0918
+                            },
+                            "children": [
+                              {
+                                "role": "staticText",
+                                "label": "Add a note",
+                                "bbox_norm": {
+                                  "x": 0.0874,
+                                  "y": 0.3781,
+                                  "w": 0.2427,
+                                  "h": 0.0197
+                                },
+                                "children": []
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "staticText",
+                    "label": "Line items",
+                    "bbox_norm": {
+                      "x": 0.0777,
+                      "y": 0.6011,
+                      "w": 0.2913,
+                      "h": 0.0197
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "list",
+                    "label": "line items",
+                    "bbox_norm": {
+                      "x": 0,
+                      "y": 0.6273,
+                      "w": 1,
+                      "h": 0.0011
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "button",
+                    "label": "Add line item",
+                    "enabled": true,
+                    "bbox_norm": {
+                      "x": 0.0777,
+                      "y": 0.6339,
+                      "w": 0.3641,
+                      "h": 0.0393
+                    },
+                    "children": [
+                      {
+                        "role": "image",
+                        "label": "plus",
+                        "bbox_norm": {
+                          "x": 0.0971,
+                          "y": 0.6426,
+                          "w": 0.0485,
+                          "h": 0.0219
+                        },
+                        "children": []
+                      },
+                      {
+                        "role": "staticText",
+                        "label": "Add line item",
+                        "bbox_norm": {
+                          "x": 0.165,
+                          "y": 0.6437,
+                          "w": 0.267,
+                          "h": 0.0197
+                        },
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "role": "staticText",
+                    "label": "Preview",
+                    "bbox_norm": {
+                      "x": 0.0777,
+                      "y": 0.6995,
+                      "w": 0.2913,
+                      "h": 0.0197
+                    },
+                    "children": []
+                  },
+                  {
+                    "role": "image",
+                    "label": "invoice preview",
+                    "bbox_norm": {
+                      "x": 0.0777,
+                      "y": 0.7257,
+                      "w": 0.7913,
+                      "h": 0.0874
+                    },
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

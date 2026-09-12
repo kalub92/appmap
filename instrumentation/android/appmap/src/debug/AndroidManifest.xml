@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug-only manifest (01 R5, R6). Merged into the app only for debug builds.
+
+     appmap://<screen_id>[?fixture=name&k=v] is received by a transparent trampoline activity
+     that parses the link, applies the fixture and hands the route to the router the app
+     installed with AppMapDeepLink.installRouter { … } (01 R5: the real router, not a bare view).
+
+     Router export: adb shell am broadcast -a <applicationId>.APPMAP_EXPORT \-\-es path /sdcard/router-export.json
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+
+        <activity
+            android:name="com.example.appmap.AppMapDeepLinkActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="appmap" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name="com.example.appmap.AppMapExportReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="${applicationId}.APPMAP_EXPORT" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

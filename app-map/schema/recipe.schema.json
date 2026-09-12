@@ -1,0 +1,522 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://app-map.local/schema/recipe.schema.json",
+  "title": "app-map recipe",
+  "description": "02 §6 / 04 — app-map/<platform>/recipes/<id>.yaml. Closed action enum; no shell, eval, or file-path fields (07 §4).",
+  "definitions": {
+    "elementId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$",
+      "description": "01 R2: <feature>.<name>.<kind> (dotted, lowercase)"
+    },
+    "gateId": {
+      "type": "string",
+      "pattern": "^gate\\.[a-z0-9_]+$",
+      "description": "01 R2: gate.<name>"
+    },
+    "screenId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "01 R2: snake_case screen id"
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "auth": {
+          "type": "string",
+          "enum": [
+            "logged_in",
+            "logged_out",
+            "any"
+          ]
+        },
+        "screen": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "flag": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "platform_version": {
+          "type": "string",
+          "pattern": "^(>=|<=|>|<|=)?[0-9]+(\\.[0-9]+)*$"
+        }
+      },
+      "required": [],
+      "minProperties": 1,
+      "description": "02 §4.1 pre/postcondition; 02 §4.3 variant `when`"
+    },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "screen": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "focused": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
+        },
+        "visible": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "not_visible": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "text_present": {
+          "type": "string",
+          "minLength": 1,
+          "description": "static copy only (02 §6)"
+        }
+      },
+      "required": [],
+      "minProperties": 1,
+      "description": "02 §6 expect conditions (closed)"
+    },
+    "build": {
+      "type": "string",
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
+      "description": "build number as a string (02 §8)"
+    },
+    "step": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^s[0-9]+$"
+            },
+            "expect": {
+              "$ref": "#/definitions/expect"
+            },
+            "intent_critical": {
+              "type": "boolean"
+            },
+            "action": {
+              "const": "tap"
+            },
+            "element": {
+              "$ref": "#/definitions/elementId"
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "element"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^s[0-9]+$"
+            },
+            "expect": {
+              "$ref": "#/definitions/expect"
+            },
+            "intent_critical": {
+              "type": "boolean"
+            },
+            "action": {
+              "const": "type"
+            },
+            "element": {
+              "$ref": "#/definitions/elementId"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "description": "literal static copy or a {param} slot"
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "element",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^s[0-9]+$"
+            },
+            "expect": {
+              "$ref": "#/definitions/expect"
+            },
+            "intent_critical": {
+              "type": "boolean"
+            },
+            "action": {
+              "const": "select"
+            },
+            "list": {
+              "$ref": "#/definitions/elementId"
+            },
+            "match": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "text"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "list",
+            "match"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^s[0-9]+$"
+            },
+            "expect": {
+              "$ref": "#/definitions/expect"
+            },
+            "intent_critical": {
+              "type": "boolean"
+            },
+            "action": {
+              "const": "swipe"
+            },
+            "direction": {
+              "type": "string",
+              "enum": [
+                "up",
+                "down",
+                "left",
+                "right"
+              ]
+            },
+            "element": {
+              "$ref": "#/definitions/elementId"
+            },
+            "duration_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "direction"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^s[0-9]+$"
+            },
+            "expect": {
+              "$ref": "#/definitions/expect"
+            },
+            "intent_critical": {
+              "type": "boolean"
+            },
+            "action": {
+              "const": "open_link"
+            },
+            "url": {
+              "type": "string",
+              "pattern": "^(appmap://[a-z][a-z0-9_]*(\\?[A-Za-z0-9_.=&%\\-]*)?)$"
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "url"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^s[0-9]+$"
+            },
+            "expect": {
+              "$ref": "#/definitions/expect"
+            },
+            "intent_critical": {
+              "type": "boolean"
+            },
+            "action": {
+              "const": "wait_for"
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "expect"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^s[0-9]+$"
+            },
+            "expect": {
+              "$ref": "#/definitions/expect"
+            },
+            "intent_critical": {
+              "type": "boolean"
+            },
+            "action": {
+              "const": "dismiss_gate"
+            },
+            "gate": {
+              "$ref": "#/definitions/gateId"
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "gate"
+          ]
+        }
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "ios",
+        "android"
+      ]
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "matches": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "format": "regex",
+        "maxLength": 200,
+        "description": "user-authored regex source; ≤200 chars and no nested quantifiers (validate rule 1 safe-regex check, 07 §4)"
+      },
+      "minItems": 1
+    },
+    "params": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "string",
+              "money",
+              "number",
+              "bool",
+              "enum"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "required"
+        ]
+      }
+    },
+    "preconditions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/condition"
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deep_link": {
+          "type": "string",
+          "pattern": "^(appmap://[a-z][a-z0-9_]*(\\?[A-Za-z0-9_.=&%\\-]*)?)$"
+        },
+        "fallback_path": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/screenId"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [],
+      "anyOf": [
+        {
+          "properties": {
+            "deep_link": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "deep_link"
+          ]
+        },
+        {
+          "properties": {
+            "fallback_path": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "fallback_path"
+          ]
+        }
+      ]
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/step"
+      },
+      "minItems": 1
+    },
+    "verify": {
+      "$ref": "#/definitions/expect"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "verified",
+        "ci_gate",
+        "retired"
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "compiled_from": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.\\-]+$",
+          "description": "trajectory/session id"
+        },
+        "compiled_by": {
+          "type": "string",
+          "pattern": "^app-map-mcp@[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.\\-]+)?$"
+        },
+        "reviewed_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision_of": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "previous version this revision was compiled from (04 §8)"
+        }
+      },
+      "required": [
+        "compiled_from",
+        "compiled_by"
+      ]
+    },
+    "last_verified_build": {
+      "$ref": "#/definitions/build"
+    }
+  },
+  "required": [
+    "id",
+    "version",
+    "platform",
+    "description",
+    "matches",
+    "params",
+    "entry",
+    "steps",
+    "verify",
+    "status",
+    "provenance"
+  ]
+}

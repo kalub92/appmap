@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "app_id": "com.example.app",
+  "platform": "ios",
+  "build": {
+    "version": "2026.9.1",
+    "build_number": "4412",
+    "git_sha": "a1b2c3d"
+  },
+  "screens": [
+    {
+      "id": "client_picker",
+      "route": "none",
+      "view_type": "ClientPickerView",
+      "edges": [
+        {
+          "action": {
+            "type": "select",
+            "element": "client.picker.cell"
+          },
+          "to": "invoice_new"
+        },
+        {
+          "action": {
+            "type": "tap",
+            "element": "client.picker.cancel.button"
+          },
+          "to": "invoice_new"
+        }
+      ]
+    },
+    {
+      "id": "invoice_detail",
+      "route": "appmap://invoice_detail",
+      "view_type": "InvoiceDetailView",
+      "edges": [
+        {
+          "action": {
+            "type": "tap",
+            "element": "invoice.detail.back.button"
+          },
+          "to": "invoice_list"
+        },
+        {
+          "action": {
+            "type": "tap",
+            "element": "invoice.detail.edit.button"
+          },
+          "to": "invoice_new"
+        }
+      ]
+    },
+    {
+      "id": "invoice_list",
+      "route": "appmap://invoice_list",
+      "view_type": "InvoiceListView",
+      "edges": [
+        {
+          "action": {
+            "type": "tap",
+            "element": "invoice.add.button"
+          },
+          "to": "invoice_new"
+        },
+        {
+          "action": {
+            "type": "tap",
+            "element": "invoice.list.cell"
+          },
+          "to": "invoice_detail"
+        }
+      ]
+    },
+    {
+      "id": "invoice_new",
+      "route": "appmap://invoice_new",
+      "view_type": "InvoiceNewView",
+      "edges": [
+        {
+          "action": {
+            "type": "tap",
+            "element": "invoice.client.picker"
+          },
+          "to": "client_picker"
+        },
+        {
+          "action": {
+            "type": "tap",
+            "element": "invoice.save.button"
+          },
+          "to": "invoice_detail"
+        },
+        {
+          "action": {
+            "type": "tap",
+            "element": "invoice.cancel.button"
+          },
+          "to": "invoice_list"
+        }
+      ]
+    },
+    {
+      "id": "login",
+      "route": "appmap://login",
+      "view_type": "LoginView",
+      "edges": [
+        {
+          "action": {
+            "type": "tap",
+            "element": "login.submit.button"
+          },
+          "to": "invoice_list"
+        }
+      ]
+    },
+    {
+      "id": "settings",
+      "route": "appmap://settings",
+      "view_type": "SettingsView",
+      "edges": []
+    }
+  ],
+  "gates": [
+    {
+      "id": "gate.biometric_prompt",
+      "dismiss": "gate.biometric_prompt.cancel"
+    },
+    {
+      "id": "gate.push_permission",
+      "dismiss": "gate.push_permission.deny"
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+id: create_invoice
+version: 3
+platform: android
+description: Create an invoice for a client with an amount and save it
+matches:
+  - (create|new|make)( an?)? invoice
+  - bill (a |the )?(client|customer)
+params:
+  - name: amount
+    type: money
+    required: true
+  - name: client
+    type: string
+    required: true
+preconditions:
+  - auth: logged_in
+entry:
+  deep_link: appmap://invoice_new?fixture=logged_in
+  fallback_path:
+    - invoice_list
+    - invoice_new
+steps:
+  - id: s1
+    action: tap
+    element: invoice.amount.field
+    expect:
+      focused: invoice.amount.field
+  - id: s2
+    action: type
+    element: invoice.amount.field
+    text: "{amount}"
+  - id: s3
+    action: tap
+    element: invoice.client.picker
+    expect:
+      screen: client_picker
+  - id: s4
+    action: select
+    list: client.picker.list
+    match:
+      text: "{client}"
+    expect:
+      screen: invoice_new
+  - id: s5
+    action: tap
+    element: invoice.save.button
+    expect:
+      screen: invoice_detail
+    intent_critical: true
+verify:
+  screen: invoice_detail
+  visible:
+    - invoice.detail.amount.text
+status: verified
+provenance:
+  compiled_from: traj_2026-09-01_0007
+  compiled_by: app-map-mcp@0.1.0
+  reviewed_by: caleb
+last_verified_build: "4412"

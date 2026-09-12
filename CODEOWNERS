@@ -1,0 +1,23 @@
+# CODEOWNERS — review policy for the app-map (07 §7).
+#
+# Replace @ORG/platform-team with the GitHub team that owns the map, e.g. @acme/mobile-platform.
+# The team must have write access to this repository to be a valid code owner, and branch
+# protection on main must require code-owner review for these rules to block merges
+# (Settings → Branches → "Require review from Code Owners"). Heal PRs (06 R6) are never
+# auto-merged; a human from this team approves them.
+#
+# 07 §7: promotion to ci_gate needs a reviewer who is not the author; ids.yaml changes that
+# flip intent_critical true → false need two approvals (configure via branch protection).
+
+/app-map/                          @ORG/platform-team
+/.mcp.json                         @ORG/platform-team
+/.claude/                          @ORG/platform-team
+/tools/app-map-mcp/                @ORG/platform-team
+
+# Harness glue reviewed by the same team (06 R3: hooks and CI are code).
+/.github/workflows/app-map.yml     @ORG/platform-team
+/scripts/app-map/                  @ORG/platform-team
+/scripts/build-app.sh              @ORG/platform-team
+/instrumentation/                  @ORG/platform-team
+/.gitattributes                    @ORG/platform-team
+/CODEOWNERS                        @ORG/platform-team

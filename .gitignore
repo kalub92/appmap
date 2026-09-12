@@ -1,0 +1,10 @@
+# app-map local state (never committed; 07 §2.4)
+app-map/.local/
+app-map/**/.local/
+# generated CI flows (04 §6.2, 06 R5)
+.ci/maestro/
+# node
+node_modules/
+tools/app-map-mcp/dist/
+*.log
+.DS_Store

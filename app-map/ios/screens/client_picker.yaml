@@ -1,0 +1,149 @@
+id: client_picker
+kind: screen
+title: Choose Client
+deep_link: none
+signature:
+  marker: screen.client_picker
+  nav_class: ClientPickerView
+  required_ids:
+    - client.picker.list
+    - client.picker.search.field
+  structural_hash: sha1:0249755607b30fbcbef4fa5262505bbd320daf80
+dynamic_regions:
+  - client.picker.list
+elements:
+  - id: client.picker.cancel.button
+    role: button
+    label: Cancel
+    intent: cancel_client_picker
+    intent_critical: false
+    locators:
+      - strategy: a11y_id
+        value: client.picker.cancel.button
+        weight: 1
+      - strategy: role_label
+        value:
+          role: button
+          label: Cancel
+        weight: 0.6
+      - strategy: text
+        value: Cancel
+        weight: 0.3
+      - strategy: path
+        value: navigationBar/button
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.8847
+          y: 0.1054
+        weight: 0.1
+    fingerprint:
+      role: button
+      label_norm: cancel
+      parent_role: navigationBar
+      sibling_index: 1
+      bbox_norm:
+        x: 0.7949
+        y: 0.0841
+        w: 0.1795
+        h: 0.0427
+    status: verified
+    last_verified_build: "4412"
+  - id: client.picker.cell
+    role: cell
+    dynamic: true
+    locators:
+      - strategy: a11y_id
+        value: client.picker.cell
+        weight: 1
+      - strategy: path
+        value: list/cell[0]
+        weight: 0.25
+    fingerprint:
+      role: cell
+      parent_role: list
+      sibling_index: 0
+      bbox_norm:
+        x: 0
+        y: 0.2251
+        w: 1
+        h: 0.0758
+    status: verified
+    last_verified_build: "4412"
+  - id: client.picker.list
+    role: list
+    dynamic: true
+    locators:
+      - strategy: a11y_id
+        value: client.picker.list
+        weight: 1
+      - strategy: path
+        value: list
+        weight: 0.25
+    fingerprint:
+      role: list
+      parent_role: sheet
+      sibling_index: 3
+      bbox_norm:
+        x: 0
+        y: 0.2251
+        w: 1
+        h: 0.7749
+    status: verified
+    last_verified_build: "4412"
+  - id: client.picker.search.field
+    role: searchField
+    label: Search clients
+    intent: search_clients
+    locators:
+      - strategy: a11y_id
+        value: client.picker.search.field
+        weight: 1
+      - strategy: role_label
+        value:
+          role: searchField
+          label: Search clients
+        weight: 0.6
+      - strategy: path
+        value: searchField
+        weight: 0.25
+      - strategy: geometry
+        value:
+          x: 0.5
+          y: 0.1612
+        weight: 0.1
+    fingerprint:
+      role: searchField
+      label_norm: search clients
+      parent_role: sheet
+      sibling_index: 1
+      bbox_norm:
+        x: 0.041
+        y: 0.1398
+        w: 0.9179
+        h: 0.0427
+    status: verified
+    last_verified_build: "4412"
+edges:
+  - action:
+      type: select
+      element: client.picker.cell
+    to: invoice_new
+    postconditions:
+      - screen: invoice_new
+    status: verified
+    last_verified_build: "4412"
+  - action:
+      type: tap
+      element: client.picker.cancel.button
+    to: invoice_new
+    postconditions:
+      - screen: invoice_new
+    status: verified
+    last_verified_build: "4412"
+meta:
+  sources:
+    - exploration
+    - router_export
+  status: verified
+  last_verified_build: "4412"

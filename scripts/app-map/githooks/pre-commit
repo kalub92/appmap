@@ -1,0 +1,49 @@
+#!/bin/sh
+# scripts/app-map/githooks/pre-commit — 01 R8: "`lint-ids` runs in CI **and pre-commit**".
+#
+# Opt in once per clone (git never runs hooks from a path it has not been told about):
+#
+#   git config core.hooksPath scripts/app-map/githooks
+#
+# Runs only when the commit actually touches something the checks cover, so an unrelated commit
+# stays instant. Set APP_MAP_SKIP_PRECOMMIT=1 to bypass for one commit (or use `git commit -n`).
+set -u
+
+[ "${APP_MAP_SKIP_PRECOMMIT:-0}" = "1" ] && exit 0
+
+ROOT=$(git rev-parse --show-toplevel) || exit 0
+CLI="$ROOT/tools/app-map-mcp/bin/app-map"
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+# does the commit touch the map, the generated constants, or app source?
+case "$staged" in
+  *app-map/*|*instrumentation/*|*ios/*|*android/*|*.mcp.json*|*.claude/*|*.cursor/*|*.codex/*) ;;
+  *) exit 0 ;;
+esac
+
+fail=0
+run() {
+  label=$1; shift
+  if ! out=$("$@" 2>&1); then
+    printf 'pre-commit: %s failed\n%s\n' "$label" "$out" >&2
+    fail=1
+  fi
+}
+
+if [ -x "$CLI" ] || [ -f "$CLI" ]; then
+  run 'app-map lint-ids (01 R8)' sh "$CLI" lint-ids --dir "$ROOT/app-map"
+  run 'app-map validate (02 §10)' sh "$CLI" validate --dir "$ROOT/app-map"
+else
+  printf 'pre-commit: %s not found; skipping the app-map checks\n' "$CLI" >&2
+fi
+
+if [ -f "$ROOT/scripts/app-map/gen-ids" ] && command -v node >/dev/null 2>&1; then
+  run 'gen-ids --check (01 R8 generated constants in sync)' node "$ROOT/scripts/app-map/gen-ids" --check
+fi
+
+if [ "$fail" -ne 0 ]; then
+  printf 'pre-commit: fix the above, or bypass once with APP_MAP_SKIP_PRECOMMIT=1 git commit\n' >&2
+  exit 1
+fi
+exit 0

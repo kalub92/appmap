@@ -1,0 +1,44 @@
+id: gate.biometric_prompt
+kind: gate
+deep_link: none
+signature:
+  marker: none
+  required_labels:
+    - role: staticText
+      label_regex: ^(Verify your identity|Biometric)
+    - role: button
+      label: Cancel
+elements:
+  - id: gate.biometric_prompt.cancel
+    role: button
+    intent: dismiss_biometric_prompt
+    intent_critical: false
+    locators:
+      - strategy: role_label
+        value:
+          role: button
+          label: Cancel
+        weight: 0.8
+      - strategy: path
+        value: alert/button
+        weight: 0.25
+    fingerprint:
+      role: button
+      label_norm: cancel
+      parent_role: alert
+      sibling_index: 3
+    status: verified
+    last_verified_build: "4412"
+edges:
+  - action:
+      type: tap
+      element: gate.biometric_prompt.cancel
+    to: _previous
+    status: verified
+    last_verified_build: "4412"
+meta:
+  sources:
+    - exploration
+    - manual
+  status: verified
+  last_verified_build: "4412"

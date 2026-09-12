@@ -1,0 +1,354 @@
+#!/usr/bin/env node
+// scripts/app-map/gen-ids — generate the shared id constants from app-map/ids.yaml.
+//
+// Spec: 01 R1 (registry → AppMapID.swift / AppMapId.kt), 01 R2 (naming rules),
+// 06 R2 (`--check` fails CI when the committed constants drift from ids.yaml).
+//
+// Usage:
+//   scripts/app-map/gen-ids                 regenerate both files in place
+//   scripts/app-map/gen-ids --check         exit 1 with a diff if committed files differ
+//   scripts/app-map/gen-ids --ids <path> --out-ios <path> --out-android <path>
+//
+// No dependencies beyond the `yaml` package already vendored by tools/app-map-mcp.
+
+import { createRequire } from 'node:module';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const require = createRequire(new URL('../../tools/app-map-mcp/package.json', import.meta.url));
+const { parse: parseYaml } = require('yaml');
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const DEFAULTS = {
+  ids: resolve(REPO_ROOT, 'app-map/ids.yaml'),
+  ios: resolve(REPO_ROOT, 'instrumentation/ios/AppMapKit/Sources/AppMapKit/AppMapID.swift'),
+  android: resolve(REPO_ROOT, 'instrumentation/android/appmap/src/main/kotlin/com/example/appmap/AppMapId.kt'),
+};
+
+// 01 R2, patterns identical to app-map/schema/ids.schema.json
+const ID_RE = /^[a-z0-9]+(\.[a-z0-9_]+)+$/;
+const SCREEN_RE = /^[a-z][a-z0-9_]*$/;
+const GATE_RE = /^gate\.[a-z0-9_]+$/;
+const KINDS = new Set(['button', 'field', 'list', 'cell', 'toggle', 'tab', 'picker', 'link', 'text', 'sheet']);
+const SWIFT_KEYWORDS = new Set([
+  'associatedtype', 'class', 'deinit', 'enum', 'extension', 'fileprivate', 'func', 'import', 'init', 'inout',
+  'internal', 'let', 'open', 'operator', 'private', 'precedencegroup', 'protocol', 'public', 'rethrows', 'static',
+  'struct', 'subscript', 'typealias', 'var', 'break', 'case', 'catch', 'continue', 'default', 'defer', 'do', 'else',
+  'fallthrough', 'for', 'guard', 'if', 'in', 'repeat', 'return', 'throw', 'switch', 'where', 'while', 'as', 'any',
+  'false', 'is', 'nil', 'self', 'super', 'throws', 'true', 'try',
+]);
+
+function usage(code) {
+  const out = code === 0 ? console.log : console.error;
+  out(`gen-ids — generate AppMapID.swift and AppMapId.kt from app-map/ids.yaml (01 R1)
+
+Options:
+  --check               do not write; exit 1 with a diff if the committed files are stale (06 R2)
+  --ids <path>          registry to read       (default: app-map/ids.yaml)
+  --out-ios <path>      Swift output           (default: instrumentation/ios/AppMapKit/Sources/AppMapKit/AppMapID.swift)
+  --out-android <path>  Kotlin output          (default: instrumentation/android/appmap/src/main/kotlin/com/example/appmap/AppMapId.kt)
+  --quiet               only print errors
+  -h, --help            this text`);
+  process.exit(code);
+}
+
+function parseArgs(argv) {
+  const opts = { check: false, quiet: false, ids: DEFAULTS.ids, ios: DEFAULTS.ios, android: DEFAULTS.android };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    const next = () => {
+      if (i + 1 >= argv.length) fail(`missing value for ${a}`);
+      return resolve(argv[++i]);
+    };
+    if (a === '--check') opts.check = true;
+    else if (a === '--quiet') opts.quiet = true;
+    else if (a === '--ids') opts.ids = next();
+    else if (a === '--out-ios') opts.ios = next();
+    else if (a === '--out-android') opts.android = next();
+    else if (a === '-h' || a === '--help') usage(0);
+    else fail(`unknown argument: ${a}`);
+  }
+  return opts;
+}
+
+function fail(msg) {
+  console.error(`gen-ids: ${msg}`);
+  process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Registry validation (01 R2). Fails loudly; a bad registry must never generate.
+// ---------------------------------------------------------------------------
+function loadRegistry(path) {
+  if (!existsSync(path)) fail(`registry not found: ${path}`);
+  let doc;
+  try {
+    doc = parseYaml(readFileSync(path, 'utf8'));
+  } catch (e) {
+    fail(`cannot parse ${path}: ${e.message}`);
+  }
+  const errors = [];
+  const err = (m) => errors.push(m);
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) fail(`${path}: top level must be a mapping`);
+  if (doc.schema_version !== 1) err(`schema_version must be 1 (got ${JSON.stringify(doc.schema_version)})`);
+  for (const key of Object.keys(doc)) {
+    if (!['schema_version', 'screens', 'gates', 'elements'].includes(key)) err(`unknown top-level key: ${key}`);
+  }
+  const list = (key) => {
+    const v = doc[key] ?? [];
+    if (!Array.isArray(v)) err(`${key} must be a list`);
+    return Array.isArray(v) ? v : [];
+  };
+  const seen = new Map(); // id -> where
+  const claim = (id, where) => {
+    if (seen.has(id)) err(`duplicate id "${id}" (${where}, already ${seen.get(id)})`);
+    else seen.set(id, where);
+  };
+
+  const screens = list('screens').map((s, i) => {
+    const where = `screens[${i}]`;
+    if (!s || typeof s !== 'object' || typeof s.id !== 'string') { err(`${where}: needs a string id`); return null; }
+    if (!SCREEN_RE.test(s.id)) err(`${where}: screen id "${s.id}" must be snake_case (${SCREEN_RE})`);
+    const marker = `screen.${s.id}`;
+    if (!ID_RE.test(marker)) err(`${where}: marker "${marker}" violates ${ID_RE}`);
+    claim(marker, where);
+    return { id: s.id, marker };
+  }).filter(Boolean);
+
+  const gates = list('gates').map((g, i) => {
+    const where = `gates[${i}]`;
+    if (!g || typeof g !== 'object' || typeof g.id !== 'string') { err(`${where}: needs a string id`); return null; }
+    if (!GATE_RE.test(g.id)) err(`${where}: gate id "${g.id}" must be gate.<name> (${GATE_RE})`);
+    claim(g.id, where);
+    if (typeof g.dismiss !== 'string') err(`${where}: gate "${g.id}" needs a string dismiss id`);
+    else {
+      if (!ID_RE.test(g.dismiss)) err(`${where}: dismiss id "${g.dismiss}" violates ${ID_RE}`);
+      if (!g.dismiss.startsWith(`${g.id}.`)) err(`${where}: dismiss "${g.dismiss}" must be "${g.id}.<verb>"`);
+      claim(g.dismiss, `${where}.dismiss`);
+    }
+    return { id: g.id, dismiss: g.dismiss };
+  }).filter(Boolean);
+
+  const elements = list('elements').map((e, i) => {
+    const where = `elements[${i}]`;
+    if (!e || typeof e !== 'object' || typeof e.id !== 'string') { err(`${where}: needs a string id`); return null; }
+    if (!ID_RE.test(e.id)) err(`${where}: element id "${e.id}" violates ${ID_RE}`);
+    if (e.id.startsWith('screen.') || e.id.startsWith('gate.')) err(`${where}: element id "${e.id}" uses a reserved prefix`);
+    if (e.id.split('.').length < 3) console.error(`gen-ids: warning: ${where}: element id "${e.id}" should be <feature>.<name>.<kind> (01 R2)`);
+    if (typeof e.kind !== 'string' || !KINDS.has(e.kind)) err(`${where}: "${e.id}" kind must be one of ${[...KINDS].join(', ')}`);
+    for (const flag of ['intent_critical', 'dynamic']) {
+      if (flag in e && typeof e[flag] !== 'boolean') err(`${where}: "${e.id}".${flag} must be boolean`);
+    }
+    claim(e.id, where);
+    return { id: e.id, kind: e.kind, intent_critical: e.intent_critical === true, dynamic: e.dynamic === true };
+  }).filter(Boolean);
+
+  if (errors.length) {
+    console.error(`gen-ids: ${path} is invalid (01 R2):`);
+    for (const m of errors) console.error(`  - ${m}`);
+    process.exit(1);
+  }
+  const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  return { screens: screens.sort(byId), gates: gates.sort(byId), elements: elements.sort(byId) };
+}
+
+// ---------------------------------------------------------------------------
+// Naming
+// ---------------------------------------------------------------------------
+function segments(id) {
+  return id.split(/[._]/).filter(Boolean);
+}
+function lowerCamel(id) {
+  const parts = segments(id);
+  let name = parts.map((p, i) => (i === 0 ? p : p[0].toUpperCase() + p.slice(1))).join('');
+  if (/^[0-9]/.test(name)) name = `_${name}`;
+  return SWIFT_KEYWORDS.has(name) ? `\`${name}\`` : name;
+}
+function upperSnake(id) {
+  let name = segments(id).join('_').toUpperCase();
+  if (/^[0-9]/.test(name)) name = `_${name}`;
+  return name;
+}
+function stripPrefix(id, prefix) {
+  return id.startsWith(prefix) ? id.slice(prefix.length) : id;
+}
+function assertUniqueNames(groupName, entries) {
+  const seen = new Map();
+  for (const { name, id } of entries) {
+    if (seen.has(name)) fail(`${groupName}: ids "${seen.get(name)}" and "${id}" both map to constant "${name}"`);
+    seen.set(name, id);
+  }
+}
+
+function buildGroups(reg) {
+  const groups = {
+    screen: reg.screens.map((s) => ({ id: s.marker, swift: lowerCamel(s.id), kotlin: upperSnake(s.id) })),
+    element: reg.elements.map((e) => ({ id: e.id, swift: lowerCamel(e.id), kotlin: upperSnake(e.id), note: e })),
+    gate: reg.gates.map((g) => ({ id: g.id, swift: lowerCamel(stripPrefix(g.id, 'gate.')), kotlin: upperSnake(stripPrefix(g.id, 'gate.')) })),
+    dismiss: reg.gates.map((g) => ({ id: g.dismiss, swift: lowerCamel(stripPrefix(g.dismiss, 'gate.')), kotlin: upperSnake(stripPrefix(g.dismiss, 'gate.')) })),
+  };
+  for (const [k, entries] of Object.entries(groups)) {
+    assertUniqueNames(`${k} (swift)`, entries.map((e) => ({ name: e.swift, id: e.id })));
+    assertUniqueNames(`${k} (kotlin)`, entries.map((e) => ({ name: e.kotlin, id: e.id })));
+  }
+  return groups;
+}
+
+const HEADER = 'Generated by scripts/app-map/gen-ids from app-map/ids.yaml — do not edit';
+
+function elementComment(e) {
+  const tags = [];
+  if (e.intent_critical) tags.push('intent_critical');
+  if (e.dynamic) tags.push('dynamic');
+  return tags.length ? ` // ${e.kind}; ${tags.join(', ')}` : ` // ${e.kind}`;
+}
+
+function renderSwift(groups) {
+  const L = [];
+  L.push(`// ${HEADER}`);
+  L.push('// swiftlint:disable all');
+  L.push('// Shared id registry (01 R1). App code references ids only through these constants;');
+  L.push('// `app-map lint-ids` (01 R8) rejects string literals.');
+  L.push('');
+  L.push('public enum AppMapID {');
+  L.push('    /// Screen markers `screen.<screen_id>` for every screen root (01 R3).');
+  L.push('    public enum Screen {');
+  for (const s of groups.screen) L.push(`        public static let ${s.swift} = "${s.id}"`);
+  L.push(`        public static let all: [String] = [${groups.screen.map((s) => `${s.swift}`).join(', ')}]`);
+  L.push('    }');
+  L.push('');
+  L.push('    /// Element identifiers for every interactive element and form label (01 R4).');
+  L.push('    public enum Element {');
+  for (const e of groups.element) L.push(`        public static let ${e.swift} = "${e.id}"${elementComment(e.note)}`);
+  L.push(`        public static let all: [String] = [${groups.element.map((e) => `${e.swift}`).join(', ')}]`);
+  L.push('    }');
+  L.push('');
+  L.push('    /// Gate markers for interrupters (01 R7) and their dismiss controls.');
+  L.push('    public enum Gate {');
+  for (const g of groups.gate) L.push(`        public static let ${g.swift} = "${g.id}"`);
+  L.push(`        public static let all: [String] = [${groups.gate.map((g) => `${g.swift}`).join(', ')}]`);
+  L.push('');
+  L.push('        public enum Dismiss {');
+  for (const d of groups.dismiss) L.push(`            public static let ${d.swift} = "${d.id}"`);
+  L.push(`            public static let all: [String] = [${groups.dismiss.map((d) => `${d.swift}`).join(', ')}]`);
+  L.push('        }');
+  L.push('    }');
+  L.push('}');
+  return `${L.join('\n')}\n`;
+}
+
+function renderKotlin(groups) {
+  const L = [];
+  L.push(`// ${HEADER}`);
+  L.push('// Shared id registry (01 R1). App code references ids only through these constants;');
+  L.push('// `app-map lint-ids` (01 R8) rejects string literals.');
+  L.push('@file:Suppress("unused", "MemberVisibilityCanBePrivate")');
+  L.push('');
+  L.push('package com.example.appmap');
+  L.push('');
+  L.push('object AppMapId {');
+  L.push('    /** Screen markers `screen.<screen_id>` for every screen root (01 R3). */');
+  L.push('    object Screen {');
+  for (const s of groups.screen) L.push(`        const val ${s.kotlin} = "${s.id}"`);
+  L.push(`        val ALL: List<String> = listOf(${groups.screen.map((s) => s.kotlin).join(', ')})`);
+  L.push('    }');
+  L.push('');
+  L.push('    /** Element identifiers for every interactive element and form label (01 R4). */');
+  L.push('    object Element {');
+  for (const e of groups.element) L.push(`        const val ${e.kotlin} = "${e.id}"${elementComment(e.note)}`);
+  L.push(`        val ALL: List<String> = listOf(${groups.element.map((e) => e.kotlin).join(', ')})`);
+  L.push('    }');
+  L.push('');
+  L.push('    /** Gate markers for interrupters (01 R7) and their dismiss controls. */');
+  L.push('    object Gate {');
+  for (const g of groups.gate) L.push(`        const val ${g.kotlin} = "${g.id}"`);
+  L.push(`        val ALL: List<String> = listOf(${groups.gate.map((g) => g.kotlin).join(', ')})`);
+  L.push('');
+  L.push('        object Dismiss {');
+  for (const d of groups.dismiss) L.push(`            const val ${d.kotlin} = "${d.id}"`);
+  L.push(`            val ALL: List<String> = listOf(${groups.dismiss.map((d) => d.kotlin).join(', ')})`);
+  L.push('        }');
+  L.push('    }');
+  L.push('}');
+  return `${L.join('\n')}\n`;
+}
+
+// ---------------------------------------------------------------------------
+// Minimal unified-style line diff (LCS); files are small.
+// ---------------------------------------------------------------------------
+function unifiedDiff(oldText, newText, label, context = 2) {
+  const a = oldText.split('\n');
+  const b = newText.split('\n');
+  const n = a.length;
+  const m = b.length;
+  const lcs = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const ops = [];
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) { ops.push([' ', a[i]]); i++; j++; }
+    else if (i < n && (j >= m || lcs[i + 1][j] >= lcs[i][j + 1])) { ops.push(['-', a[i]]); i++; }
+    else { ops.push(['+', b[j]]); j++; }
+  }
+  const keep = new Array(ops.length).fill(false);
+  ops.forEach((op, k) => {
+    if (op[0] === ' ') return;
+    for (let c = Math.max(0, k - context); c <= Math.min(ops.length - 1, k + context); c++) keep[c] = true;
+  });
+  const out = [`--- ${label} (committed)`, `+++ ${label} (generated)`];
+  let inHunk = false;
+  ops.forEach((op, k) => {
+    if (keep[k]) {
+      if (!inHunk) { out.push('@@'); inHunk = true; }
+      out.push(op[0] + op[1]);
+    } else inHunk = false;
+  });
+  return out.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  const reg = loadRegistry(opts.ids);
+  const groups = buildGroups(reg);
+  const outputs = [
+    { path: opts.ios, text: renderSwift(groups) },
+    { path: opts.android, text: renderKotlin(groups) },
+  ];
+  const label = (p) => { const r = relative(REPO_ROOT, p); return r && !r.startsWith('..') ? r : p; };
+
+  if (opts.check) {
+    let stale = 0;
+    for (const { path, text } of outputs) {
+      if (!existsSync(path)) {
+        stale++;
+        console.error(`gen-ids --check: ${label(path)} is missing; run scripts/app-map/gen-ids`);
+        continue;
+      }
+      const current = readFileSync(path, 'utf8');
+      if (current !== text) {
+        stale++;
+        console.error(`gen-ids --check: ${label(path)} is out of date with ${label(opts.ids)}; run scripts/app-map/gen-ids`);
+        console.error(unifiedDiff(current, text, label(path)));
+      }
+    }
+    if (stale) process.exit(1);
+    if (!opts.quiet) console.log(`gen-ids --check: ${outputs.length} files up to date (${reg.screens.length} screens, ${reg.elements.length} elements, ${reg.gates.length} gates)`);
+    return;
+  }
+
+  for (const { path, text } of outputs) {
+    mkdirSync(dirname(path), { recursive: true });
+    const changed = !existsSync(path) || readFileSync(path, 'utf8') !== text;
+    writeFileSync(path, text, 'utf8');
+    if (!opts.quiet) console.log(`${changed ? 'wrote' : 'unchanged'} ${label(path)}`);
+  }
+}
+
+main();
