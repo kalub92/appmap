@@ -30,7 +30,37 @@
  *
  * Layer: top.
  */
-import { NotImplementedError } from './errors.ts';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import type { AppMapConfig, Platform } from './config.ts';
+import { PLATFORMS, isPlatform, loadConfig } from './config.ts';
+import type { AppMapContext } from './context.ts';
+import { openContext } from './context.ts';
+import { AppMapError, ERROR_CODES, toErrorJson } from './errors.ts';
+import { cacheFile, PACKAGE_ROOT } from './paths.ts';
+import type {
+  HookPayload, RecipeParam, RecipeParams, RecipeStatus, RouterExport, SessionStartHookOutput,
+} from './types.ts';
+import { PARAM_TYPES, RECIPE_STATUSES } from './types.ts';
+import { formatIssues, validateMap } from './validate.ts';
+import { exportMap } from './store/export.ts';
+import { formatRunStep, formatSessionStartContext } from './format.ts';
+import { recordHookPayload } from './observe.ts';
+import { postToIngestSocket } from './ingest-socket.ts';
+import { importRouter } from './router-import.ts';
+import { compileRecipe } from './recipes/compile.ts';
+import { markRecipe } from './recipes/lifecycle.ts';
+import { maestroExport } from './recipes/maestro.ts';
+import { runAllHeadless, runHeadless } from './recipes/headless.ts';
+import { startGuidedRun } from './recipes/guided.ts';
+import { driftTour, formatDriftTable } from './drift.ts';
+import { formatReport, report as buildReport } from './report.ts';
+import { genConfigs } from './gen-configs.ts';
+import { DEFAULT_ANDROID_DIRS, DEFAULT_IOS_DIRS, lintIds } from './lint-ids.ts';
+import { intentCriticalDiff, policyCheck } from './policy-check.ts';
+import { runMergeDriver } from './merge-driver.ts';
+import { migrateId } from './migrate-id.ts';
+import { readAllowlist } from './yaml/load.ts';
 
 export interface CliIo {
   stdin: () => Promise<string>;
@@ -52,16 +82,609 @@ export interface ParsedArgs {
   flags: Record<string, string | boolean | string[]>;
 }
 
+/** flags that never take a value (everything else consumes the next token) */
+const BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
+  'force', 'check', 'json', 'quiet', 'stdin', 'headless', 'all', 'dry-run', 'no-retire', 'strict',
+  'purge-retired', 'hook-json', 'markdown', 'help', 'guided',
+]);
+/** flags that collect every following non-flag token (`--params a=1 b=2`, `--param x:string --param y:money`) */
+const LIST_FLAGS: ReadonlySet<string> = new Set(['param', 'params', 'src']);
+
+/** A usage error (exit 2) as opposed to a command failure (exit 1) — 03 §10. */
+class UsageError extends AppMapError {
+  constructor(message: string, hint = 'run `app-map help` for the command list') {
+    super(ERROR_CODES.BAD_INPUT, message, hint);
+    this.name = 'UsageError';
+  }
+}
+
 /** Pure: argv → command + positionals + flags (`--k v`, `--k=v`, repeated `--params k=v`). Throws `bad_input` on unknown command. */
 export function parseArgs(argv: readonly string[]): ParsedArgs {
-  void argv;
-  throw new NotImplementedError('cli.parseArgs');
+  const first = argv[0];
+  if (first === undefined || first === '--help' || first === '-h' || first === 'help') {
+    return { command: 'help', positional: [], flags: {} };
+  }
+  if (!(COMMANDS as readonly string[]).includes(first)) {
+    throw new UsageError(`unknown command: ${first}`, `known commands: ${COMMANDS.join(', ')}`);
+  }
+  const command = first as Command;
+  const positional: string[] = [];
+  const flags: Record<string, string | boolean | string[]> = {};
+  const rest = argv.slice(1);
+  for (let i = 0; i < rest.length; i++) {
+    const token = rest[i]!;
+    if (token === '--') {
+      positional.push(...rest.slice(i + 1));
+      break;
+    }
+    if (token === '-h') {
+      flags.help = true;
+      continue;
+    }
+    if (!token.startsWith('--')) {
+      positional.push(token);
+      continue;
+    }
+    const eq = token.indexOf('=');
+    const name = (eq < 0 ? token.slice(2) : token.slice(2, eq)).trim();
+    if (name.length === 0) throw new UsageError(`malformed flag: ${token}`);
+    const inlineValue = eq < 0 ? undefined : token.slice(eq + 1);
+    if (inlineValue !== undefined) {
+      if (LIST_FLAGS.has(name)) flags[name] = [...asList(flags[name]), inlineValue];
+      else flags[name] = inlineValue;
+      continue;
+    }
+    if (BOOLEAN_FLAGS.has(name)) {
+      flags[name] = true;
+      continue;
+    }
+    if (LIST_FLAGS.has(name)) {
+      const values = asList(flags[name]);
+      while (i + 1 < rest.length && !rest[i + 1]!.startsWith('--')) values.push(rest[++i]!);
+      if (values.length === 0) throw new UsageError(`--${name} needs at least one value`);
+      flags[name] = values;
+      continue;
+    }
+    const next = rest[i + 1];
+    if (next === undefined || next.startsWith('--')) throw new UsageError(`--${name} needs a value`);
+    flags[name] = rest[++i]!;
+  }
+  return { command, positional, flags };
+}
+
+function asList(v: string | boolean | string[] | undefined): string[] {
+  if (Array.isArray(v)) return [...v];
+  return typeof v === 'string' ? [v] : [];
 }
 
 /** Run one command; returns the process exit code. Never throws. */
-export function main(argv: readonly string[], io?: Partial<CliIo>): Promise<number> {
-  void argv; void io;
-  throw new NotImplementedError('cli.main');
+export async function main(argv: readonly string[], io: Partial<CliIo> = {}): Promise<number> {
+  const out: CliIo = {
+    stdin: io.stdin ?? readAllStdin,
+    stdout: io.stdout ?? ((t) => { process.stdout.write(t); }),
+    stderr: io.stderr ?? ((t) => { process.stderr.write(t); }),
+    env: io.env ?? process.env,
+    cwd: io.cwd ?? process.cwd(),
+  };
+  let args: ParsedArgs;
+  try {
+    args = parseArgs(argv);
+  } catch (e) {
+    out.stderr(`${JSON.stringify(toErrorJson(e))}\n${USAGE}`);
+    return 2;
+  }
+  if (args.command === 'help' || args.flags.help === true) {
+    out.stdout(USAGE);
+    return 0;
+  }
+  // `record` must never fail the hook (05 §3: exit 0 always, even on failure).
+  if (args.command === 'record') return cmdRecord(args, out);
+  try {
+    return await dispatch(args, out);
+  } catch (e) {
+    out.stderr(`${JSON.stringify(toErrorJson(e))}\n`);
+    return e instanceof UsageError ? 2 : 1;
+  }
+}
+
+async function dispatch(args: ParsedArgs, io: CliIo): Promise<number> {
+  switch (args.command) {
+    case 'validate': return cmdValidate(args, io);
+    case 'export': return cmdExport(args, io);
+    case 'summary': return cmdSummary(args, io);
+    case 'import-router': return cmdImportRouter(args, io);
+    case 'compile': return cmdCompile(args, io);
+    case 'run': return cmdRun(args, io);
+    case 'maestro-export': return cmdMaestroExport(args, io);
+    case 'drift': return cmdDrift(args, io);
+    case 'report': return cmdReport(args, io);
+    case 'gen-configs': return cmdGenConfigs(args, io);
+    case 'lint-ids': return cmdLintIds(args, io);
+    case 'policy-check': return cmdPolicyCheck(args, io);
+    case 'intent-critical-diff': return cmdIntentCriticalDiff(args, io);
+    case 'mark': return cmdMark(args, io);
+    case 'merge-driver': return cmdMergeDriver(args, io);
+    case 'migrate-id': return cmdMigrateId(args, io);
+    default: throw new UsageError(`unhandled command: ${args.command}`);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shared plumbing
+// ---------------------------------------------------------------------------------------------
+
+/** env + global flags (`--dir`, `--platform`, `--build`) → config (03 §3). */
+function configFor(args: ParsedArgs, io: CliIo): AppMapConfig {
+  const env: NodeJS.ProcessEnv = { ...io.env };
+  const dir = str(args, 'dir');
+  if (dir !== undefined) env.APP_MAP_DIR = dir;
+  const platform = str(args, 'platform');
+  if (platform !== undefined) {
+    if (!isPlatform(platform)) throw new UsageError(`--platform ${platform} is not one of ${PLATFORMS.join('|')}`);
+    env.APP_MAP_PLATFORM = platform;
+  }
+  const build = str(args, 'build');
+  if (build !== undefined) env.APP_MAP_BUILD = build;
+  return loadConfig(env, io.cwd);
+}
+
+/** CLI contexts log to stderr — stdout is the command's output (03 §11). */
+function withContext<T>(config: AppMapConfig, opts: { readOnly?: boolean }, fn: (ctx: AppMapContext) => T): T {
+  // `readOnly` never creates the cache, so fall back when a fresh clone has none yet.
+  const readOnly = opts.readOnly === true && existsSync(cacheFile(config));
+  const ctx = openContext(config, { logSink: 'stderr', ...(readOnly ? { readOnly: true } : {}) });
+  try {
+    return fn(ctx);
+  } finally {
+    ctx.close();
+  }
+}
+
+async function withContextAsync<T>(config: AppMapConfig, opts: { readOnly?: boolean }, fn: (ctx: AppMapContext) => Promise<T>): Promise<T> {
+  const readOnly = opts.readOnly === true && existsSync(cacheFile(config));
+  const ctx = openContext(config, { logSink: 'stderr', ...(readOnly ? { readOnly: true } : {}) });
+  try {
+    return await fn(ctx);
+  } finally {
+    ctx.close();
+  }
+}
+
+function str(args: ParsedArgs, name: string): string | undefined {
+  const v = args.flags[name];
+  if (v === undefined) return undefined;
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v)) return v.join(',');
+  throw new UsageError(`--${name} needs a value`);
+}
+
+function bool(args: ParsedArgs, name: string): boolean {
+  return args.flags[name] === true;
+}
+
+function int(args: ParsedArgs, name: string): number | undefined {
+  const raw = str(args, name);
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n)) throw new UsageError(`--${name} must be an integer (got ${raw})`);
+  return n;
+}
+
+function list(args: ParsedArgs, name: string): string[] {
+  const v = args.flags[name];
+  if (v === undefined) return [];
+  if (Array.isArray(v)) return v.flatMap((x) => x.split(',')).map((x) => x.trim()).filter((x) => x.length > 0);
+  if (typeof v === 'string') return v.split(',').map((x) => x.trim()).filter((x) => x.length > 0);
+  throw new UsageError(`--${name} needs a value`);
+}
+
+function statuses(args: ParsedArgs): RecipeStatus[] {
+  return list(args, 'status').map((s) => {
+    if (!(RECIPE_STATUSES as readonly string[]).includes(s)) throw new UsageError(`--status ${s} is not one of ${RECIPE_STATUSES.join('|')}`);
+    return s as RecipeStatus;
+  });
+}
+
+function platformsFlag(args: ParsedArgs): Platform[] | undefined {
+  const values = list(args, 'platform');
+  if (values.length === 0) return undefined;
+  return values.map((p) => {
+    if (!isPlatform(p)) throw new UsageError(`--platform ${p} is not one of ${PLATFORMS.join('|')}`);
+    return p;
+  });
+}
+
+function absPath(io: CliIo, p: string): string {
+  return isAbsolute(p) ? p : resolve(io.cwd, p);
+}
+
+/** nearest ancestor of `cwd` holding `.mcp.json` or `.git`; falls back to the package's repo root */
+function repoRootFor(io: CliIo): string {
+  let dir = resolve(io.cwd);
+  for (;;) {
+    if (existsSync(join(dir, '.mcp.json')) || existsSync(join(dir, '.git'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return resolve(PACKAGE_ROOT, '..', '..');
+}
+
+function emit(io: CliIo, args: ParsedArgs, json: unknown, text: string): void {
+  if (bool(args, 'json')) io.stdout(`${JSON.stringify(json, null, 2)}\n`);
+  else if (!bool(args, 'quiet')) io.stdout(text.endsWith('\n') ? text : `${text}\n`);
+}
+
+async function readAllStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Buffer));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function readJsonFile<T>(path: string): T {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (e) {
+    throw new AppMapError(ERROR_CODES.NOT_FOUND, `cannot read ${path}: ${(e as Error).message}`, 'check the path');
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch (e) {
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, `${path} is not valid JSON: ${(e as Error).message}`, 'the file must be a single JSON document');
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------------------------
+
+function cmdValidate(args: ParsedArgs, io: CliIo): number {
+  const config = configFor(args, io);
+  const platforms = platformsFlag(args);
+  const result = validateMap(config, platforms !== undefined ? { platforms } : {});
+  emit(io, args, result, `${formatIssues(result.issues)}\n${result.ok ? 'ok' : 'FAILED'} — ${result.files_checked} file(s) checked`);
+  return result.ok ? 0 : 1;
+}
+
+function cmdExport(args: ParsedArgs, io: CliIo): number {
+  const config = configFor(args, io);
+  return withContext(config, {}, (ctx) => {
+    const result = exportMap(ctx, { force: bool(args, 'force'), check: bool(args, 'check') });
+    if (bool(args, 'check')) {
+      emit(io, args, result, result.non_canonical.length === 0 ? 'ok — every file is canonical' : `non-canonical:\n${result.non_canonical.map((p) => `  ${p}`).join('\n')}`);
+      return result.non_canonical.length === 0 ? 0 : 1;
+    }
+    if (result.conflicts.length > 0) {
+      // 03 §4: the stop hook relays this to stderr; the diff names what changed underneath us.
+      io.stderr(`${result.conflicts.map((c) => `conflict: ${c.path}\n${c.diff}`).join('\n')}\n`);
+      return 1;
+    }
+    // harness contract: written paths, one per line, on stdout
+    if (bool(args, 'json')) io.stdout(`${JSON.stringify(result, null, 2)}\n`);
+    else for (const p of result.written) io.stdout(`${p}\n`);
+    return 0;
+  });
+}
+
+/** 05 §3: ingest one hook payload. ALWAYS exits 0 — never block the agent. */
+async function cmdRecord(args: ParsedArgs, io: CliIo): Promise<number> {
+  try {
+    if (!bool(args, 'stdin')) throw new UsageError('record needs --stdin');
+    const text = await io.stdin();
+    const payload = parseHookPayload(text);
+    if (payload === undefined) return 0;
+    const config = configFor(args, io);
+    // 03 §2: prefer the running server's ingest socket, fall back to a direct SQLite write.
+    try {
+      const viaSocket = await postToIngestSocket(config, payload);
+      if (viaSocket !== null && viaSocket !== undefined) return 0;
+    } catch {
+      // socket unavailable / not implemented → fall through to the direct path
+    }
+    withContext(config, {}, (ctx) => recordHookPayload(ctx, payload));
+  } catch (e) {
+    io.stderr(`${JSON.stringify(toErrorJson(e))}\n`);
+  }
+  return 0;
+}
+
+/**
+ * stdin → one hook payload. The hook script flattens the payload to a single line (05 §3), but a
+ * human piping a file in gets a pretty-printed document, so try the whole text first and fall back
+ * to the first non-empty line (JSONL). Returns undefined for empty input; throws on garbage.
+ */
+function parseHookPayload(text: string): HookPayload | undefined {
+  const whole = text.trim();
+  if (whole.length === 0) return undefined;
+  try {
+    return JSON.parse(whole) as HookPayload;
+  } catch {
+    const line = text.split('\n').find((l) => l.trim().length > 0);
+    if (line === undefined) return undefined;
+    return JSON.parse(line) as HookPayload;
+  }
+}
+
+function cmdSummary(args: ParsedArgs, io: CliIo): number {
+  const config = configFor(args, io);
+  const maxTokens = int(args, 'max-tokens') ?? config.maxContextTokens;
+  return withContext(config, { readOnly: true }, (ctx) => {
+    const text = formatSessionStartContext(ctx.map, maxTokens);
+    if (bool(args, 'hook-json')) {
+      const payload: SessionStartHookOutput = { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } };
+      io.stdout(`${JSON.stringify(payload)}\n`);
+    } else {
+      // harness contract: plain text on stdout; the hook JSON-escapes it itself
+      io.stdout(`${text}\n`);
+    }
+    return 0;
+  });
+}
+
+function cmdImportRouter(args: ParsedArgs, io: CliIo): number {
+  const file = args.positional[0];
+  if (file === undefined) throw new UsageError('import-router needs a router export path');
+  const doc = readJsonFile<RouterExport>(absPath(io, file));
+  const config = configFor(args, io);
+  const dryRun = bool(args, 'dry-run');
+  return withContext(config, {}, (ctx) => {
+    const result = importRouter(ctx, doc, {
+      retire: !bool(args, 'no-retire'),
+      strict: bool(args, 'strict'),
+      purgeRetired: bool(args, 'purge-retired'),
+      dryRun,
+    });
+    const exported = dryRun ? undefined : exportMap(ctx, {});
+    const text = [
+      `created ${result.created.length}: ${result.created.join(', ') || '-'}`,
+      `updated ${result.updated.length}: ${result.updated.join(', ') || '-'}`,
+      `retired ${result.retired.length}: ${result.retired.join(', ') || '-'}`,
+      `unregistered ${result.unregistered.length}: ${result.unregistered.join(', ') || '-'}`,
+      `purged ${result.purged.length}: ${result.purged.join(', ') || '-'}`,
+      `edges_added ${result.edges_added}`,
+      ...(exported === undefined ? ['(dry run — nothing written)'] : exported.written.map((p) => `wrote ${p}`)),
+    ].join('\n');
+    emit(io, args, { ...result, written: exported?.written ?? [] }, text);
+    return 0;
+  });
+}
+
+function cmdCompile(args: ParsedArgs, io: CliIo): number {
+  const session = str(args, 'session');
+  const task = str(args, 'task');
+  const name = str(args, 'name');
+  if (session === undefined || task === undefined || name === undefined) {
+    throw new UsageError('compile needs --session, --task and --name');
+  }
+  const { params, values } = parseParamSpecs(list(args, 'param'));
+  const toSeq = int(args, 'to-seq');
+  const config = configFor(args, io);
+  return withContext(config, {}, (ctx) => {
+    const result = compileRecipe(ctx, {
+      session, task, recipe_id: name, params,
+      ...(Object.keys(values).length > 0 ? { values } : {}),
+      ...(toSeq !== undefined ? { to_seq: toSeq } : {}),
+    });
+    if (!result.ok) {
+      emit(io, args, result, `compile failed: ${result.reason} — ${result.message}`);
+      return 1;
+    }
+    emit(io, args, result, result.yaml);
+    return 0;
+  });
+}
+
+/** `--param name:type[=value]` → the recipe's `params[]` plus `values` (04 §3.4). */
+function parseParamSpecs(specs: readonly string[]): { params: RecipeParam[]; values: Record<string, string | number> } {
+  const params: RecipeParam[] = [];
+  const values: Record<string, string | number> = {};
+  for (const spec of specs) {
+    const eq = spec.indexOf('=');
+    const head = eq < 0 ? spec : spec.slice(0, eq);
+    const colon = head.indexOf(':');
+    if (colon < 0) throw new UsageError(`--param ${spec} must be name:type[=value] (types: ${PARAM_TYPES.join('|')})`);
+    const name = head.slice(0, colon).trim();
+    const type = head.slice(colon + 1).trim();
+    if (name.length === 0 || !(PARAM_TYPES as readonly string[]).includes(type)) {
+      throw new UsageError(`--param ${spec} must be name:type[=value] (types: ${PARAM_TYPES.join('|')})`);
+    }
+    params.push({ name, type: type as RecipeParam['type'], required: true });
+    if (eq >= 0) {
+      const raw = spec.slice(eq + 1);
+      values[name] = type === 'number' || type === 'money' ? Number(raw) : raw;
+    }
+  }
+  return { params, values };
+}
+
+/** `k=v` pairs → `RecipeParams` (numbers stay numbers so money/number params compare equal). */
+function parseKeyValues(pairs: readonly string[]): RecipeParams {
+  const out: RecipeParams = {};
+  for (const pair of pairs) {
+    const eq = pair.indexOf('=');
+    if (eq <= 0) throw new UsageError(`--params ${pair} must be key=value`);
+    const key = pair.slice(0, eq);
+    const raw = pair.slice(eq + 1);
+    if (raw === 'true' || raw === 'false') out[key] = raw === 'true';
+    else if (raw.trim().length > 0 && Number.isFinite(Number(raw))) out[key] = Number(raw);
+    else out[key] = raw;
+  }
+  return out;
+}
+
+async function cmdRun(args: ParsedArgs, io: CliIo): Promise<number> {
+  const config = configFor(args, io);
+  const paramsFile = str(args, 'params-file');
+  const headless = bool(args, 'headless');
+  if (bool(args, 'all')) {
+    if (!headless) throw new UsageError('run --all requires --headless (06 R5)');
+    const wanted = statuses(args);
+    if (wanted.length === 0) throw new UsageError('run --all needs --status (e.g. --status verified,ci_gate)');
+    return withContextAsync(config, {}, async (ctx) => {
+      const healReport = await runAllHeadless(ctx, { statuses: wanted, ...(paramsFile !== undefined ? { paramsFile: absPath(io, paramsFile) } : {}) });
+      const reportPath = str(args, 'report');
+      if (reportPath !== undefined) {
+        // 06 R6 / harness-notes §4: the nightly job reads this file (heal-report.schema.json)
+        const abs = absPath(io, reportPath);
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs, `${JSON.stringify(healReport, null, 2)}\n`, 'utf8');
+        emit(io, args, healReport, abs);
+      } else {
+        emit(io, args, healReport, JSON.stringify(healReport, null, 2));
+      }
+      return healReport.runs.every((r) => r.ok) ? 0 : 1;
+    });
+  }
+  const recipeId = args.positional[0];
+  if (recipeId === undefined) throw new UsageError('run needs a recipe id (or --all --status …)');
+  const params = parseKeyValues(list(args, 'params'));
+  return withContextAsync(config, {}, async (ctx) => {
+    if (headless) {
+      const result = await runHeadless(ctx, { recipe_id: recipeId, params, ...(paramsFile !== undefined ? { paramsFile: absPath(io, paramsFile) } : {}) });
+      emit(io, args, result, JSON.stringify(result, null, 2));
+      return result.ok ? 0 : 1;
+    }
+    const result = await startGuidedRun(ctx, { recipe_id: recipeId, params });
+    emit(io, args, result, `run ${result.run_id} (${result.recipe} v${result.version})\n${formatRunStep(result.step)}`);
+    return 0;
+  });
+}
+
+function cmdMaestroExport(args: ParsedArgs, io: CliIo): number {
+  const outDir = str(args, 'out');
+  const config = configFor(args, io);
+  const wanted = statuses(args);
+  const recipes = args.positional;
+  return withContext(config, {}, (ctx) => {
+    const result = maestroExport(ctx, {
+      ...(recipes.length > 0 ? { recipes } : {}),
+      ...(bool(args, 'all') ? { all: true } : {}),
+      ...(wanted.length > 0 ? { statuses: wanted } : {}),
+      ...(outDir !== undefined ? { outDir: absPath(io, outDir) } : {}),
+      ...(str(args, 'params-file') !== undefined ? { paramsFile: absPath(io, str(args, 'params-file')!) } : {}),
+    });
+    emit(io, args, result, result.flows.map((f) => `${f.recipe}: ${f.eligible ? f.path : `SKIPPED (ineligible steps ${f.ineligible_steps.join(',')})`}`).join('\n') || '(no recipes matched)');
+    return result.flows.every((f) => f.eligible) ? 0 : 1;
+  });
+}
+
+async function cmdDrift(args: ParsedArgs, io: CliIo): Promise<number> {
+  const config = configFor(args, io);
+  const routerPath = str(args, 'router');
+  const router = routerPath !== undefined ? readJsonFile<RouterExport>(absPath(io, routerPath)) : undefined;
+  const build = str(args, 'build');
+  const outPath = str(args, 'out');
+  return withContextAsync(config, {}, async (ctx) => {
+    const result = await driftTour(ctx, {
+      ...(build !== undefined ? { build } : {}),
+      ...(router !== undefined ? { router } : {}),
+      ...(outPath !== undefined ? { outPath: absPath(io, outPath) } : {}),
+    });
+    emit(io, args, result, formatDriftTable(result));
+    // 06 R4.5 / 06 §4: a ci_gate-referenced screen that is broken blocks the PR.
+    return result.summary.blocking ? 1 : 0;
+  });
+}
+
+function cmdReport(args: ParsedArgs, io: CliIo): number {
+  const config = configFor(args, io);
+  const since = str(args, 'since');
+  return withContext(config, { readOnly: true }, (ctx) => {
+    const metrics = buildReport(ctx, since !== undefined ? { since } : {});
+    emit(io, args, metrics, formatReport(metrics));
+    return 0;
+  });
+}
+
+function cmdGenConfigs(args: ParsedArgs, io: CliIo): number {
+  const repoRoot = repoRootFor(io);
+  const result = genConfigs(repoRoot, { check: bool(args, 'check') });
+  const text = bool(args, 'check')
+    ? (result.ok ? 'ok — generated harness configs match .mcp.json' : `stale (run \`app-map gen-configs\`):\n${result.stale.map((p) => `  ${p}`).join('\n')}`)
+    : (result.written.length === 0 ? 'ok — nothing to write' : result.written.map((p) => `wrote ${p}`).join('\n'));
+  emit(io, args, result, text);
+  return result.ok ? 0 : 1;
+}
+
+function cmdLintIds(args: ParsedArgs, io: CliIo): number {
+  const config = configFor(args, io);
+  const repoRoot = repoRootFor(io);
+  const platforms = platformsFlag(args);
+  const src = list(args, 'src').map((d) => absPath(io, d));
+  const result = lintIds(config, {
+    repoRoot,
+    ...(platforms !== undefined ? { platforms } : {}),
+    // `--src dir…` extends the defaults for both platforms; the extension filter separates them
+    ...(src.length > 0 ? { iosDirs: [...DEFAULT_IOS_DIRS, ...src], androidDirs: [...DEFAULT_ANDROID_DIRS, ...src] } : {}),
+  });
+  const text = result.issues.length === 0
+    ? 'ok — every id is registered and referenced (01 R8)'
+    : result.issues.map((i) => `${i.severity}: ${i.rule}${i.platform !== undefined ? ` [${i.platform}]` : ''} ${i.file !== undefined ? `${i.file}${i.line !== undefined ? `:${i.line}` : ''} ` : ''}— ${i.message}`).join('\n');
+  emit(io, args, result, text);
+  return result.ok ? 0 : 1;
+}
+
+function cmdPolicyCheck(args: ParsedArgs, io: CliIo): number {
+  const repoRoot = repoRootFor(io);
+  const config = configFor(args, io);
+  // an explicit `--dir` (tests, a map outside the repo) also chooses the allowlist to check against
+  const result = policyCheck(repoRoot, str(args, 'dir') !== undefined ? { allowlist: readAllowlist(config) } : {});
+  const text = result.ok
+    ? 'ok — every MCP server is on the allowlist, pinned, secret-free and hooks stay in .claude/hooks/'
+    : result.violations.map((v) => `${v.rule}: ${v.file} — ${v.message}`).join('\n');
+  emit(io, args, result, text);
+  return result.ok ? 0 : 1;
+}
+
+function cmdIntentCriticalDiff(args: ParsedArgs, io: CliIo): number {
+  const baseRef = args.positional[0];
+  if (baseRef === undefined) throw new UsageError('intent-critical-diff needs a base ref');
+  const repoRoot = repoRootFor(io);
+  const result = intentCriticalDiff(repoRoot, baseRef);
+  // markdown is the default (the bot comment); `--markdown` is explicit, `--json` machine output
+  if (bool(args, 'json')) io.stdout(`${JSON.stringify(result, null, 2)}\n`);
+  else if (!bool(args, 'quiet')) io.stdout(`${result.markdown}\n`);
+  // 07 §7: a downgrade needs two approvals — fail so the workflow demands the second.
+  return result.downgraded.length > 0 ? 1 : 0;
+}
+
+function cmdMark(args: ParsedArgs, io: CliIo): number {
+  const recipeId = args.positional[0];
+  const status = args.positional[1];
+  if (recipeId === undefined || status === undefined) throw new UsageError('mark needs a recipe id and a status');
+  if (!(RECIPE_STATUSES as readonly string[]).includes(status)) throw new UsageError(`status ${status} is not one of ${RECIPE_STATUSES.join('|')}`);
+  const recipeFile = str(args, 'recipe-file');
+  const reviewer = str(args, 'reviewer');
+  const config = configFor(args, io);
+  return withContext(config, {}, (ctx) => {
+    const result = markRecipe(ctx, {
+      recipe_id: recipeId,
+      status: status as RecipeStatus,
+      ...(recipeFile !== undefined ? { recipe: readFileSync(absPath(io, recipeFile), 'utf8') } : {}),
+      ...(reviewer !== undefined ? { reviewer } : {}),
+      ...(bool(args, 'force') ? { force: true } : {}),
+    });
+    emit(io, args, result, `${result.recipe_id}: ${result.from ?? '(new)'} → ${result.to}${result.written ? ' (written)' : ''}`);
+    return 0;
+  });
+}
+
+function cmdMergeDriver(args: ParsedArgs, io: CliIo): number {
+  const [base, ours, theirs, real] = args.positional;
+  if (base === undefined || ours === undefined || theirs === undefined) {
+    throw new UsageError('merge-driver needs %O %A %B [%P]');
+  }
+  return runMergeDriver(absPath(io, base), absPath(io, ours), absPath(io, theirs), real !== undefined ? { realPath: real } : {});
+}
+
+function cmdMigrateId(args: ParsedArgs, io: CliIo): number {
+  const [oldId, newId] = args.positional;
+  if (oldId === undefined || newId === undefined) throw new UsageError('migrate-id needs OLD and NEW');
+  const config = configFor(args, io);
+  const result = migrateId(config, oldId, newId, bool(args, 'dry-run') ? { dryRun: true } : {});
+  emit(io, args, result, `${result.old_id} → ${result.new_id}: ${result.references} reference(s) in ${result.files_changed.length} file(s)\n${result.files_changed.map((f) => `  ${f}`).join('\n')}`);
+  return 0;
 }
 
 export const USAGE = `app-map <command> [options]

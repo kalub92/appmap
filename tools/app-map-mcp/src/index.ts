@@ -6,10 +6,20 @@
  *
  * Layer: top.
  */
-import { NotImplementedError } from './errors.ts';
+import { loadConfig } from './config.ts';
+import { startServer } from './server.ts';
+import type { RunningServer } from './server.ts';
 
+/**
+ * Start the server and resolve once it is serving. The returned promise stays resolved while
+ * the stdio transport keeps the process alive; `close()` is wired to SIGINT/SIGTERM inside
+ * `startServer` (03 §2: the ingest socket is removed on exit).
+ */
 export async function main(): Promise<void> {
-  throw new NotImplementedError('index.main');
+  const config = loadConfig(process.env);
+  const running: RunningServer = await startServer(config);
+  // nothing is printed on stdout: it is the MCP transport (docs/dev/toolchain.md)
+  void running;
 }
 
 // Only auto-run when executed directly (not when imported by tests).
