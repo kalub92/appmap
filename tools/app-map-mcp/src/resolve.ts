@@ -291,6 +291,39 @@ function middleSegment(id: string): string {
   return parts.slice(1, -1).join(' ');
 }
 
+/**
+ * Words carrying no intent signal. The LLM phrases `intent` in natural language
+ * ("save the invoice"), so these are dropped before token overlap scoring.
+ */
+const INTENT_STOPWORDS = new Set(['a', 'an', 'and', 'as', 'at', 'by', 'for', 'from', 'in', 'into', 'it', 'my', 'of', 'on', 'please', 'that', 'the', 'then', 'this', 'to', 'with']);
+
+function intentTokens(s: string): string[] {
+  return norm(s).split(' ').filter((w) => w !== '' && !INTENT_STOPWORDS.has(w));
+}
+
+/** searchable tokens of an element: its intent, its static label, and its id's middle segment */
+function elementTokens(e: ElementDef): Set<string> {
+  const out = new Set<string>();
+  for (const source of [e.intent, e.label, middleSegment(e.id)]) {
+    if (typeof source !== 'string') continue;
+    for (const w of intentTokens(source)) out.add(w);
+  }
+  return out;
+}
+
+/**
+ * Fraction of the query's meaningful words this element carries (0..1). Used only to rank the
+ * miss payload's candidates so 03 §8's "top candidates" are the closest ones, never the first
+ * five in id order.
+ */
+function intentScore(e: ElementDef, queryTokens: readonly string[]): number {
+  if (queryTokens.length === 0) return 0;
+  const hay = elementTokens(e);
+  let hits = 0;
+  for (const w of queryTokens) if (hay.has(w)) hits += 1;
+  return hits / queryTokens.length;
+}
+
 function screenOrGate(map: LoadedMap, screenId: ScreenId) {
   const file = map.screens.get(screenId) ?? map.gates.get(screenId);
   if (file === undefined) {
@@ -300,9 +333,9 @@ function screenOrGate(map: LoadedMap, screenId: ScreenId) {
 }
 
 /**
- * Look up an element on a screen by id or by `intent` (exact, then case-insensitive substring
- * over `intent`, `label`, and the id's middle segment). Returns the definition plus up to 5
- * alternatives for the miss payload.
+ * Look up an element on a screen by id or by `intent` (exact, then case-insensitive substring,
+ * then word overlap — over `intent`, `label`, and the id's middle segment). Returns the
+ * definition plus up to 5 alternatives, ranked by closeness, for the miss payload.
  */
 export function findElementDef(map: LoadedMap, screenId: ScreenId, query: { element_id?: ElementId; intent?: string }): { element?: ElementDef; candidates: ElementDef[] } {
   const file = screenOrGate(map, screenId);
@@ -329,6 +362,20 @@ export function findElementDef(map: LoadedMap, screenId: ScreenId, query: { elem
     });
     if (loose.length === 1) return { element: loose[0], candidates: [] };
     if (loose.length > 1) return { candidates: loose.slice(0, FIND_ELEMENT_ALTERNATIVES_MAX) };
+    // No substring hit: a multi-word phrase ("save the invoice") never contains-matches
+    // `save_invoice`. Score by word overlap instead; a single strictly-best element is the hit,
+    // otherwise the ranked candidates are the miss payload (03 §8 "top candidates").
+    const queryTokens = intentTokens(q.intent);
+    const scored = elements
+      .map((e, i) => ({ e, i, score: intentScore(e, queryTokens) }))
+      .filter((s) => s.score > 0)
+      .sort((a, b) => (b.score - a.score) || (a.i - b.i));
+    const best = scored[0];
+    if (best !== undefined) {
+      const runnerUp = scored[1];
+      if (runnerUp === undefined || best.score > runnerUp.score) return { element: best.e, candidates: [] };
+      return { candidates: scored.slice(0, FIND_ELEMENT_ALTERNATIVES_MAX).map((s) => s.e) };
+    }
     return { candidates: elements.slice(0, FIND_ELEMENT_ALTERNATIVES_MAX) };
   }
   throw new AppMapError(ERROR_CODES.BAD_INPUT, 'find_element needs element_id or intent', 'pass {screen_id, element_id} or {screen_id, intent}');

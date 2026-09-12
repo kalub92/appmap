@@ -315,6 +315,28 @@ describe('findElementDef / findElement (03 §8)', () => {
     assert.equal(missing.candidates[0]!.id.split('.')[0], 'invoice', 'same feature first');
   });
 
+  it('matches a natural-language intent by word overlap and ranks the candidates it returns', () => {
+    // "save the invoice" contains-matches nothing (the intent is `save_invoice`), and the save
+    // button is 6th in id order, so a first-five fallback would drop the one right answer.
+    const phrase = findElementDef(map, 'invoice_new', { intent: 'save the invoice' });
+    assert.equal(phrase.element?.id, 'invoice.save.button');
+    assert.equal(findElementDef(map, 'invoice_list', { intent: 'add a new invoice' }).element?.id, 'invoice.add.button');
+    assert.equal(findElementDef(map, 'invoice_new', { intent: 'pick the client' }).element?.id, 'invoice.client.picker');
+    // a query that overlaps several elements equally returns them ranked, not the file's first five
+    const vague = findElementDef(map, 'invoice_new', { intent: 'invoice' });
+    if (vague.element === undefined) {
+      assert.ok(vague.candidates.length > 0 && vague.candidates.length <= FIND_ELEMENT_ALTERNATIVES_MAX);
+      for (const c of vague.candidates) {
+        const words = [c.intent, c.label, c.id].filter((x): x is string => typeof x === 'string').join(' ').toLowerCase();
+        assert.match(words, /invoice/, `${c.id} should be scored, not positional`);
+      }
+    }
+    // a query matching nothing at all still yields alternatives rather than an empty payload
+    const none = findElementDef(map, 'invoice_new', { intent: 'teleport to mars' });
+    assert.equal(none.element, undefined);
+    assert.ok(none.candidates.length > 0 && none.candidates.length <= FIND_ELEMENT_ALTERNATIVES_MAX);
+  });
+
   it('errors are structured: unknown screen → not_found, empty query → bad_input', () => {
     assert.throws(() => findElementDef(map, 'nope', { element_id: 'x' }), (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.NOT_FOUND);
     assert.throws(() => findElementDef(map, 'invoice_list', {}), (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT);
