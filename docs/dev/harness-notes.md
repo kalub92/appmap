@@ -25,15 +25,41 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
   `permissionMode`, `maxTurns`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, …
 - `tools` accepts MCP patterns: `mcp__argent` (whole server) and `mcp__argent__*` (all tools of a
   server). Per-tool globs beyond that are not documented, so `.claude/agents/app-nav-replayer.md`
-  lists the tools explicitly exactly as 05 §5 does. **Argent's tool names are now confirmed**
-  against `@swmansion/argent@0.25.0` (`argent tools`, 76 tools): `gesture-tap`, `gesture-swipe`,
-  `gesture-scroll`, `keyboard` (`--text` types, `--key` presses a named key), `paste`, `open-url`,
-  `button`, `tv-remote`, `run-sequence`, `describe`, `native-describe-screen`,
-  `native-full-hierarchy`, `screenshot`, `await-ui-element`, `await-screen-idle`,
-  `launch-app`/`restart-app`/`reinstall-app`, `native-network-logs`/`view-network-logs`. Neither
-  `type_text` nor `open_url` exists — the compiler's mapping lives in
-  `tools/app-map-mcp/src/recipes/verbs.ts` (`ARGENT_VERBS`), which the old regexes missed so
-  `keyboard` and `open-url` observations were dropped from compiled recipes (issue #9).
+  lists the tools explicitly exactly as 05 §5 does. Both files named `tap`/`type_text`/`open_url`/
+  `swipe` until issue #21 — i.e. the replayer subagent as shipped could not tap, type, swipe or
+  open a deep link — and both now carry the real names below. `verbs.test.ts` pins them to
+  `ARGENT_VERBS` so the two cannot drift apart again.
+- **Argent's tool names are confirmed** against `@swmansion/argent@0.25.0` (`argent tools`,
+  76 tools). This table is what issues #9 and #10 depend on:
+
+  | purpose | actual tool name |
+  |---|---|
+  | tap | `gesture-tap` |
+  | type text | `keyboard` (`--text` types; `--key` presses a named key) |
+  | paste text | `paste` |
+  | swipe | `gesture-swipe` — flags are `fromX`/`fromY`/`toX`/`toY`, **not** `startX`/`startY`/`endX`/`endY` |
+  | scroll (**Chromium only**) | `gesture-scroll` |
+  | open a URL / deep link | `open-url` |
+  | launch / restart | `launch-app`, `restart-app`, `reinstall-app` |
+  | read the tree | `describe`, `native-describe-screen`, `native-full-hierarchy` |
+  | screenshot | `screenshot` |
+  | wait | `await-ui-element`, `await-screen-idle` |
+  | hardware button | `button` |
+  | batch several actions | `run-sequence` |
+  | network log | `native-network-logs`, `view-network-logs` |
+
+  Neither `type_text` nor `open_url` exists. Note the **hyphens**: the pre-#9 compile regexes
+  assumed underscores, so `keyboard` and `open-url` observations were dropped from compiled
+  recipes in silence (issue #9). The compiler's mapping now lives in
+  `tools/app-map-mcp/src/recipes/verbs.ts` (`ARGENT_VERBS`). `normalizeVerb` folds `-` to `_`
+  before the lookup, so the *classifier* treats `open-url` and `open_url` alike — but the
+  **registered** spelling is hyphenated, and that is the only spelling a `tools:` frontmatter
+  entry or a `--` flag may use, because the harness matches those literally.
+- **Every Argent tool requires `--udid`.** There is no implicit "booted device".
+- **`run-sequence` performs N interactions in one tool call**, so one observation can correspond
+  to several steps. That is exactly why `ARGENT_VERBS` classifies it `batch` and the compiler
+  rejects it with a warning rather than guessing: an observation carries one screen pair and one
+  element (02 §7), so the per-step postconditions of 04 §3.6 cannot be reconstructed from it.
 - **`native-describe-screen` reports no focus and no enabled flag.** Each element carries exactly
   `frame`, `normalizedFrame`, `normalizedTapPoint`, `tapPoint`, `traits`, `value`, `identifier`,
   `viewClassName`; `traits` carries `button`, `staticText`, `header`, `image`, `selected` and
@@ -104,7 +130,7 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
 
 ## 6. Things to confirm on first real run
 
-- Whether Argent reports the running build (03 §13) — otherwise set `APP_MAP_BUILD`. (Its tool names are confirmed: see §2.)
+- Whether Argent reports the running build (03 §13) — otherwise set `APP_MAP_BUILD`. (Its tool names are **confirmed** against the first real integration: see the §2 table, issues #9/#21.)
 - Whether `PostToolUse` can rewrite the driver's tool output (05 §8) — the docs list `updatedInput` for
   PreToolUse only; rely on the driver's snapshot options.
 - Maestro's install script honours `MAESTRO_VERSION` (pinned to 2.10.0 in the workflow; the package

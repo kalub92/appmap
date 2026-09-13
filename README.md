@@ -44,6 +44,16 @@ replays with no screenshots, and once compiled to a Maestro flow, with no model 
 Only Node is needed to read, validate or lint the map; that works on a bare clone with no app, device,
 Maestro or driver.
 
+`node:sqlite` is still flagged experimental on Node 22, so any invocation that opens the cache would print
+`ExperimentalWarning: SQLite is an experimental feature` to **stderr**. `bin/app-map` passes
+`--disable-warning=ExperimentalWarning` on both its branches — built `dist/` and TypeScript source — and so
+do the `test` npm scripts, so neither the CLI below nor a test run emits it. That matters because hooks
+relay CLI stderr into the session (`docs/dev/harness-notes.md` §4), so one warning per invocation would be
+one warning per tool call in the model's context. The line survives in exactly one place, on purpose: the
+`.mcp.json` server is a bare `node …/dist/index.js` whose argv is pinned for review in
+`app-map/policy/mcp-allowlist.yaml`, so it lands once in that server's own stderr log and never on the
+stdout MCP transport (issue #21, [toolchain](docs/dev/toolchain.md)).
+
 ## Quick start
 
 ```sh
@@ -93,7 +103,17 @@ Recipes: create_invoice
 
 Under 600 tokens, injected by the `SessionStart` hook before the model's first turn. The `warning:` is
 genuine on a fresh clone — `app-map/.local/` is git-ignored, so the app's static string table is not there
-until you export it, and the server says so rather than degrading silently.
+until you export it, and the server says so rather than degrading silently. Note that
+`scripts/app-map/strings-export.sh` reads string *catalogs* (`.xcstrings`, `.strings`, `.stringsdict`,
+Android `values*/strings.xml`): a SwiftUI app whose copy is inline `Text("…")` literals has none, so the
+table is legitimately hand-authored — one static string per line, sorted, unique, LF. Gate signatures need
+that by hand regardless, because a gate matching OS dialog copy (`Open`, `Cancel`) is matching strings that
+appear in no app catalog (issue #21).
+
+The `invoice.list.table` row below is the UIKit/Compose case, where a `UITableView`/`LazyColumn` *is* an
+accessibility element. A SwiftUI `List`, `Section` or `ForEach` is **not**, so it never appears in a capture
+and must not be registered — address the row instead (`select {cell, match}`), and `validate` warns about a
+registered `kind: list` element no screen file records (01 R4, issue #19).
 
 Asking for one screen (`get_screen`) returns fixed-width text, not JSON — id, role, static label or
 `[dynamic]` for text that changes per run, and where each element leads. Enough to act without a screenshot:
@@ -118,7 +138,7 @@ recipes  create_invoice
 {"mode":"guided","run_id":"run_mtygq68m_mknwab","recipe":"create_invoice","version":3,"step":{"id":"s0","action":"open_link","url":"appmap://invoice_new?fixture=logged_in","expect":{"screen":"invoice_new"}},"text":"step s0 open_link appmap://invoice_new?fixture=logged_in expect screen invoice_new"}
 
 >>> report_step {"run_id":"run_mtygq68m_mknwab","step_id":"s0","ok":true}
-{"run_id":"run_mtygq68m_mknwab","status":"ok","step":{"id":"s1","action":"tap","element":"invoice.amount.field","expect":{"focused":"invoice.amount.field"},"target":{"by":"id","id":"invoice.amount.field"},"resolved":{"strategy":"a11y_id","confidence":1,"degraded":false}},"text":"step s1 tap invoice.amount.field via id \"invoice.amount.field\" (a11y_id 1.00) expect focused invoice.amount.field"}
+{"run_id":"run_mtygq68m_mknwab","status":"ok","step":{"id":"s1","action":"tap","element":"invoice.amount.field","expect":{"visible":["invoice.amount.field"]},"target":{"by":"id","id":"invoice.amount.field"},"resolved":{"strategy":"a11y_id","confidence":1,"degraded":false}},"text":"step s1 tap invoice.amount.field via id \"invoice.amount.field\" (a11y_id 1.00) expect visible invoice.amount.field"}
 
 ... s1 tap, s2 type "50", s3 tap the picker, s4 select "Acme Corp" — then the step that matters ...
 
@@ -133,6 +153,12 @@ recipes  create_invoice
 > driver call is a `record_observation` of a committed accessibility-tree fixture, the technique
 > `src/test/guided.test.ts` uses, and the 07 §3 build probe is a shell stub. Server, map, recipe, locator
 > resolution and run state machine are real. `run_id` is minted per run, so yours will differ.
+
+`s1` asserts `expect.visible`, not `expect.focused`: Argent's iOS `native-describe-screen` reports no
+focus flag of any kind, so a focus postcondition can never be satisfied there however well the tap worked.
+`validate` warns on an `expect.focused` in an `ios` recipe and the compiler writes `visible` instead; the key
+stays in the schema because Maestro's Android hierarchy *does* carry `focused`, which is what the Android
+pilot still asserts (04 §10, issue #18).
 
 Six steps, no screenshots. Each reply carries the *next* step already resolved to a driver-ready `target`
 plus the cascade rung that won, and a `text` rendering of it capped at 120 tokens. `verified: true` comes

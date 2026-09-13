@@ -1,6 +1,9 @@
 #!/usr/bin/env sh
 # app-map CLI shim. Prefers the built dist/; falls back to running TypeScript source
 # directly (Node ≥ 22.18 type stripping) so hooks work on a fresh clone before `npm run build`.
+# --disable-warning=ExperimentalWarning hides Node's `node:sqlite` ExperimentalWarning, which is
+# printed to stderr on every invocation otherwise. Hooks relay CLI stderr into the session
+# (docs/dev/harness-notes.md §4), so it must stay on BOTH branches (issue #21, docs/dev/toolchain.md).
 DIR=$(cd "$(dirname "$0")" && pwd)
 if [ -f "$DIR/../dist/cli.js" ]; then
   exec node --disable-warning=ExperimentalWarning "$DIR/../dist/cli.js" "$@"

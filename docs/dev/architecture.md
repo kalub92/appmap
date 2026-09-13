@@ -103,7 +103,7 @@ SRV  guided.startGuidedRun: recipe eligible? params ok? probe(07 §3) debug+sand
      expandSteps → [s0 open_link entry.deep_link expect{screen:invoice_new}, s1…s5]
      db.insertRun(active, session, current_step s0, start_seq = last_seq = session.last_seq)
      → {run_id, step: toRunStep(s0)}                                    (≤120 tokens, format.formatRunStep)
-LLM  mcp__argent__open_url(...)            → hook records observation seq N+1
+LLM  mcp__argent__open-url(...)            → hook records observation seq N+1
 LLM  report_step(run_id, s0, ok:true)
 SRV  guided.reportStep: obs = newest of db.listObservations(run.session, {fromSeq: run.last_seq+1})
      (never another session; none → fallback no_observation); run.last_seq = obs.seq
@@ -357,8 +357,9 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 25. **`summary` text format is fixed** (03 §8 lists content, not layout) — see format.ts.
 26. **`intent_critical` absent means false** for the agreement rule (02 §10.6), in ids, screen
     elements and recipe steps alike.
-27. **`route` identification signal** comes from the `open_url` input of the observation (Argent
-    does not report routes); `tree.route` is honored when a driver provides it.
+27. **`route` identification signal** comes from the `url` input of the observation — the driver's
+    deep-link call, `open-url` on Argent (`observe.ts` reads `input.url`; Argent does not report
+    routes); `tree.route` is honored when a driver provides it.
 28. **Role vocabulary** is the closed `ROLES` list (24 roles); platform types map onto it,
     unknown → `other`. `tab` is derived (button inside a tab bar).
 29. **`text_present` expectation** compares against node `label` equality (scrubbed trees have
@@ -614,6 +615,20 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     secondary one — because decision 57's write guard blocks on any unclassified warning and
     would otherwise refuse EVERY iOS recompile of a recipe containing a `type`. Issue #18.
 
+63. **The harness's Argent tool list is pinned to `ARGENT_VERBS`, not to spec prose.** `tools` in a
+    subagent frontmatter has no per-tool glob (harness-notes §2), so `.claude/agents/
+    app-nav-replayer.md` must name Argent's tools one by one — and it named `tap`, `type_text`,
+    `open_url` and `swipe`, none of which `@swmansion/argent@0.25.0` registers. The replayer as
+    shipped could therefore not tap, type, swipe or open a deep link, and 05 §5 carried the same
+    list because it quotes the file verbatim. Both now name the confirmed hyphenated tools
+    (`gesture-tap`, `keyboard`, `open-url`, `gesture-swipe`) — exactly the four that carry the four
+    02 §6 step verbs; `select` replays as a tap on the matched row (decision 60), so it needs no
+    fifth. `verbs.test.ts` asserts every `mcp__argent__*` grant is a key of `ARGENT_VERBS`, is
+    spelled with hyphens (`normalizeVerb` folds `-` to `_` for the classifier, so `open_url` would
+    otherwise pass while never matching — the harness compares `tools:` entries literally), and
+    classifies as a `StepVerb`; and that 05 §5 still quotes the file's `tools:` line byte for byte,
+    because fixing one file and forgetting the other is how both came to be wrong. Issues #9, #21.
+
 ## 8. How to implement your module
 
 Tests live in `src/test/<module>.test.ts` (node:test, `node --disable-warning=ExperimentalWarning
@@ -723,7 +738,9 @@ recipe equal to `app-map/ios/recipes/create_invoice.yaml` modulo `matches`, `des
 unparameterized literal → `unparameterized_value`; `to_seq: 5` slices to s1–s2;
 `verbs.test.ts` — every confirmed `@swmansion/argent@0.25.0` tool classifies to its `VerbKind`,
 `open-url` == `open_url`, an untabled driver still resolves `type_text`/`tap` and an untabled tool
-is `unknown`; `compile.test.ts` also proves a `mcp__argent__keyboard` `type` step survives the
+is `unknown`, plus the harness grants: every `mcp__argent__*` tool in `.claude/agents/
+app-nav-replayer.md` is an `ARGENT_VERBS` key, hyphen-spelled and a `StepVerb` covering all four
+of them, and 05 §5 quotes that `tools:` line verbatim (decision 63, issue #21); `compile.test.ts` also proves a `mcp__argent__keyboard` `type` step survives the
 compile and that an unknown verb lands in `warnings` instead of vanishing (issue #9), and that a
 dynamic-cell tap on a screen declaring no dynamic list compiles to `select {cell, match}`,
 parameterizes and serializes canonically while the list form still wins where a list exists

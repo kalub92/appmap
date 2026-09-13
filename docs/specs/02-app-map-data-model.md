@@ -187,7 +187,7 @@ Never committed. Retention: 14 days, then deleted by the server on start.
 ```jsonl
 // app-map/.local/trajectories/<session>.jsonl — one observation per driver tool call
 {"ts":"2026-09-10T17:02:11Z","session":"…","seq":12,"task":"create invoice for $50 for Acme",
- "tool":"mcp__argent__tap","input":{"id":"invoice.add.button"},
+ "tool":"mcp__argent__gesture-tap","input":{"id":"invoice.add.button"},
  "screen_before":"invoice_list","screen_after":"invoice_new",
  "signature_after":{"marker":"screen.invoice_new","structural_hash":"sha1:…","required_present":1.0},
  "snapshot":{"…scrubbed compact tree…"},"ok":true,"latency_ms":420}

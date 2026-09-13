@@ -95,13 +95,15 @@ Verify field names (`tool_response`, `hookSpecificOutput`, `PostToolUseFailure`)
 ---
 name: app-nav-replayer
 description: Replays a known app-map recipe step by step on the simulator. Use for any task that match_recipe resolves.
-tools: mcp__app-map__run_recipe, mcp__app-map__report_step, mcp__app-map__identify_screen, mcp__argent__tap, mcp__argent__type_text, mcp__argent__open_url, mcp__argent__swipe
+tools: mcp__app-map__run_recipe, mcp__app-map__report_step, mcp__app-map__identify_screen, mcp__argent__gesture-tap, mcp__argent__keyboard, mcp__argent__open-url, mcp__argent__gesture-swipe
 model: haiku
 ---
 You execute exactly the step the app-map server returns, then call report_step. You never take screenshots, never call get_screen, and never improvise. If report_step returns fallback, stop and return the fallback payload to the caller.
 ```
 
-The main agent delegates matched tasks here; exploration stays on the main model. This is the model-routing lever: cheap model for replay, large model for recovery. Confirm the exact tool names Argent registers and whether the `tools` field accepts wildcards; if not, list explicitly as above.
+The main agent delegates matched tasks here; exploration stays on the main model. This is the model-routing lever: cheap model for replay, large model for recovery.
+
+The tool names above are the ones `@swmansion/argent@0.25.0` actually registers, confirmed against `argent tools` (issues #9, #21) — they are **hyphenated**, and neither `tap`, `type_text`, `open_url` nor `swipe` exists. They are exactly the four tools that carry the four 02 §6 step verbs (`gesture-tap` → `tap`, `keyboard` → `type`, `open-url` → `open_link`, `gesture-swipe` → `swipe`); a `select` step replays as a tap on the matched row (04 §3.3, issue #19), so it needs no fifth tool. The `tools` field accepts `mcp__argent` (whole server) and `mcp__argent__*` (all of a server's tools) but no per-tool glob, so the list stays explicit — and narrow, per §6 rule 6. `tools/app-map-mcp/src/recipes/verbs.ts` (`ARGENT_VERBS`) is the machine-readable copy of the same table, and `verbs.test.ts` pins this block and the subagent file to it so neither can drift back to a name the driver does not answer to.
 
 ## 6. Token rules for exploration
 
@@ -114,7 +116,7 @@ Enforced by the skill and, where the harness allows, by hooks:
 5. Do not paste trees back into `record_observation` when hooks are active; the hook already recorded them.
 6. Tool-definition overhead: the app-map server registers ≤13 tools with short descriptions; keep Argent's tool surface to what the task needs if the harness supports deferred tool loading.
 
-Optional (phase 2): a PreToolUse hook on `mcp__argent__tap` that consults `find_element` and rewrites a text-based or coordinate-based tap into the element's `a11y_id` via `updatedInput`. Only if measurement (08) shows the LLM still guesses locators on known screens.
+Optional (phase 2): a PreToolUse hook on `mcp__argent__gesture-tap` that consults `find_element` and rewrites a text-based or coordinate-based tap into the element's `a11y_id` via `updatedInput`. Only if measurement (08) shows the LLM still guesses locators on known screens.
 
 ## 7. Acceptance criteria
 

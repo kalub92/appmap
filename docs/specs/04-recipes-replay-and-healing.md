@@ -44,7 +44,7 @@ Protocol between the LLM (or the `app-nav-replayer` subagent, 05 §5) and the se
 LLM   run_recipe(create_invoice, {amount: 50, client: Acme}, mode: guided)
 SRV   → {run_id, step: {id: s0, action: open_link, url: appmap://invoice_new?fixture=logged_in,
                         expect: {screen: invoice_new}}}
-LLM   argent.open_url(...)                     # PostToolUse hook records observation
+LLM   argent.open-url(...)                     # PostToolUse hook records observation
 LLM   report_step(run_id, s0, ok: true)
 SRV   verifies last observation against expect:
         ok   → {step: s1 …}

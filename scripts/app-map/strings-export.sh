@@ -7,6 +7,20 @@
 # sorted, unique, LF. Newlines inside a string are written as the two characters "\n".
 # The file is git-ignored (app-map/.local); regenerate at build time. Pure python3, no packages.
 #
+# HAND-AUTHORING (issue #21). This extracts from string CATALOGS only. A SwiftUI app whose copy is
+# inline literals — `Text("Favorites")`, `Button("Try Again")` — has no .xcstrings/.strings/
+# .stringsdict at all, so it gets an empty table and `app-map summary` keeps advising you to run
+# this script forever. That is expected, not a bug: the table format is plain, so write it by hand.
+# One static string per line, sorted, unique, LF, UTF-8 (the reader is `readStaticStrings` in
+# tools/app-map-mcp/src/yaml/load.ts: it splits on LF and drops empty lines — nothing else).
+# Gate signatures need hand-authoring even when catalogs DO exist: a gate that matches OS dialog
+# copy (02 §4.2) — `Open` and `Cancel` from the iOS "Open in <app>?" sheet, say — is matching
+# strings that appear in no app catalog, and `validate` rule 8 warns about every label missing
+# from the table (07 §2.1). Add those by hand or the warning is permanent.
+# An EMPTY table is worse than a missing one: rule 8 fires whenever the table is present, so
+# `--platform ios` with no catalogs writes strings.ios.txt, silences the summary warning, and then
+# warns about every title and label in the map. Without --platform, nothing is written (exit 1).
+#
 # usage: scripts/app-map/strings-export.sh [--platform ios|android] [--out-dir DIR] PATH...
 #        (platform is inferred per file when --platform is omitted; both files may be written)
 set -euo pipefail
@@ -14,7 +28,7 @@ set -euo pipefail
 PLATFORM=""
 OUT_DIR=""
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # Consume options; re-append positional PATH arguments to "$@" (POSIX sh, no arrays).
 count=$#

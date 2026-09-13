@@ -17,7 +17,7 @@ Screenshots or image paths; text field values; list/cell/table content; names, e
 ### 2.3 Scrubber rules (03 §7 implements)
 1. Drop every `value` attribute unconditionally.
 2. Drop all text under any container marked `dynamic: true` in `ids.yaml`.
-3. Keep `label` only if (a) the node has a registered id with `dynamic: false`, or (b) the label exactly matches an entry in the app's static string table snapshot (`app-map/.local/strings.<platform>.txt`, generated from the string catalogs at build time, git-ignored).
+3. Keep `label` only if (a) the node has a registered id with `dynamic: false`, or (b) the label exactly matches an entry in the app's static string table snapshot (`app-map/.local/strings.<platform>.txt`, generated from the string catalogs at build time, git-ignored). The snapshot is generated from the catalogs **where they exist and hand-authored where they do not**: `scripts/app-map/strings-export.sh` reads `.xcstrings`/`.strings`/`.stringsdict` and Android `values*/strings.xml`, so a SwiftUI app whose copy is inline `Text("…")` literals yields an empty table. The format is plain (one string per line, sorted, unique, LF), so it may be written by hand. Copy that a **gate** signature matches (02 §4.2) must be added by hand in any case when it belongs to an OS dialog (`Open`, `Cancel` from the iOS "Open in <app>?" sheet): it appears in no app catalog, and rule 8 warns about every label missing from the table (issue #21).
 4. Regex deny list applied to every surviving string: email, E.164/US phone, 13–19 digit runs, currency patterns (`[$€£]\s?\d`), IBAN-like, SSN-like. Any hit → string replaced by `[redacted]` and the observation flagged `scrub_hit` for review of the rule set.
 5. Fixture parameter values (e.g. the test client name) are treated as data, not copy: they are never stored as literals in recipes — the compiler parameterizes or fails (04 §3.4).
 6. `app-map validate` rule 8 re-sweeps committed YAML as a backstop.
@@ -74,4 +74,4 @@ Screenshots or image paths; text field values; list/cell/table content; names, e
 ## 9. Open questions
 
 - Whether the org's policy permits proprietary binaries in developer tooling at all; if not, the driver becomes Apple's Xcode MCP or mobile-mcp from the start.
-- Whether static-string matching (2.3.3) is too strict for screens with computed labels ("3 invoices"); allow a per-element `label_regex` in `ids.yaml` for such cases.
+- Whether static-string matching (2.3.3) is too strict for screens with computed labels ("3 invoices"); allow a per-element `label_regex` in `ids.yaml` for such cases. The first real integration hit the adjacent problem — an app with no string catalogs at all, plus gate copy owned by the OS — and answered that half by hand-authoring the snapshot (2.3.3, issue #21).

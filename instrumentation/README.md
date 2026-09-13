@@ -74,14 +74,14 @@ package targets iOS 16 / macOS 13). The UIKit call installs the equivalent 1pt
 `AppMapScreenMarkerView` subview and is idempotent: calling it from both `viewDidLoad` and
 `viewWillAppear` retargets the marker rather than stacking a second one.
 
-Exactly one marker is visible per full-screen state; sheets and modals carry their own. Tooling does
-not rely on that — a pushed screen leaves the covered screen's marker in the accessibility tree, so
-app-map prefers the **deepest** marker (01 R3). Since every marker is now a 1pt box at its root's
-top-leading corner, two stacked screens whose roots are both flush with the top (a
-`fullScreenCover`, a `TabView` swap) report markers with an *identical* frame, so `tree.ts` never
-collapses two elements carrying different identifiers even when the rest of their geometry, label
-and value match, and on an exact `y` tie the later element in capture order — the screen just
-presented — wins.
+Each full-screen state marks itself exactly once; sheets and modals carry their own. That is a rule
+about what a screen publishes, not about what a capture contains — a pushed screen leaves the
+covered screen's marker in the accessibility tree, so app-map prefers the **deepest** marker
+(01 R3). Since every marker is now a 1pt box at its root's top-leading corner, two stacked screens
+whose roots are both flush with the top (a `fullScreenCover`, a `TabView` swap) report markers with
+an *identical* frame, so `tree.ts` never collapses two elements carrying different identifiers even
+when the rest of their geometry, label and value match, and on an exact `y` tie the later element
+in capture order — the screen just presented — wins.
 
 Cells of one kind share an id (`invoice.list.cell`); containers with data-driven content are
 `dynamic: true` in `ids.yaml` so the scrubber drops their text (07 §2.3).
