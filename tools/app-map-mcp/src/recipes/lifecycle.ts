@@ -151,7 +151,7 @@ import type { AppMapContext } from '../context.ts';
 import type { RecipeStats } from '../store/db.ts';
 import { RECOMPILE_DIRTY_PREFIX } from '../store/db.ts';
 import type { BuildNumber, Condition, EdgeAction, ElementDef, ElementId, Expect, MarkRecipeInput, MarkRecipeResult, MarkScreenInput, MarkScreenResult, RecipeFile, RecipeId, RecipeStatus, RecipeStep, RunRecord, ScreenFile, ScreenId, ScreenStatus, StepId } from '../types.ts';
-import { RECIPE_STATUSES, SCREEN_STATUSES, edgeElement, now, screenIdOfDeepLink, stepElement } from '../types.ts';
+import { RECIPE_STATUSES, SCREEN_STATUSES, edgeElement, now, screenIdOfDeepLink, selectTarget, stepElement } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { schemaDir } from '../paths.ts';
 import { crossReferenceIssues } from '../validate.ts';
@@ -314,7 +314,9 @@ export function stepIdentity(step: RecipeStep): string {
   switch (step.action) {
     case 'tap': return `tap:${step.element}`;
     case 'type': return `type:${step.element}`;
-    case 'select': return `select:${step.list}`;
+    // both `select` forms have one identity per element they address (issue #19): a step that
+    // recompiles from `list` to `cell` is a DIFFERENT step, and 04 §8's guard must see that.
+    case 'select': return `select:${selectTarget(step)}`;
     case 'swipe': return `swipe:${step.direction}:${step.element ?? '-'}`;
     case 'open_link': return `open_link:${step.url}`;
     case 'wait_for': return `wait_for:${step.expect.screen ?? '-'}`;

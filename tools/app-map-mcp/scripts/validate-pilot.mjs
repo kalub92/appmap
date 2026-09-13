@@ -134,7 +134,8 @@ for (const platform of platforms) {
       for (const id of [x.focused, ...(x.visible ?? []), ...(x.not_visible ?? [])].filter(Boolean)) if (!elementIds.has(id)) errs.push(`${where}: ${id} not in ids.yaml`);
     };
     for (const st of doc.steps) {
-      for (const id of [st.element, st.list].filter(Boolean)) if (!elementIds.has(id)) errs.push(`${st.id}: ${id} not in ids.yaml`);
+      // `list` and `cell` are the element keys of the two `select` forms (issue #19)
+      for (const id of [st.element, st.list, st.cell].filter(Boolean)) if (!elementIds.has(id)) errs.push(`${st.id}: ${id} not in ids.yaml`);
       if (st.gate && !gateIds.has(st.gate)) errs.push(`${st.id}: gate ${st.gate} unknown`);
       const el = st.element ? elementIds.get(st.element) : undefined;
       if (el && (el.intent_critical === true) !== (st.intent_critical === true)) errs.push(`${st.id}: intent_critical must mirror ids.yaml for ${st.element}`);

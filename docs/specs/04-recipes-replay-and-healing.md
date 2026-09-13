@@ -18,7 +18,7 @@ Turn one successful exploration into a recipe that replays without the LLM, keep
 
 1. **Slice** observations from task start to the first observation where the LLM's `report_task(ok: true)` or a `verify`-satisfying screen appears.
 2. **Collapse backtracking**: remove `A → B → A` loops where nothing was typed in `B`. Remove repeated identical taps.
-3. **Translate** each observation to a step: tap on element id → `tap`; text entry → `type` on the focused element id; tap on a `dynamic` cell → `select` with `match.text` bound to the typed/selected value; `openLink` → `open_link`.
+3. **Translate** each observation to a step: tap on element id → `tap`; text entry → `type` on the focused element id; tap on a `dynamic` cell → `select` with `match.text` bound to the typed/selected value — on the enclosing `dynamic` list when the screen declares one, otherwise on the cell itself (`select {cell, match}`), because a SwiftUI list container is not an accessibility element and no list id can ever have been captured (01 R4); `openLink` → `open_link`.
 4. **Parameterize**: any typed or selected value that string-matches a declared `params` argument becomes `{param}`. Values that match nothing stay literal only if they are static copy; otherwise compilation fails with `unparameterized_value` and the LLM is asked to declare the param.
 5. **Entry optimization**: if the first screen where a step is taken has a deep link, replace the leading navigation steps with `entry.deep_link` and keep the navigation as `fallback_path`.
 6. **Postconditions**: each step's `expect` is `screen: <screen_after>` when the screen changed, else `focused`/`visible` inferred from the next observation.
@@ -81,6 +81,7 @@ Rules:
 | `tap element` | `- tapOn: { id: "<a11y_id>" }` (regex form when the locator is `role_label` with `label_regex`) |
 | `type element text` | `- tapOn: { id }` then `- inputText: "<text>"` |
 | `select list match.text` | `- scrollUntilVisible: { element: { text: "<text>" } }` then `- tapOn: { text: "<text>" }` |
+| `select cell match.text` | the same two commands — neither form addresses the container, so both export identically |
 | `swipe` | `- swipe: { direction, duration }` |
 | `dismiss_gate g` | `- runFlow: { when: { visible: { id: "<gate marker or label regex>" } }, commands: [ - tapOn: { id: "<dismiss>" } ] }` — emitted before every step that lists `g` |
 | `expect screen s` | `- extendedWaitUntil: { visible: { id: "screen.<s>" }, timeout: 10000 }` |

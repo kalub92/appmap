@@ -86,6 +86,30 @@ presented — wins.
 Cells of one kind share an id (`invoice.list.cell`); containers with data-driven content are
 `dynamic: true` in `ids.yaml` so the scrubber drops their text (07 §2.3).
 
+**Do not give a SwiftUI `List`, `Section` or `ForEach` an id** (01 R4, issue #19). They are not
+accessibility elements — the same reason the screen *container* alone was invisible above — so the
+container never reaches the driver and an id registered for it is dead weight: it can never be
+observed, never resolved, and a recipe step written against it can never run. `app-map validate`
+warns about a registered `kind: list` element that no screen file has ever recorded, which is what
+that mistake looks like from the map's side. `invoice.list.table` in the pilot is a UIKit/Compose
+pattern (a `UITableView`/`LazyColumn` IS an element); on SwiftUI there is nothing to register.
+
+Worse, `.appMapID` on a `Section` does not just fail to register the container — it **overwrites
+the rows**. SwiftUI propagates `accessibilityIdentifier` from a container to each child, so every
+row reports the section's id and the row id disappears from the tree:
+
+```swift
+Section("Characters (\(people.count))") {
+    ForEach(people) { person in
+        NavigationLink(value: person) { Text(person.name) }
+            .appMapID(AppMapID.Element.filmDetailCharacterCell)    // the row id — put it HERE
+    }
+}
+// .appMapID(AppMapID.Element.filmDetailCharactersList)            // ← never: it clobbers every row
+```
+
+To pick a row, a recipe names the ROW id and matches its label — `select {cell: film.detail.character.cell, match: {text: "{name}"}}` (04 §3.3) — which needs no container id at all.
+
 ## 4. Register routes for the router export (01 R6)
 
 Register every screen once, at launch (iOS: `App.init` / `didFinishLaunching`; Android:
@@ -251,6 +275,12 @@ only moves the feedback earlier — it is never the only gate.
 
 ## Answered
 
+- *Can a SwiftUI `List`/`Section` container carry an app-map id, so a recipe can `select` within
+  it?* **No** (issue #19). The container is not an accessibility element, so no capture ever
+  contains it and no `select {list, …}` written against it can resolve; five such ids were
+  registered in the first real integration and deleted again unused. And an id applied to a
+  `Section` propagates down and overwrites the row ids. Put ids on rows and select by row id plus
+  match text (§3); `validate` now warns about a `kind: list` id no screen file has recorded.
 - *Do SwiftUI containers with `.accessibilityElement(children: .contain)` reach the driver, and do
   they swallow child taps?* They do **not** swallow child taps — every element id is reported and
   tappable — but the container itself never reaches the driver (issue #15). The iOS simulator's

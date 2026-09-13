@@ -94,6 +94,7 @@ Only one marker may be visible at a time for a full-screen state; sheets and mod
 
 - Every interactive element (button, field, toggle, tab, picker, link, cell) and every form label carries an id from the registry.
 - List cells of the same kind share one id (`invoice.list.cell`); index disambiguates at runtime.
+- A list or section **container** carries an id only where it is itself an accessibility element (a UIKit table/collection, a Compose lazy list). SwiftUI's `List`, `Section` and `ForEach` are not — like the R3 screen container they never reach the driver at all — so nothing is registered for them and the ROW id is the addressable thing: a recipe picks a row with `select {cell, match}` (04 §3.3), never by naming a container that no capture contains. Putting an id on a `Section` is worse than useless: SwiftUI propagates `accessibilityIdentifier` down to every child, so each row reports the container id and the row id vanishes from the tree.
 - Containers whose content is data-driven are declared `dynamic: true` in the registry. The scrubber (07) drops their text; the signature (02) excludes them.
 
 ### R5 — Test-only deep links

@@ -190,6 +190,9 @@ describe('recompileCovers / stepIdentity — the 04 §8 coverage rule (issue #13
   it('identity is the action plus the one thing the step acts on, never the data it carries', () => {
     assert.equal(stepIdentity({ id: 's1', action: 'tap', element: 'invoice.save.button' }), 'tap:invoice.save.button');
     assert.equal(stepIdentity({ id: 's1', action: 'select', list: 'client.picker.list', match: { text: 'Acme' } }), 'select:client.picker.list');
+    // both `select` forms identify by the element they address, so a step that moves from the
+    // container to the row is a DIFFERENT step and 04 §8's guard sees the change (issue #19)
+    assert.equal(stepIdentity({ id: 's1', action: 'select', cell: 'client.picker.cell', match: { text: 'Acme' } }), 'select:client.picker.cell');
     assert.equal(stepIdentity({ id: 's1', action: 'dismiss_gate', gate: 'push_permission' }), 'dismiss_gate:push_permission');
     assert.equal(stepIdentity({ id: 's1', action: 'open_link', url: 'appmap://invoice_new' }), 'open_link:appmap://invoice_new');
     assert.equal(stepIdentity({ id: 's1', action: 'swipe', direction: 'up' }), 'swipe:up:-');

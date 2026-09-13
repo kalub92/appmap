@@ -30,7 +30,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { AppMapContext } from './context.ts';
 import type { AnyTree, BuildNumber, DriftReason, DriftReport, DriftScreenResult, DriftStatus, ElementId, LoadedMap, RouterExport, ScreenFile, ScreenId } from './types.ts';
-import { DEEP_LINK_REGEX } from './types.ts';
+import { DEEP_LINK_REGEX, stepElement } from './types.ts';
 import type { ExecFn, HierarchyProvider } from './recipes/headless.ts';
 import { defaultExec, defaultHierarchy } from './recipes/headless.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
@@ -95,7 +95,7 @@ export function ciGateScreens(map: LoadedMap): Set<ScreenId> {
     for (const s of recipe.entry?.fallback_path ?? []) if (map.screens.has(s)) out.add(s);
     for (const step of recipe.steps ?? []) {
       if (step.expect?.screen) out.add(step.expect.screen);
-      const elementId = 'element' in step && typeof step.element === 'string' ? step.element : step.action === 'select' ? step.list : undefined;
+      const elementId = stepElement(step);
       if (elementId) for (const ref of map.elements.get(elementId) ?? []) if (map.screens.has(ref.screen)) out.add(ref.screen);
     }
     if (recipe.verify?.screen) out.add(recipe.verify.screen);

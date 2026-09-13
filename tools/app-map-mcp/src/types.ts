@@ -381,7 +381,21 @@ interface StepBase {
 export interface StepTap extends StepBase { action: 'tap'; element: ElementId }
 /** `text` is literal static copy or a `{param}` slot */
 export interface StepType extends StepBase { action: 'type'; element: ElementId; text: string }
-export interface StepSelect extends StepBase { action: 'select'; list: ElementId; match: { text: string } }
+/**
+ * `select` picks one row out of repeated content (04 §3.3) and comes in two forms, distinguished
+ * by the element the step names:
+ *  - `list`: the row is chosen WITHIN a container that is itself an accessibility element (a
+ *    UIKit table/collection, a Compose lazy list). The original form.
+ *  - `cell`: every row carries the SAME registered id (01 R4) and the row is chosen by its label.
+ *    SwiftUI's `List`/`Section`/`ForEach` are not accessibility elements, so the container never
+ *    reaches the driver at all and no list id can ever be registered for it (01 R4, issue #19) —
+ *    this is the only form such a screen can express, and it is what 04 §3.3's "tap on a dynamic
+ *    cell → `select` with `match.text`" describes.
+ * Both carry the same `match.text`; `selectTarget` is the one accessor for "which element".
+ */
+export interface StepSelectInList extends StepBase { action: 'select'; list: ElementId; match: { text: string } }
+export interface StepSelectCell extends StepBase { action: 'select'; cell: ElementId; match: { text: string } }
+export type StepSelect = StepSelectInList | StepSelectCell;
 export interface StepSwipe extends StepBase { action: 'swipe'; direction: SwipeDirection; element?: ElementId; duration_ms?: number }
 export interface StepOpenLink extends StepBase { action: 'open_link'; url: string }
 /** `expect` is required for wait_for */
@@ -1443,11 +1457,15 @@ export function routeKey(url: string): string {
   const q = url.indexOf('?');
   return q < 0 ? url : url.slice(0, q);
 }
+/** the element a `select` addresses: the container (`list`) or the repeated row (`cell`, issue #19) */
+export function selectTarget(step: StepSelect): ElementId {
+  return 'cell' in step ? step.cell : step.list;
+}
 /** the element a step acts on, if any */
 export function stepElement(step: RecipeStep): ElementId | undefined {
   switch (step.action) {
     case 'tap': case 'type': return step.element;
-    case 'select': return step.list;
+    case 'select': return selectTarget(step);
     case 'swipe': return step.element;
     default: return undefined;
   }

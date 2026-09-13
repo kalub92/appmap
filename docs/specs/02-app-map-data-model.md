@@ -161,6 +161,8 @@ steps:
   - {id: s2, action: type,  element: invoice.amount.field,  text: "{amount}"}
   - {id: s3, action: tap,   element: invoice.client.picker, expect: {screen: client_picker}}
   - {id: s4, action: select, list: client.picker.list, match: {text: "{client}"}, expect: {screen: invoice_new}}
+  # … or, where the list container is not an accessibility element (SwiftUI, 01 R4), name the row:
+  # - {id: s4, action: select, cell: client.picker.cell, match: {text: "{client}"}, expect: {screen: invoice_new}}
   - {id: s5, action: tap,   element: invoice.save.button,   expect: {screen: invoice_detail}, intent_critical: true}
 verify: {screen: invoice_detail, visible: [invoice.detail.amount.text]}
 status: verified                     # candidate | verified | ci_gate | retired
@@ -172,7 +174,7 @@ provenance:
 last_verified_build: "4412"
 ```
 
-Step actions: `tap`, `type`, `select`, `swipe`, `open_link`, `wait_for`, `dismiss_gate`. `expect` conditions: `screen`, `focused`, `visible`, `not_visible`, `text_present` (static copy only). Every step with an `expect` is a verification point; steps without one inherit "screen unchanged".
+Step actions: `tap`, `type`, `select`, `swipe`, `open_link`, `wait_for`, `dismiss_gate`. `select` picks one row out of repeated content and has two forms carrying the same `match.text`: `{list, match}` names a container that is itself an accessibility element, and `{cell, match}` names the repeated row id every row shares — the only form a SwiftUI list can express, since its container never reaches the driver (01 R4). Exactly one of `list`/`cell` is present; a step carrying both matches no branch of the schema. `expect` conditions: `screen`, `focused`, `visible`, `not_visible`, `text_present` (static copy only). Every step with an `expect` is a verification point; steps without one inherit "screen unchanged".
 
 `provenance.machine_recompile: true` means this version's *steps* were rebuilt by the automatic recompile (04 §8), not authored or approved by a human. It sits directly above `reviewed_by` because that is what it qualifies: the signature is historical, carried over from the version the reviewer actually read. `mark(ci_gate, reviewer)` deletes the key (07 §7).
 

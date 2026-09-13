@@ -17,7 +17,9 @@
  *     `APP_MAP_DRIVER`, 03 §3, generic patterns for anything untabled). A tap with `element` →
  *     `tap`; a type (Argent `keyboard`/`paste`, older `type_text`) → `type` on the focused
  *     element of the previous snapshot (else the last tapped field); tap on a `dynamic` cell →
- *     `select` on the enclosing dynamic `list` with `match.text` = the tapped text; an open-link
+ *     `select` with `match.text` = the tapped text, on the enclosing dynamic `list` when the screen
+ *     declares one and otherwise on the CELL itself (`select {cell, match}`) — a SwiftUI list
+ *     container is not an accessibility element, so no list id can exist (issue #19); an open-link
  *     (Argent `open-url`) → `open_link`; `swipe` → `swipe`; a tap that dismissed a gate (gate
  *     present before, absent after, element is a gate dismiss id) → `dismiss_gate`. Perception
  *     and wait/lifecycle calls are KNOWN non-steps and pass silently; every other call that
@@ -226,7 +228,12 @@ export function focusedElement(map: LoadedMap, obs: Observation): ElementId | un
   return id !== undefined && map.elementRegistry.has(id) ? id : undefined;
 }
 
-/** the dynamic `list` enclosing a dynamic cell on `screen` (04 §3.3 `select`) */
+/**
+ * the dynamic `list` enclosing a dynamic cell on `screen` (04 §3.3 `select`), when the screen
+ * declares one. `undefined` is routine, not exceptional: a SwiftUI `List`/`Section` is not an
+ * accessibility element, so no capture ever contains the container and no id can be registered
+ * for it (01 R4, issue #19) — the caller then compiles the cell form.
+ */
 function enclosingDynamicList(map: LoadedMap, screen: ScreenId, cell: ElementId): ElementId | undefined {
   const file = map.screens.get(screen);
   if (file === undefined) return undefined;
@@ -310,11 +317,24 @@ export function translateSteps(map: LoadedMap, observations: readonly Observatio
         push({ id, action: 'dismiss_gate', gate: dismissed });
         continue;
       }
-      // a tap on a `dynamic` cell is a `select` on the enclosing dynamic list (04 §3.3)
+      // a tap on a `dynamic` cell is a `select` (04 §3.3)
       if (map.elementRegistry.get(element)?.dynamic === true) {
+        const text = String(obs.input.text ?? obs.input.index ?? '');
         const list = enclosingDynamicList(map, screen, element);
         if (list !== undefined) {
-          push({ id, action: 'select', list, match: { text: String(obs.input.text ?? obs.input.index ?? '') } });
+          push({ id, action: 'select', list, match: { text } });
+          continue;
+        }
+        // No dynamic list is declared on this screen. On SwiftUI there never can be one: `List`,
+        // `Section` and `ForEach` are not accessibility elements, so the container is absent from
+        // every capture and `enclosingDynamicList` cannot find what was never observed (01 R4,
+        // issue #19). Degrading to a bare `tap` here is what made "pick the row that says X"
+        // inexpressible — the recipe then addressed rows by index and passed while opening
+        // whichever row happened to be first. `select {cell, match}` says what actually happened.
+        // It needs a value: recipe.schema.json requires `match.text` (minLength 1), so a tap that
+        // carried no text or index stays a plain `tap`.
+        if (text !== '') {
+          push({ id, action: 'select', cell: element, match: { text } });
           continue;
         }
       }

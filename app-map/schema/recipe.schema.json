@@ -187,7 +187,8 @@
               "const": "select"
             },
             "list": {
-              "$ref": "#/definitions/elementId"
+              "$ref": "#/definitions/elementId",
+              "description": "the container the row is chosen within; it must itself be an accessibility element (UIKit table/collection, Compose lazy list)"
             },
             "match": {
               "type": "object",
@@ -207,6 +208,48 @@
             "id",
             "action",
             "list",
+            "match"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^s[0-9]+$"
+            },
+            "expect": {
+              "$ref": "#/definitions/expect"
+            },
+            "intent_critical": {
+              "type": "boolean"
+            },
+            "action": {
+              "const": "select"
+            },
+            "cell": {
+              "$ref": "#/definitions/elementId",
+              "description": "the repeated row id every row of the list carries; the row is chosen by `match.text`, no container id required (01 R4, issue #19)"
+            },
+            "match": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "text"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "cell",
             "match"
           ]
         },

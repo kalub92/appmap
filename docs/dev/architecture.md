@@ -543,6 +543,51 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     precision, not permission: unlike decision 53's counting shortcut, nothing here can turn the
     rule off — every genuine literal id in the registry still errors.
 
+60. **`select` has two forms, and `selectTarget` is the only accessor.** 04 §3.3's `select` was
+    expressible only as `{list, match.text}`, which assumes the list container is an
+    accessibility element. SwiftUI's `List`/`Section`/`ForEach` are not (01 R4, the same root
+    cause as the issue #15 screen container), so the container is absent from every capture, no
+    id can be registered for it, and `compile.enclosingDynamicList` can never find one: a tap on
+    a dynamic row degraded to a bare `tap` and "pick the row that says X" was inexpressible —
+    the recipe addressed rows by position and passed while opening whichever row came first.
+    `{cell, match.text}` names the repeated ROW id instead, which is what 04 §3.3 describes and
+    what the pilot's own `client_picker` EDGE already records (`action: {type: select, element:
+    client.picker.cell}` — the cell, not the list). `StepSelect` is therefore a union; making it
+    one is what forces every consumer through `types.selectTarget(step)` (the typechecker lists
+    them: `stepElement`, guided's local `stepElement`, `headless.elementOfStep`,
+    `lifecycle.stepIdentity`, plus the duck-typed `policy-check` casts and `migrate-id.ID_KEYS`,
+    which the typechecker does NOT list). The list form still wins whenever the screen declares a
+    dynamic list, so nothing that worked changes shape. Two consequences worth stating:
+    `guided.toRunStep` gives the cell form `target: {by: 'text', text: <match>}` while `resolved`
+    still reports the `a11y_id` hit — deliberately disagreeing, because the id proves the row is
+    on screen and only the text says WHICH row, and it is exactly what the Maestro export taps
+    (04 §6.2, so that export needed no code at all); and a reviewed `tap <cell>` step whose
+    recompile now yields `select {cell}` changes identity under decision 57, so `recompileFrom`
+    refuses the write and asks for a human — loud and safe, but a real behaviour change for any
+    map with list-driven recipes. Issue #19.
+
+61. **"Never observed" is knowable in the YAML layer, so the never-observed `kind: list` warning
+    lives in `validate`, not in `lint-ids` or the cache.** A screen file's `elements[]`,
+    `signature.required_ids`, `dynamic_regions` and `variants[].required_ids` are each built by
+    `observe.nameScreen` from `idsPresent(snapshot)` — a real capture — so their union
+    (`validate.observedElementIds`) is the map's committed, durable record of "a driver has seen
+    this id". The SQLite `counters` table looks like the authority and is not: `observe` bumps
+    `hits`/`misses` only for the element a driver call TOUCHED, and a container is never touched
+    (you tap its cells), so a perfectly healthy list would read as never observed. `lint-ids` is
+    the other candidate and is the wrong layer — it reads `ids.yaml` plus app source and never
+    opens a screen file. Edge `action.element` is excluded from the observed set on purpose:
+    `import-router` seeds edges for elements exploration has never reached (decision 58), which
+    is the absence of evidence. A WARNING for decision 58's reason, scoped to `kind: list`
+    because that is the container `select` addresses (`sheet`/`picker` have the same SwiftUI
+    exposure problem and would warn on the pilot — a separate issue, not scope creep here), and
+    the message names the platform because `ids.yaml` is shared while the check runs per
+    platform and `sortIssues` would otherwise dedupe a genuine per-platform difference away.
+    The pilot is unaffected: its three list ids are in `elements[]` and `invoice.list.collection`
+    is in `variants[new_invoices_ui].required_ids` on both platforms. Known limit, the mirror of
+    decision 58's: a HAND-AUTHORED `elements[]` entry is taken at face value, so a list id typed
+    into a screen file by a human silences the warning without any capture behind it — the same
+    trust the rest of rule 2 places in a committed screen file. Issue #19.
+
 ## 8. How to implement your module
 
 Tests live in `src/test/<module>.test.ts` (node:test, `node --disable-warning=ExperimentalWarning
@@ -568,7 +613,10 @@ text locator) invalid; `load.test.ts` — `loadMap` on the temp pilot: 5 screens
 `validate.test.ts` — one failing case per rule 1–8 (rename an id without migrate-id → rule 2
 lists the dangling references, 06 §5; a screen file whose `deep_link` route differs from
 ids.yaml → rule 2; `matches: ["(a+)+"]` → rule 1 `safeRegexIssue`; a gate with `title` → rule 8
-warning); `load.test.ts` also asserts `files` has 10 entries for the served platform on the
+warning) plus the decision 61 rule-2 warning (a registered `kind: list` id no screen file
+records warns and stays `ok`; one in `elements[]` or in a variant's `required_ids` does not; a
+`kind: cell` id never warns) and a `select {cell, match}` recipe step validating and
+cross-referencing like any other (issue #19); `load.test.ts` also asserts `files` has 10 entries for the served platform on the
 pilot (ids, manifest, 7 screens, 1 recipe) each with a `blob_sha` inside the git repo; `migrate-id.test.ts` — rename `invoice.add.button`,
 zero dangling references, canonical output; `merge-driver.test.ts` — branch adding
 `client_picker.yaml` vs branch editing `invoice_list.yaml` merges clean (02 §11); same-key edit
@@ -650,7 +698,10 @@ unparameterized literal → `unparameterized_value`; `to_seq: 5` slices to s1–
 `verbs.test.ts` — every confirmed `@swmansion/argent@0.25.0` tool classifies to its `VerbKind`,
 `open-url` == `open_url`, an untabled driver still resolves `type_text`/`tap` and an untabled tool
 is `unknown`; `compile.test.ts` also proves a `mcp__argent__keyboard` `type` step survives the
-compile and that an unknown verb lands in `warnings` instead of vanishing (issue #9);
+compile and that an unknown verb lands in `warnings` instead of vanishing (issue #9), and that a
+dynamic-cell tap on a screen declaring no dynamic list compiles to `select {cell, match}`,
+parameterizes and serializes canonically while the list form still wins where a list exists
+(decision 60, issue #19);
 `lifecycle.test.ts` — `decideTransition` for each row of the table (3 successes / 2 sessions →
 verified; 6 of last 10 failed → candidate, 04 §9; pending heals ≥2 → candidate; ci_gate never
 automatic); `markRecipe({status:'candidate'})` without `recipe` on an unknown id → `bad_input`,
@@ -679,7 +730,9 @@ resolution → the step is handed out with `healing: true` and `pending_heal` pe
 fallback `heal_rejected` and a `postcondition_failed` heal event; `skipBuildCheck:false` with a
 probe returning `null` or `build_type:'release'` → `release_build_refused` (07 §8), a debug
 probe → `ctx.probe` set; state (including `pending_heal`) survives a new `openContext` between
-`run_recipe` and `report_step`.
+`run_recipe` and `report_step`; a `select {cell, match}` step is handed out with
+`target: {by:'text'}` while the list form keeps `{by:'id'}`, and a recipe whose s4 names the cell
+replays s0…s5 to done with no heals (decision 60, issue #19).
 
 ### C3 — Maestro, headless, drift, router import
 Fill: `recipes/maestro.ts`, `recipes/headless.ts`, `drift.ts`, `router-import.ts`.
@@ -689,7 +742,9 @@ Corp'})` equals `fixtures/maestro/create_invoice.flow.yaml` byte-for-byte (04 §
 recipe on `invoice_list`); an element with only `path`/`geometry` → `eligible: false`;
 `resolveRecipeParams` takes explicit → `fixtures/ci/params.json` → `values[0]` and throws
 `bad_input` naming `create_invoice.amount` when nothing supplies it; `maestroExport` on the
-temp pilot (params file installed by the helper) writes `create_invoice.yaml`;
+temp pilot (params file installed by the helper) writes `create_invoice.yaml`; a `select` by cell
+exports to the same `scrollUntilVisible` + `tapOn {text}` pair with an unchanged `command_index`
+and stays headless-eligible (issue #19);
 `headless.test.ts` — with a fake `exec` that succeeds → report ok, `steps_done = 6`, recipe
 `last_verified_build` stamped; fake exec failing at command k with a fake hierarchy → heal
 attempted, ≤2 retries, `fallback_step`, `error_code: maestro_failed`, `failed_command_index`;

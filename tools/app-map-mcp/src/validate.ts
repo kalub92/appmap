@@ -14,7 +14,10 @@
  *     when ids.yaml carries `title`/`deep_link` for a screen they must agree with the screen
  *     file's — `title` exactly, `deep_link` on `routeKey` (query stripped: the registry records
  *     the route, the screen file may add `?fixture=…`, 01 R5); `indexMap` serves the screen
- *     file's values (two sources of truth otherwise — `plan_path`, `routes`, drift)
+ *     file's values (two sources of truth otherwise — `plan_path`, `routes`, drift); and a
+ *     WARNING for a registered `kind: list` element that no screen file records as observed —
+ *     a SwiftUI list container is not an accessibility element, so it never reaches the driver
+ *     and a `select {list, match}` against it can never resolve (01 R4, issue #19)
  *  3. every edge `to`, `entry.fallback_path` entry, `expect.screen`, condition `screen` references
  *     an existing screen file (`_previous` allowed on gates)
  *  4. every committed element has ≥2 locators and an `a11y_id` locator, unless the file is a
@@ -39,7 +42,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, join, relative, sep } from 'node:path';
 import type { AppMapConfig, Platform } from './config.ts';
 import { PLATFORMS } from './config.ts';
-import type { Condition, Expect, IdsElement, IdsRegistry, RecipeFile, ScreenFile, ValidateResult, ValidationIssue } from './types.ts';
+import type { Condition, ElementId, Expect, IdsElement, IdsRegistry, RecipeFile, ScreenFile, ValidateResult, ValidationIssue } from './types.ts';
 import { ID_REGEX, PREVIOUS_SCREEN, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
 import { AppMapError } from './errors.ts';
 import { allowlistFile, idsFile, kindForPath, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from './paths.ts';
@@ -280,6 +283,27 @@ export interface CrossRefInput {
   staticStrings?: ReadonlySet<string>;
 }
 
+/**
+ * Every element id some screen FILE records as present on that screen: `elements[]`,
+ * `signature.required_ids`, `dynamic_regions` and each variant's `required_ids`. `observe`'s
+ * `nameScreen` builds all four out of `idsPresent(snapshot)` — a real capture — so together they
+ * are the map's committed, durable record of "a driver has seen this id in a tree", and the
+ * SQLite cache adds nothing (its `hits` counter only counts elements a driver call TOUCHED, and
+ * a container is never touched: you tap its cells). Edge `action.element` is excluded on purpose:
+ * `import-router` seeds edges for elements exploration has never reached (01 R6, issue #12),
+ * which is the absence of evidence rather than evidence.
+ */
+function observedElementIds(screens: Iterable<ScreenFile>): Set<ElementId> {
+  const out = new Set<ElementId>();
+  for (const s of screens) {
+    for (const e of s.elements) out.add(e.id);
+    for (const id of s.signature.required_ids ?? []) out.add(id);
+    for (const id of s.dynamic_regions ?? []) out.add(id);
+    for (const v of s.variants ?? []) for (const id of v.required_ids ?? []) out.add(id);
+  }
+  return out;
+}
+
 /** Pure: rules 2–6 and 8 over already-parsed documents. */
 export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
   const { ids } = input;
@@ -421,6 +445,23 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
       });
     }
   }
+
+  // ---- rule 2: a `kind: list` element no capture has ever produced (issue #19) ----
+  // SwiftUI's `List`, `Section` and `ForEach` are not accessibility elements, so the container
+  // never reaches the driver and a `select {list, match}` written against it can never resolve.
+  // The first real integration registered five such ids off the pilot's `invoice.list.table`
+  // pattern, saw none of them in any tree, and deleted them all again. A WARNING, not an error,
+  // for decision 58's reason — on a young map exploration may simply not have reached the screen
+  // yet — and scoped to `kind: list`, the containers 04 §3.3's `select` addresses. The message
+  // names the platform because ids.yaml is shared while this runs once per platform, and
+  // `sortIssues`' dedupe would otherwise collapse a genuine per-platform difference.
+  const observed = observedElementIds(input.screens.values());
+  ids.elements.forEach((e, i) => {
+    if (e.kind !== 'list' || observed.has(e.id)) return;
+    issues.push(issue(2, 'ids.yaml',
+      `${e.id} (kind: list) is declared on no ${input.platform} screen — no capture has contained it. A SwiftUI List/Section container is not an accessibility element and never reaches the driver (01 R4, issue #19): pick a row with \`select {cell, match}\` on the row id, or delete this id`,
+      `/elements/${i}`, 'warning'));
+  });
 
   for (const [file, doc] of input.recipes) {
     (doc.entry.fallback_path ?? []).forEach((s, i) => {

@@ -48,7 +48,7 @@
  * Layer: map (imports types + token). Pure.
  */
 import type { DriverTarget, Expect, FallbackPayload, FindElementResult, LoadedMap, RecipeFile, RunStep, ScreenFile, ScreenId, SummaryResult } from './types.ts';
-import { edgeElement, isUnlearnedEdgeElement, routeKey, screenIdOfDeepLink } from './types.ts';
+import { edgeElement, isUnlearnedEdgeElement, routeKey, screenIdOfDeepLink, stepElement } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { capTokens } from './token.ts';
 
@@ -94,7 +94,7 @@ function recipeScreens(map: LoadedMap, recipe: RecipeFile): Set<ScreenId> {
   const addExpect = (e: Expect | undefined): void => { if (e?.screen !== undefined) out.add(e.screen); };
   for (const step of recipe.steps ?? []) {
     addExpect(step.expect);
-    const element = step.action === 'tap' || step.action === 'type' || step.action === 'swipe' ? step.element : step.action === 'select' ? step.list : undefined;
+    const element = stepElement(step);
     if (element !== undefined) for (const ref of map.elements.get(element) ?? []) out.add(ref.screen);
   }
   addExpect(recipe.verify);

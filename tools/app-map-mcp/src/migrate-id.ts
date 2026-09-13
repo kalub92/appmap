@@ -134,7 +134,7 @@ function rel(config: Pick<AppMapConfig, 'dir'>, path: string): string {
 }
 
 /** keys whose whole-string value is an id (element, screen or gate) */
-const ID_KEYS: ReadonlySet<string> = new Set(['id', 'element', 'list', 'to', 'focused', 'dismiss', 'screen', 'gate']);
+const ID_KEYS: ReadonlySet<string> = new Set(['id', 'element', 'list', 'cell', 'to', 'focused', 'dismiss', 'screen', 'gate']);
 /** keys whose string items are ids */
 const ID_LIST_KEYS: ReadonlySet<string> = new Set(['visible', 'not_visible', 'required_ids', 'dynamic_regions', 'gates', 'fallback_path']);
 /** keys carrying `appmap://<screen_id>[?…]` */
@@ -143,7 +143,7 @@ const URL_KEYS: ReadonlySet<string> = new Set(['deep_link', 'route', 'url']);
 /**
  * Pure: deep-rewrite every string equal to `oldId` (and markers/dismiss ids derived from it)
  * inside a parsed YAML document. Only whole-string matches on id-bearing keys (`id`, `element`,
- * `list`, `to`, `focused`, `visible[]`, `not_visible[]`, `required_ids[]`, `dynamic_regions[]`,
+ * `list`, `cell` (the two `select` forms, issue #19), `to`, `focused`, `visible[]`, `not_visible[]`, `required_ids[]`, `dynamic_regions[]`,
  * `gates[]`, `fallback_path[]`, `marker`, `dismiss`, locator `value` for `a11y_id`, `screen`
  * in conditions/expects, `deep_link`/`route`/`url` screen segment) are rewritten — never labels.
  */

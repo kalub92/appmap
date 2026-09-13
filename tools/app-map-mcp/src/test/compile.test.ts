@@ -4,19 +4,20 @@
  * `create_invoice.yaml` (modulo the prose the LLM adds, `status`, `version` and `provenance`).
  */
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { parse } from 'yaml';
 import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
-import type { CompileRecipeInput, Expect, Observation, RecipeFile, RecipeParam, RecipeStep, ScrubbedTree } from '../types.ts';
+import type { CompileRecipeInput, Expect, Observation, RecipeFile, RecipeParam, RecipeStep, ScreenFile, ScrubbedTree } from '../types.ts';
 import { UNKNOWN_SCREEN, now } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { readEvents } from '../events.ts';
-import { schemaDir, trajectoriesDir, trajectoryFile } from '../paths.ts';
+import { schemaDir, screenFile, trajectoriesDir, trajectoryFile } from '../paths.ts';
 import { buildScrubPolicy, scrub } from '../scrub.ts';
 import { observedSignature } from '../signature.ts';
 import { normalizeTree } from '../tree.ts';
-import { isCanonical } from '../yaml/canonical.ts';
+import { canonicalYaml, isCanonical } from '../yaml/canonical.ts';
 import { validateAgainstSchema } from '../yaml/schemas.ts';
 import { forbiddenContentIssues } from '../validate.ts';
 import {
@@ -245,7 +246,7 @@ describe('translateSteps — 04 §3.3', () => {
     assert.deepEqual(steps.map((s) => s.screen), [UNKNOWN_SCREEN, 'invoice_new', 'invoice_new', 'invoice_new', 'client_picker', 'invoice_new']);
     assert.deepEqual(steps.map((s) => s.from_seq), [1, 4, 5, 6, 7, 8]);
     const select = steps[4]!.step;
-    assert.equal(select.action === 'select' && select.list, 'client.picker.list', 'the enclosing dynamic list, not the cell');
+    assert.equal(select.action === 'select' && 'list' in select && select.list, 'client.picker.list', 'the enclosing dynamic list, not the cell');
     assert.equal(select.action === 'select' && select.match.text, 'Acme Corp');
   });
 
@@ -394,6 +395,90 @@ describe('compileRecipe — the Argent 0.25.0 search flow (issue #9)', () => {
     if (!r.ok) return;
     assert.deepEqual(r.recipe.steps.map((s) => s.action), ['tap', 'select'], 'the call is still not compilable');
     assert.ok(r.warnings.some((w) => w.includes('mcp__argent__whatever') && w.includes('seq 2')), r.warnings.join(' | '));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// `select {cell, match}`: a list whose container is not an accessibility element (issue #19)
+// ---------------------------------------------------------------------------------------------
+
+describe('translateSteps / compileRecipe — select by cell (04 §3.3, issue #19)', () => {
+  /**
+   * client_picker as SwiftUI actually reports it: the rows are there, the `List` container is
+   * not an accessibility element and so was never captured (01 R4), and no list id is declared.
+   */
+  function withoutTheListContainer(): void {
+    const path = screenFile(t.config, 'client_picker');
+    const doc = parse(readFileSync(path, 'utf8')) as ScreenFile;
+    doc.elements = doc.elements.filter((e) => e.id !== 'client.picker.list');
+    doc.dynamic_regions = (doc.dynamic_regions ?? []).filter((id) => id !== 'client.picker.list');
+    doc.signature.required_ids = (doc.signature.required_ids ?? []).filter((id) => id !== 'client.picker.list');
+    writeFileSync(path, canonicalYaml('screen', doc));
+    ctx.reload();
+  }
+  /** tap the search field → type into it → tap the row that says "Acme Corp" */
+  function searchFlow(over: Partial<Observation> = {}): Observation[] {
+    const snapshot = scrubbed('client_picker');
+    return [
+      obs({ seq: 1, snapshot, tool: 'mcp__argent__gesture-tap', input: { id: 'client.picker.search.field' }, element: 'client.picker.search.field', screen_before: 'client_picker', screen_after: 'client_picker' }),
+      obs({ seq: 2, snapshot, tool: 'mcp__argent__keyboard', input: { text: 'Acme Corp' }, screen_before: 'client_picker', screen_after: 'client_picker' }),
+      obs({ seq: 3, snapshot, tool: 'mcp__argent__gesture-tap', input: { text: 'Acme Corp' }, element: 'client.picker.cell', screen_before: 'client_picker', screen_after: 'invoice_new', ...over }),
+    ];
+  }
+  const CLIENT: RecipeParam[] = [{ name: 'client', type: 'string', required: true }];
+  function compileSearch(over: Partial<CompileRecipeInput> = {}): ReturnType<typeof compileRecipe> {
+    return compileRecipe(ctx, { session: SESSION, task: 'find the client Acme Corp', recipe_id: 'search_client', params: CLIENT, ...over });
+  }
+
+  it('a tap on a dynamic cell with no enclosing dynamic list compiles to `select {cell, match}`', () => {
+    withoutTheListContainer();
+    const steps = translateSteps(ctx.map, searchFlow(), ctx.config.driver).steps;
+    // before the fix this degraded to `tap client.picker.cell`: the row that says X was
+    // inexpressible, so the recipe opened whichever row happened to be first
+    assert.deepEqual(steps.map((x) => x.step.action), ['tap', 'type', 'select']);
+    assert.deepEqual(steps[2]!.step, { id: 's3', action: 'select', cell: 'client.picker.cell', match: { text: 'Acme Corp' } });
+  });
+
+  it('the enclosing dynamic list still wins when the screen declares one — the cell form is additive', () => {
+    const steps = translateSteps(ctx.map, searchFlow(), ctx.config.driver).steps;
+    assert.deepEqual(steps[2]!.step, { id: 's3', action: 'select', list: 'client.picker.list', match: { text: 'Acme Corp' } });
+  });
+
+  it('a dynamic-cell tap that carried no text or index stays a `tap` (02 §6: match.text is required)', () => {
+    withoutTheListContainer();
+    const steps = translateSteps(ctx.map, searchFlow({ input: {} }), ctx.config.driver).steps;
+    assert.deepEqual(steps[2]!.step, { id: 's3', action: 'tap', element: 'client.picker.cell' });
+  });
+
+  it('the cell form is parameterized, validates against recipe.schema.json and serializes canonically (04 §3.4)', () => {
+    withoutTheListContainer();
+    insert(searchFlow());
+    const r = compileSearch({ values: { client: 'Acme Corp' } });
+    assert.equal(r.ok, true, r.ok ? '' : `${r.reason}: ${r.message}`);
+    if (!r.ok) return;
+    assert.deepEqual(r.recipe.steps, [
+      { id: 's1', action: 'tap', element: 'client.picker.search.field' },
+      { id: 's2', action: 'type', element: 'client.picker.search.field', text: '{client}' },
+      { id: 's3', action: 'select', cell: 'client.picker.cell', match: { text: '{client}' }, expect: { screen: 'invoice_new' } },
+    ]);
+    assert.deepEqual(validateAgainstSchema(schemaDir(t.config), 'recipe', r.recipe), []);
+    assert.equal(isCanonical('recipe', r.yaml), true);
+  });
+
+  it('the cell form carries the selected value, so an undeclared one is `unparameterized_value` (04 §3.4)', () => {
+    withoutTheListContainer();
+    // only the row tap, so the select's match text is the one literal in the trajectory
+    insert([searchFlow()[2]!]);
+    const r = compileSearch({ task: 'open a client', params: [] });
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.equal(r.reason, 'unparameterized_value');
+    assert.deepEqual(r.offending_values, ['Acme Corp']);
+  });
+
+  it('a step carrying both `list` and `cell` matches no branch of the schema oneOf (02 §6)', () => {
+    const bad = { ...ctx.map.recipes.get('create_invoice')!, steps: [{ id: 's1', action: 'select', list: 'client.picker.list', cell: 'client.picker.cell', match: { text: 'Acme Corp' } }] };
+    assert.notDeepEqual(validateAgainstSchema(schemaDir(t.config), 'recipe', bad), [], 'the two forms are disjoint');
   });
 });
 

@@ -50,6 +50,73 @@ describe('validateMap on the pilot (positive cases)', () => {
   });
 });
 
+describe('rule 2 — a `kind: list` element no capture has ever produced (issue #19)', () => {
+  it('warns on a registered kind: list element that no screen file declares', () => {
+    const t = makeTempAppMapDir();
+    try {
+      // the five ids the first real SwiftUI integration registered and then deleted again: the
+      // container is not an accessibility element, so no capture ever contained it
+      editYaml<IdsRegistry>(t, 'ids.yaml', 'ids', (d) => { d.elements.push({ id: 'people.list.table', kind: 'list', dynamic: true }); });
+      const r = validateMap(t.config, { platforms: ['ios'] });
+      const warned = r.issues.filter((i) => i.rule === 2 && i.severity === 'warning' && i.message.includes('people.list.table'));
+      assert.equal(warned.length, 1, formatIssues(r.issues));
+      assert.equal(warned[0]!.file, 'ids.yaml');
+      assert.match(warned[0]!.message, /never reaches the driver/);
+      assert.match(warned[0]!.message, /select \{cell, match\}/);
+      // a warning, never an error: on a young map exploration may just not have got there yet
+      assert.ok(r.ok);
+      assert.deepEqual(errors(r.issues), [], formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('does not warn for a list a screen declares in elements[], nor for one only a variant requires', () => {
+    const t = makeTempAppMapDir();
+    try {
+      // `invoice.list.table`, `client.picker.list` and `invoice.detail.items.list` are in
+      // `elements[]`; `invoice.list.collection` appears ONLY in a variant's `required_ids`, and
+      // that is a capture-derived section too, so it counts as observed
+      const r = validateMap(t.config);
+      assert.deepEqual(r.issues.filter((i) => i.rule === 2 && i.severity === 'warning'), [], formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('the rule is about containers: an unobserved `kind: cell` id is not warned', () => {
+    const t = makeTempAppMapDir();
+    try {
+      editYaml<IdsRegistry>(t, 'ids.yaml', 'ids', (d) => { d.elements.push({ id: 'people.list.cell', kind: 'cell', dynamic: true }); });
+      const r = validateMap(t.config, { platforms: ['ios'] });
+      assert.deepEqual(r.issues.filter((i) => i.rule === 2 && i.message.includes('people.list.cell')), [], formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('a `select {cell, match}` step validates and its cell is cross-referenced like any step element', () => {
+    const t = makeTempAppMapDir();
+    try {
+      editYaml<RecipeFile>(t, 'ios/recipes/create_invoice.yaml', 'recipe', (d) => {
+        d.steps[3] = { id: 's4', action: 'select', cell: 'client.picker.cell', match: { text: '{client}' }, expect: { screen: 'invoice_new' } };
+      });
+      const ok = validateMap(t.config);
+      assert.deepEqual(errors(ok.issues), [], formatIssues(ok.issues));
+      assert.ok(ok.ok);
+      // ... and an unregistered cell is the same rule 2 error the `list` form gets
+      editYaml<RecipeFile>(t, 'ios/recipes/create_invoice.yaml', 'recipe', (d) => { (d.steps[3] as { cell: string }).cell = 'client.picker.nope'; });
+      const bad = validateMap(t.config);
+      const hit = errors(bad.issues, 2).find((i) => i.message.includes('client.picker.nope'));
+      assert.ok(hit, formatIssues(bad.issues));
+      assert.match(hit.message, /^s4: /);
+      assert.equal(hit.file, 'ios/recipes/create_invoice.yaml');
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
 describe('rule 1 — schema + safe regex + file layout', () => {
   it('flags a schema violation with its JSON pointer', () => {
     const t = makeTempAppMapDir();

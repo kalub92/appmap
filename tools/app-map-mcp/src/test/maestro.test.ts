@@ -80,6 +80,25 @@ describe('recipeToMaestroFlow — the 04 §6.2 mapping table', () => {
     assert.deepEqual(flow.command_index, { s0: 0, s1: 2, s2: 4, s3: 6, s4: 8, s5: 11 });
   });
 
+  it('a `select` by cell exports to the same scroll-and-tap-by-text commands and stays headless-eligible (04 §6.2, issue #19)', () => {
+    const recipe = map.recipes.get('create_invoice');
+    assert.ok(recipe);
+    // neither form addresses the container, so the cell form needs no export code of its own
+    const cellForm: RecipeFile = {
+      ...recipe,
+      steps: recipe.steps.map((st) => (st.id === 's4'
+        ? { id: 's4', action: 'select', cell: 'client.picker.cell', match: { text: '{client}' }, expect: { screen: 'invoice_new' } }
+        : st)),
+    };
+    const flow = recipeToMaestroFlow(remap(map, { recipes: [cellForm] }), cellForm, PARAMS);
+    assert.equal(flow.eligible, true);
+    assert.deepEqual(flow.ineligible_steps, []);
+    const cmds = parse(flow.flow.split('\n---\n')[1] as string) as Array<Record<string, unknown>>;
+    assert.deepEqual(cmds[8], { scrollUntilVisible: { element: { text: 'Acme Corp' } } });
+    assert.deepEqual(cmds[9], { tapOn: { text: 'Acme Corp' } });
+    assert.deepEqual(flow.command_index, { s0: 0, s1: 2, s2: 4, s3: 6, s4: 8, s5: 11 }, 'byte-identical to the list form');
+  });
+
   it('maps a failing command index back to its step (04 §6.1)', () => {
     const recipe = map.recipes.get('create_invoice');
     assert.ok(recipe);

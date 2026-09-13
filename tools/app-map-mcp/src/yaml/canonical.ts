@@ -93,7 +93,8 @@ export const KEY_ORDER: Readonly<Record<CanonicalType, readonly string[]>> = {
   recipe: ['id', 'version', 'platform', 'description', 'matches', 'params', 'preconditions', 'entry', 'steps', 'verify', 'status', 'provenance', 'last_verified_build'],
   param: ['name', 'type', 'required', 'values'],
   entry: ['deep_link', 'fallback_path'],
-  step: ['id', 'action', 'element', 'list', 'match', 'text', 'direction', 'duration_ms', 'url', 'gate', 'timeout_ms', 'expect', 'intent_critical'],
+  // `cell` sits beside `list`: they are the two element keys of the two `select` forms (issue #19)
+  step: ['id', 'action', 'element', 'list', 'cell', 'match', 'text', 'direction', 'duration_ms', 'url', 'gate', 'timeout_ms', 'expect', 'intent_critical'],
   match: ['text'],
   expect: ['screen', 'focused', 'visible', 'not_visible', 'text_present'],
   // `machine_recompile` sits directly above `reviewed_by` on purpose (issue #13 criterion 4): in a

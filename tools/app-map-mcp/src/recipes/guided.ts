@@ -71,7 +71,7 @@ import type {
   HealCandidate, HealInput, HealSummary, LoadedMap, Locator, Observation, RecipeFile, RecipeParams, RecipeStep,
   ReportStepInput, ReportStepResult, RunRecipeResult, RunRecord, RunStep, ScreenId, SessionId, StepId,
 } from '../types.ts';
-import { GUIDED_LIMITS, UNKNOWN_SCREEN, now, probeConditions, routeKey } from '../types.ts';
+import { GUIDED_LIMITS, UNKNOWN_SCREEN, now, probeConditions, routeKey, selectTarget } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { identify } from '../identify.ts';
 import { resolve as resolveElement } from '../resolve.ts';
@@ -124,14 +124,17 @@ function sessionMap(ctx: AppMapContext): LoadedMap {
   });
 }
 
-/** the element a step acts on (`element`, or `list` for `select`, or the gate's dismiss control) */
+/**
+ * the element a step acts on (`element`; the `list` or repeated `cell` of a `select` — both forms,
+ * issue #19; or the gate's dismiss control)
+ */
 function stepElement(map: LoadedMap, step: RecipeStep): ElementId | undefined {
   switch (step.action) {
     case 'tap':
     case 'type':
       return step.element;
     case 'select':
-      return step.list;
+      return selectTarget(step);
     case 'swipe':
       return step.element;
     case 'dismiss_gate':
@@ -501,7 +504,12 @@ function deepLinkOfScreen(map: LoadedMap, screen: ScreenId): string | undefined 
   return typeof link === 'string' && link !== '' && link !== 'none' ? link : undefined;
 }
 
-/** an entry edge (02 §4.2 action) as a recipe step; `type`/`select` edges degrade to a tap */
+/**
+ * an entry edge (02 §4.2 action) as a recipe step; `type`/`select` edges degrade to a tap. A
+ * `select` edge carries no match text — 02 §4.2 records the element, never the row that was
+ * picked — so neither `select` form can be rebuilt from one (issue #19); the tap on the cell id
+ * lands on whichever row is first, which is all an entry approximation can promise.
+ */
 function edgeStepFor(id: StepId, action: { type: string; element?: ElementId; url?: string; gate?: GateId; direction?: 'up' | 'down' | 'left' | 'right' }, to: ScreenId): RecipeStep | undefined {
   const expect: Expect = { screen: to };
   switch (action.type) {
@@ -628,6 +636,14 @@ export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams
         out.resolved = { strategy: hit.strategy, confidence: hit.confidence, degraded: hit.degraded };
       }
     }
+  }
+  // 04 §3.3 `select {cell, match}`: every row carries the SAME registered id (01 R4), so the
+  // `{by: 'id'}` target resolved above cannot say WHICH row this step means — it only proves the
+  // row id is on screen. The match text can, and it is exactly what the Maestro export taps
+  // (04 §6.2). `resolved` deliberately keeps the a11y_id evidence while `target` addresses the
+  // one row; the two disagreeing is the point, not a bug (issue #19).
+  if (step.action === 'select' && 'cell' in step && out.match_text !== undefined && out.match_text !== '') {
+    out.target = { by: 'text', text: out.match_text };
   }
   return out;
 }

@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
-import type { BuildProbeResult, RecipeFile, ReportStepResult, RunStep, ScreenId, Tree, TreeNode } from '../types.ts';
+import type { BuildProbeResult, RecipeFile, RecipeStep, ReportStepResult, RunStep, ScreenId, Tree, TreeNode } from '../types.ts';
 import { GUIDED_LIMITS, UNKNOWN_SCREEN } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { readEvents } from '../events.ts';
@@ -153,6 +153,26 @@ describe('toRunStep (04 §5: ≤120 tokens; 07 §3 announce)', () => {
     assert.deepEqual(step.target, { by: 'id', id: 'invoice.amount.field' });
     assert.equal(step.resolved?.strategy, 'a11y_id');
     assert.equal(step.resolved?.degraded, false);
+  });
+
+  it('a `select` by cell is addressed by its match text — every row carries the same id (04 §3.3, issue #19)', () => {
+    const tree = normalizeTree(loadFixtureTree('client_picker'), { platform: 'ios' });
+    const step: RecipeStep = { id: 's4', action: 'select', cell: 'client.picker.cell', match: { text: '{client}' }, expect: { screen: 'invoice_new' } };
+    const run = toRunStep(ctx.map, step, PARAMS, { tree });
+    assert.equal(run.element, 'client.picker.cell');
+    assert.equal(run.match_text, 'Acme Corp');
+    // `resolved` is evidence the row id is on screen; `target` is how to address the ONE row the
+    // step means, which an id shared by every row cannot do
+    assert.deepEqual(run.target, { by: 'text', text: 'Acme Corp' });
+    assert.equal(run.resolved?.strategy, 'a11y_id');
+    assertStepBudget(run);
+  });
+
+  it('the list form keeps its `{by: id}` target — the cell form is additive (issue #19)', () => {
+    const tree = normalizeTree(loadFixtureTree('client_picker'), { platform: 'ios' });
+    const run = toRunStep(ctx.map, recipe().steps.find((s) => s.id === 's4')!, PARAMS, { tree });
+    assert.equal(run.element, 'client.picker.list');
+    assert.deepEqual(run.target, { by: 'id', id: 'client.picker.list' });
   });
 
   it('07 §3: intent_critical steps announce only when the caller says the recipe is a candidate', () => {
@@ -637,6 +657,33 @@ describe('04 §9: guided replay of create_invoice completes with every step veri
     assert.equal(tasks[0]!.kind === 'task' && tasks[0]!.mode_end, 'guided');
     assert.equal(tasks[0]!.kind === 'task' && tasks[0]!.ok, true);
     assertEventsValid();
+  });
+
+  it('a recipe whose `select` names the cell replays to done, addressing the row by text (issue #19)', async () => {
+    const recipe = ctx.map.recipes.get('create_invoice')!;
+    const cellForm: RecipeStep = { id: 's4', action: 'select', cell: 'client.picker.cell', match: { text: '{client}' }, expect: { screen: 'invoice_new' } };
+    ctx.db.putRecipe({ ...recipe, steps: recipe.steps.map((st) => (st.id === 's4' ? cellForm : st)) }, { dirty: true, reason: 'test' });
+    declareTask(ctx, SESSION, 'create an invoice for Acme Corp');
+    drive('invoice_list');
+
+    const started = await startGuidedRun(ctx, { recipe_id: 'create_invoice', params: PARAMS }, noHooks);
+    let last: ReportStepResult | undefined;
+    let handedS4: RunStep | undefined;
+    for (const [stepId, tree] of HAPPY_PATH) {
+      drive(tree, stepId === 's0' ? { url: 'appmap://invoice_new?fixture=logged_in' } : {});
+      last = await reportStep(ctx, { run_id: started.run_id, step_id: stepId, ok: true });
+      if (stepId === 's3' && last.status === 'ok') handedS4 = last.step;
+      if (stepId !== 's5') {
+        assert.equal(last.status, 'ok', `${stepId} → ${JSON.stringify(last)}`);
+        assert.equal(last.status === 'ok' && last.healed, undefined, 'the cell resolves; nothing is healed');
+      }
+    }
+    // the step the LLM was handed for s4 addresses the row by its label, not by the shared id
+    assert.equal(handedS4?.element, 'client.picker.cell');
+    assert.deepEqual(handedS4?.target, { by: 'text', text: 'Acme Corp' });
+    assert.equal(last?.status, 'done');
+    assert.equal(last?.status === 'done' && last.verified, true);
+    assert.deepEqual(last?.status === 'done' && last.heals, []);
   });
 
   it('reports out of order, for a finished run or for an unknown run are refused', async () => {
