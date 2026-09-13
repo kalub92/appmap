@@ -331,7 +331,9 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 19. **Gates never win identification**; a tree that is only a gate is `unknown` +
     `gates_present`.
 20. **07 §3 Release-build probe** = the iOS `UserDefaults` record `app_map_debug_probe`
-    (instrumentation/ios AppMapDebugEndpoint) read via `simctl spawn … defaults read`; Android
+    (instrumentation/ios AppMapDebugEndpoint) read via `simctl spawn … defaults export`, falling back
+    to the app's container plist via `plutil -convert xml1` (iOS 26's `defaults` no longer resolves a
+    sandboxed app's domain, and `-convert json` refuses a domain holding `Data`, #11); Android
     best-effort via `adb shell run-as`; both behind the injectable `BuildInfoProbe`. The record
     also carries `flags`, `auth`, `platform_version` — the only source of 02 §4.3 variant facts;
     the last probe is cached on `ctx.probe` (`ctx.setProbe`) and passed to `identify` as

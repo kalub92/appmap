@@ -586,8 +586,11 @@ describe('parseArgs — the 03 §10 flag grammar', () => {
 
 // ---------------------------------------------------------------------------------------------
 // Wave-2 commands end to end. A device is faked with three tiny scripts on PATH: `maestro`
-// (`--version` / `test` / `hierarchy`), and `xcrun` + `plutil` for the 07 §3 build probe
-// (guided.defaultBuildProbe shells out to `xcrun simctl spawn … defaults export | plutil`).
+// (`--version` / `test` / `hierarchy`), and `xcrun` + `plutil` for the 07 §3 build probe.
+// `guided.defaultBuildProbe` tries two strategies in order (see `buildProbeStrategies`): the fake
+// `plutil` answers the first (`defaults export … | plutil -convert json`) whenever a probe is
+// configured, so the app-container fallback is never reached here; with `probe: null` the fake
+// `plutil` exits 1 for BOTH strategies, so the probe is absent and the run is refused.
 // ---------------------------------------------------------------------------------------------
 
 interface FakeDevice {

@@ -917,7 +917,8 @@ export interface RunStepRecord {
 }
 
 /**
- * 07 §3 debug-endpoint record (iOS: `defaults read <bundle> app_map_debug_probe`; Android
+ * 07 §3 debug-endpoint record (iOS: the `app_map_debug_probe` UserDefaults record, read via
+ * `defaults export` or the app's container plist — see `recipes/guided.ts`; Android
  * `run-as … files/app_map_debug_probe.json`). Besides the Release/sandbox gate it is the only
  * source of the 02 §4.3 variant facts (`flags`, `auth`, `platform_version`); the last successful
  * probe is cached on `AppMapContext.probe` and turned into `IdentifyOptions.conditions` by

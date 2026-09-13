@@ -4,9 +4,12 @@
 // sandbox environment, "checked via a debug endpoint the app exposes under APP_MAP_DEBUG".
 //
 // Design choice: the probe is a UserDefaults record, not a local HTTP listener. It adds no
-// network surface and no port to coordinate, and the host reads it with one command:
+// network surface and no port to coordinate, and the host reads it with plain command-line tools:
 //
-//     xcrun simctl spawn <udid|booted> defaults read <bundle_id> app_map_debug_probe
+//     xcrun simctl spawn <udid|booted> defaults export <bundle_id> - | plutil -convert json -o - -
+//   and, on iOS 26 where `defaults` no longer resolves a sandboxed app's domain, out of the
+//   container directly (instrumentation/README.md §8):
+//     plutil -convert xml1 -o - "$(xcrun simctl get_app_container <udid|booted> <bundle_id> data)/Library/Preferences/<bundle_id>.plist"
 //
 // In Release this type does not exist, so the key is never written and the query fails —
 // which is exactly the "endpoint absent" case 07 §8 tests for.

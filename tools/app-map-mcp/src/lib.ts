@@ -61,8 +61,8 @@ export { THRESHOLDS, conditionKey, decideTransition, deepLinkCovers, eligibleFor
 export type { LifecycleDecision, RecompileOutcome, RecompileRefusal, VerifiedEntities } from './recipes/lifecycle.ts';
 export { COMPATIBLE_ROLES, applyHeal, bboxProximity, heal, healedElement, jaroWinkler, lcsLength, proposeHeal, rejectHeal, scoreCandidates, toPendingHeal } from './heal.ts';
 export type { HealProposal } from './heal.ts';
-export { assertDebugSandbox, checkExpect, defaultBuildProbe, expandSteps, reportStep, resolveRunSession, startGuidedRun, substituteParams, toRunStep } from './recipes/guided.ts';
-export type { BuildInfoProbe, GuidedRunOptions, StartGuidedRunInput } from './recipes/guided.ts';
+export { BUILD_PROBE_KEY, assertDebugSandbox, buildProbeStrategies, checkExpect, defaultBuildProbe, expandSteps, parseProbeOutput, parseXmlPlist, readBuildProbe, reportStep, resolveRunSession, startGuidedRun, substituteParams, toRunStep } from './recipes/guided.ts';
+export type { BuildInfoProbe, GuidedRunOptions, ProbeExec, ProbeFormat, ProbeStrategy, StartGuidedRunInput } from './recipes/guided.ts';
 export { maestroExport, maestroSelectorFor, readParamsFile, recipeToMaestroFlow, resolveRecipeParams, stepForCommandIndex } from './recipes/maestro.ts';
 export type { FlowOptions, MaestroExportOptions, MaestroFlow, MaestroSelector } from './recipes/maestro.ts';
 export { checkMaestroVersion, defaultExec, defaultHierarchy, fallbackStepFor, parseMaestroResult, runAllHeadless, runHeadless } from './recipes/headless.ts';

@@ -162,10 +162,31 @@ router registry. OS dialogs cannot carry your ids; the map stores their label si
 ## 8. Debug probe for the server (07 §3)
 
 iOS: call `AppMapDebugEndpoint.publish(sandbox: Environment.current == .sandbox)` at launch. It writes a
-build/environment record to `UserDefaults` (no network listener) which the server reads with
-`xcrun simctl spawn booted defaults read com.example.app app_map_debug_probe`; the type does not exist
-in Release, so the key is never present there and the server refuses to run. Android: the export
-receiver exists only in debug builds; a matching probe is a follow-up for the Android pilot.
+build/environment record to `UserDefaults` (no network listener). The server reads it first through
+`cfprefsd`:
+
+```sh
+xcrun simctl spawn <udid|booted> defaults export com.example.app - | plutil -convert json -o - -
+```
+
+**On iOS 26 simulators that read comes back empty.** `defaults` no longer resolves a sandboxed app's
+domain, so `defaults read com.example.app app_map_debug_probe` answers "does not exist" and
+`defaults export` prints `{}` even for a Debug build that published the probe correctly. The server
+therefore falls back to the same record in the app's own data container, which is also the command to
+check by hand:
+
+```sh
+plutil -convert xml1 -o - \
+  "$(xcrun simctl get_app_container <udid|booted> com.example.app data)/Library/Preferences/com.example.app.plist"
+```
+
+`plutil -p` on that file is fine for eyeballing, but **`plutil -convert json` and `plutil -extract … json`
+are not**: they refuse the whole file ("invalid object in plist for destination format") as soon as the app
+stores any `Data` in `UserDefaults` — one ordinary `JSONEncoder` blob is enough — which is why the server
+reads `xml1`. The record is whatever `cfprefsd` has flushed, so publish at launch and do not expect a probe
+taken in the same millisecond as the write. The `AppMapDebugEndpoint` type does not exist in Release, so the
+key is never present there and the server refuses to run. Android: the export receiver exists only in debug
+builds; a matching probe is a follow-up for the Android pilot.
 
 ## 9. Release proof (01 §4)
 

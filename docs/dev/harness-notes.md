@@ -85,7 +85,10 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
 - **D5 — router-export.sh handles Android too** (`--platform android`, via the export broadcast) so the
   Android CI job mirrors iOS with one script.
 - **D6 — AppMapDebugEndpoint is a UserDefaults probe, not an HTTP endpoint** (07 §3 leaves the transport
-  open). Read with `xcrun simctl spawn <udid> defaults read <bundle_id> app_map_debug_probe`.
+  open). Read with `xcrun simctl spawn <udid> defaults export <bundle_id> - | plutil -convert json -o - -`,
+  falling back to `plutil -convert xml1 -o - "$(xcrun simctl get_app_container <udid> <bundle_id> data)/Library/Preferences/<bundle_id>.plist"`
+  — on iOS 26 `defaults` no longer resolves a sandboxed app's domain, and `-convert json` refuses any
+  domain holding a `Data` value (#11).
 - **D8 — gen-ids naming rules.** 01 R2 says screens are `snake_case`; `app-map/schema/ids.schema.json` encodes that as `^[a-z][a-z0-9_]*$` and gates as `^gate\.[a-z0-9_]+$`. `gen-ids` and the deep-link parsers use exactly those patterns; the `<feature>.<name>.<kind>` three-segment rule for elements is a warning, not an error, because the schema does not require it.
 - **D7 — Android deep link entry.** 01 R5 says the handler routes through the real router; the library
   cannot know the app's activity, so a debug-only transparent trampoline activity owns the `appmap://`
