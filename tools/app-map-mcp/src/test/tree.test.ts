@@ -273,6 +273,45 @@ describe('fromArgentScreen — real @swmansion/argent@0.25.0 output (03 §5, iss
     );
   });
 
+  it('nests the tabBar INSIDE the screen container, last, so resolve\u2019s scope reaches the tabs (follow-up to #10)', () => {
+    const t = normalizeTree(argentRaw('invoice_list'), { platform: 'ios', roleHints: PILOT_HINTS });
+    const window = t.root.children[0]!;
+    // the bar used to be a SIBLING of the marker container here — the only tree shape that put
+    // it outside `screenRoot`, i.e. outside everything `resolve` searches (resolve.ts)
+    assert.equal(window.role, 'window');
+    assert.deepEqual(window.children.map((c) => c.role), ['container'], 'nothing sits beside the screen container');
+    const root = screenRoot(t);
+    assert.equal(root.a11y_id, 'screen.invoice_list');
+    assert.equal(nodesWithRole(root, 'tab').length, 3, 'the tabs are reachable from the screen root');
+    assert.equal(nodesWithRole(t, 'tab').length, 3, 'and nowhere else');
+
+    // rule 4: appended LAST, so rule 3's capture-order `sibling_index` for the body is untouched
+    const bar = root.children[root.children.length - 1]!;
+    assert.equal(bar.role, 'tabBar');
+    assert.equal(bar.a11y_id, undefined, 'the bar carries no id, so no fingerprint.sibling_index tracks it');
+    assert.deepEqual(
+      root.children.slice(0, -1).map((c) => `${siblingIndex(t, c)}:${c.role}:${c.a11y_id}`),
+      ['0:button:invoice.filter.button', '1:button:invoice.add.button', '2:cell:invoice.list.cell',
+        '3:cell:invoice.list.cell', '4:cell:invoice.list.cell'],
+      'every body element keeps the index the map learned',
+    );
+    assert.equal(siblingIndex(t, bar), 5);
+
+    // the learned `path` locators are unaffected: `tabBar/tab[i]` either way (via the lowest
+    // common ancestor before the move, directly from the screen root now)
+    assert.deepEqual(bar.children.map((c) => c.a11y_id), ['nav.invoices.tab', 'nav.clients.tab', 'nav.settings.tab']);
+    assert.deepEqual(bar.children.map((c) => pathOf(t, c)), ['tabBar/tab[0]', 'tabBar/tab[1]', 'tabBar/tab[2]']);
+    assert.deepEqual(bar.children.map((c) => siblingIndex(t, c)), [0, 1, 2]);
+    assert.deepEqual(bar.children.map((c) => parentOf(t, c)!.role), ['tabBar', 'tabBar', 'tabBar']);
+    for (const tab of bar.children) assert.equal(nodeAtPath(t, pathOf(t, tab)), tab);
+    assert.equal(pathOf(t, bar), 'tabBar');
+
+    // `structuralHash` hashes a SORTED MULTISET of `<role>\t<a11y_id>` with no parent/child
+    // information (signature.ts), so moving a subtree cannot move it — pinned to prove it
+    assert.equal(structuralHash(t, []), 'sha1:c4ae6dc478aef88a8f77c3af33c47190895e016b');
+    assert.equal(structuralHash(t, ['invoice.list.table']), 'sha1:c4ae6dc478aef88a8f77c3af33c47190895e016b');
+  });
+
   it('uses normalizedFrame verbatim and only falls back to frame ÷ screenFrame', () => {
     // the real capture disagrees with itself: 317.7 / 402 = 0.790299 → 0.7903, the driver says
     // 0.7902, and the map learned the driver's number
@@ -302,7 +341,9 @@ describe('fromArgentScreen — real @swmansion/argent@0.25.0 output (03 §5, iss
     assert.equal(raw.elements.filter((e) => e['viewClassName'] === '_UITabButton').length, 6, 'the capture really does report six');
     assert.equal(raw.elements.filter((e) => e['viewClassName'] === '_UITabButton' && e['identifier'] === undefined).length, 3);
     const t = normalizeTree(raw, { platform: 'ios', roleHints: SWAPI_HINTS });
-    const bar = t.root.children[0]!.children[1]!;
+    // the bar is the screen container's last child, not a sibling of it (follow-up to #10)
+    const root = screenRoot(t);
+    const bar = root.children[root.children.length - 1]!;
     assert.equal(bar.role, 'tabBar');
     assert.deepEqual(bar.bbox_norm, { x: 0, y: 0.9096, w: 1, h: 0.0904 });
     assert.equal(bar.children.length, 3, 'three tabs, not six');

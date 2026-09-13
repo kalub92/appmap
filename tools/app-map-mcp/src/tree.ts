@@ -41,7 +41,7 @@
  * `identifier`/`resource-id` mean "absent".
  *
  * Flat-capture rebuild (`fromArgentScreen`, ported from the reference integration's Python
- * bridge): `application > window > [marker-subtree, tabBar?]` and nothing deeper — deeper nesting
+ * bridge): `application > window > marker-subtree` and nothing deeper — deeper nesting
  * is not recoverable from a flat list and is not needed, because `a11y_id` is the weight-1
  * locator (02 §5.1) and inventing frame-containment would change every `path`,
  * `fingerprint.parent_role` and `sibling_index` the map has already learned. Four rules:
@@ -53,7 +53,14 @@
  *   3. the surviving marker becomes a full-screen `container` (its own 1pt overlay frame — see
  *      issue #15 — is discarded) and every non-tab element becomes its direct child, in capture
  *      order, which is what `sibling_index` records;
- *   4. elements whose role is `tab` are collected into a `tabBar` sibling, sorted by x.
+ *   4. elements whose role is `tab` are collected into a `tabBar`, sorted by x, appended as the
+ *      marker container's LAST child. Inside, not beside: `resolve` scopes its search to
+ *      `screenRoot(tree)` (02 §5.2), so a bar hung off `window` — as this branch did until the
+ *      follow-up to #10 — left every tab locator with zero in-scope matches and let the
+ *      weight-0.1 geometry fallback return the screen container as a `hit`, i.e. a silent tap on
+ *      the overlay instead of the tab. Appending last preserves rule 3's `sibling_index` values,
+ *      and neither `structuralHash` (a sorted multiset with no parent/child information) nor
+ *      `pathOf` (`tabBar/tab[i]` either way) can see the move.
  *
  * Maestro derivations (best-effort, architecture.md decisions 22 and 28: Android trees must
  * hash like the iOS ones, and `tab` is derived): the hierarchy root → `application`; a
@@ -582,20 +589,28 @@ export function fromArgentScreen(input: unknown, platform: Platform, opts: Argen
   if (marker === undefined) marker = { role: 'container', bbox_norm: full(), children: [] };
   marker.children = body;
 
-  const windowChildren: TreeNode[] = [marker];
   if (tabs.length > 0) {
     let barY = 1;
     for (const t of tabs) barY = Math.min(barY, t.bbox_norm.y);
-    windowChildren.push({
+    // INSIDE the marker container and last, not beside it: `resolve` scopes every locator to
+    // `screenRoot(tree)` (02 §5.2), which IS this container, so a bar hung off `window` put the
+    // tabs out of reach — all four locators scored zero and the weight-0.1 geometry fallback
+    // matched the only in-scope node under the point, the full-screen container itself. That is
+    // a `hit` on the screen overlay, i.e. a silent wrong tap (follow-up to #10, the failure
+    // class #9 and #13 exist to eliminate). Every other tree shape already nests the bar inside
+    // the screen root; appending it keeps rule 3's `sibling_index` for `body` and leaves
+    // `structuralHash` (a sorted multiset, signature.ts) and `pathOf` (`tabBar/tab[i]` either
+    // way — via the lowest common ancestor before, directly now) untouched.
+    marker.children = [...body, {
       role: 'tabBar',
       bbox_norm: { x: 0, y: round4(barY), w: 1, h: round4(1 - barY) },
       children: [...tabs].sort((a, b) => a.bbox_norm.x - b.bbox_norm.x),
-    });
+    }];
   }
 
   const root: TreeNode = {
     role: 'application', bbox_norm: full(),
-    children: [{ role: 'window', bbox_norm: full(), children: windowChildren }],
+    children: [{ role: 'window', bbox_norm: full(), children: [marker] }],
   };
   const tree: Tree = { schema_version: 1, platform, source: 'argent', root };
   if (vw > 0 && vh > 0) tree.viewport = { w: vw, h: vh };
