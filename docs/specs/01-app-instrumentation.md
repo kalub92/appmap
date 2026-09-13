@@ -140,7 +140,7 @@ Register every interrupter the agent may meet: OS permission prompts, paywalls, 
 `tools/app-map-mcp/bin/app-map lint-ids` runs in CI and pre-commit:
 
 - every screen in `ids.yaml` has its marker constant referenced in iOS and Android source;
-- every id matches R2; no orphan constants; no string-literal ids in UI code;
+- every id matches R2; no orphan constants; no string-literal ids in UI code — a literal is an id only when it **equals** a registered id (a `screen.<id>` marker, a gate id or its dismiss id, or an element id); a literal that merely shares a feature prefix (an SF Symbol name such as `person.3`, a storage key such as `favorites.v1`) is not an id, and `Image(systemName:)` / `Label(_:systemImage:)` arguments are never scanned;
 - generated constants match `ids.yaml`.
 
 ## 4. Acceptance criteria

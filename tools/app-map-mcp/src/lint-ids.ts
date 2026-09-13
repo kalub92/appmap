@@ -18,9 +18,17 @@
  *    kind nor a known synonym (`KIND_SYNONYMS`) is a `warning` only. `lint-ids` MUST pass on
  *    the committed pilot ids.yaml (06 R2) — lint-ids.test.ts asserts it;
  *  - `orphan_constant`: a constant in the generated files with no `ids.yaml` entry;
- *  - `string_literal_id`: a string literal in UI code matching `ID_REGEX` with a `screen.`,
- *    `gate.` or registered-element prefix (`"invoice.save.button"`) outside the generated files,
- *    tests and `app-map/` — app code must use the constants;
+ *  - `string_literal_id`: a string literal in UI code that EQUALS a registered id — a screen
+ *    marker (`"screen.invoice_list"`), a gate id or its dismiss id, or a registered element id
+ *    (`"invoice.save.button"`) — outside the generated files, tests and `app-map/`: app code must
+ *    reference ids through the constants. The match is the WHOLE id, never a feature prefix.
+ *    Claiming the prefix made `person.detail.name.text` own the entire `person.` namespace, so
+ *    ordinary SF Symbol names (`person.3`, `star.fill`, `xmark.circle.fill`) and dotted storage
+ *    keys (`favorites.v1`) were hard CI errors in any SwiftUI app (issue #14). An id that is
+ *    registered but MISSPELLED in source is still caught — by `orphan_constant`/`bad_id`, which
+ *    is where a made-up id belongs. `Image(systemName:)` / `Label(_:systemImage:)` arguments are
+ *    skipped outright: those are SF Symbol names, never ids. This makes the rule more precise,
+ *    not weaker — it still never disables itself by counting;
  *  - `generated_out_of_sync`: generated constants differ from `ids.yaml` (delegates to
  *    `scripts/app-map/gen-ids --check` when present, else compares names).
  * Source roots default to `instrumentation/ios`, `instrumentation/android` plus any `--src`
@@ -34,7 +42,7 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'node:pat
 import type { AppMapConfig, Platform } from './config.ts';
 import { PLATFORMS } from './config.ts';
 import type { ElementKind, IdsElement, IdsGate, IdsRegistry, IdsScreen, LintIdsResult } from './types.ts';
-import { ELEMENT_ID_REGEX, GATE_DISMISS_REGEX, GATE_ID_REGEX, ID_REGEX, SCREEN_ID_REGEX, markerOfScreen } from './types.ts';
+import { ELEMENT_ID_REGEX, GATE_DISMISS_REGEX, GATE_ID_REGEX, ID_REGEX, MARKER_REGEX, SCREEN_ID_REGEX, markerOfScreen } from './types.ts';
 import { idsFile, stringsFile } from './paths.ts';
 import { parseYamlFile } from './yaml/load.ts';
 
@@ -89,12 +97,24 @@ const SWIFT_KEYWORDS = new Set([
   'false', 'is', 'nil', 'self', 'super', 'throws', 'true', 'try',
 ]);
 
+/** one string literal found by `tokenize`, with the little context `string_literal_id` needs */
+interface SourceString {
+  value: string;
+  line: number;
+  /**
+   * The literal is an `Image(systemName:)` / `Label(_:systemImage:)` argument — an SF Symbol name
+   * (`star.fill`, `person.crop.circle`), never an app-map id. `string_literal_id` never considers
+   * one, even when a symbol name happens to collide with a registered id (issue #14).
+   */
+  systemImage: boolean;
+}
+
 interface ScannedSource {
   /** path relative to repoRoot (forward slashes) */
   rel: string;
   /** source with comments blanked out — a marker named only in a doc comment is not a reference */
   code: string;
-  strings: Array<{ value: string; line: number }>;
+  strings: SourceString[];
 }
 
 export function lintIds(config: Pick<AppMapConfig, 'dir'>, opts: LintIdsOptions): LintIdsResult {
@@ -166,10 +186,11 @@ export function lintIds(config: Pick<AppMapConfig, 'dir'>, opts: LintIdsOptions)
   }
 
   // ---- 01 R8: no string-literal ids in UI code (string_literal_id) --------------------------
-  const knownPrefixes = idPrefixes(registered);
+  // `registered` IS the id vocabulary the rule matches against: markers, gate ids and dismiss
+  // ids, and element ids. A literal is a finding only when it equals one of them (01 R8).
   for (const platform of platforms) {
     for (const file of sources.get(platform) ?? []) {
-      for (const hit of literalIdsIn(file.strings, knownPrefixes)) {
+      for (const hit of literalIdsIn(file.strings, registered)) {
         issues.push({ rule: 'string_literal_id', severity: 'error', platform, file: file.rel, line: hit.line, message: `"${hit.id}" is a string-literal id; use the generated constant (01 R8)` });
       }
     }
@@ -346,27 +367,33 @@ export function constantNames(id: string): { swift: string; kotlin: string } {
   return { swift, kotlin };
 }
 
-/** Pure: string literals in a source text that look like registry ids (rule `string_literal_id`), with line numbers. */
-export function findStringLiteralIds(source: string, knownPrefixes: ReadonlySet<string>): Array<{ id: string; line: number }> {
-  return literalIdsIn(tokenize(source).strings, knownPrefixes);
+/**
+ * Pure: the string literals in a source text that ARE registry ids (rule `string_literal_id`),
+ * with line numbers. `registeredIds` is the registry's own vocabulary — screen markers, gate ids
+ * and dismiss ids, and element ids — and a literal is a finding only when it EQUALS one of them:
+ * 01 R8 is "use the constant instead of the literal", which only means anything for an id that
+ * exists. Matching a feature PREFIX instead flagged every dotted SF Symbol name (issue #14).
+ */
+export function findStringLiteralIds(source: string, registeredIds: ReadonlySet<string>): Array<{ id: string; line: number }> {
+  return literalIdsIn(tokenize(source).strings, registeredIds);
 }
 
-function literalIdsIn(strings: ReadonlyArray<{ value: string; line: number }>, knownPrefixes: ReadonlySet<string>): Array<{ id: string; line: number }> {
-  const prefixes = [...knownPrefixes];
+function literalIdsIn(strings: readonly SourceString[], registered: ReadonlySet<string>): Array<{ id: string; line: number }> {
   return strings
-    .filter((s) => ID_REGEX.test(s.value) && prefixes.some((p) => s.value.startsWith(p)))
+    .filter((s) => !s.systemImage && isRegistryIdShape(s.value) && registered.has(s.value))
     .map((s) => ({ id: s.value, line: s.line }));
 }
 
-/** `screen.`, `gate.` and every registered element's feature prefix (`invoice.`, `nav.`, …) */
-function idPrefixes(registered: ReadonlySet<string>): Set<string> {
-  const out = new Set<string>(['screen.', 'gate.']);
-  for (const id of registered) {
-    if (id.startsWith('screen.') || id.startsWith('gate.')) continue;
-    const dot = id.indexOf('.');
-    if (dot > 0) out.add(id.slice(0, dot + 1));
-  }
-  return out;
+/**
+ * The three id shapes a registry can hold (01 R2): a screen marker, a gate id or its dismiss id,
+ * and an element id — `<feature>.<name>.<kind>`, three segments or more (ids.schema.json
+ * `elements[].id`). Everything `lintIds` puts in `registered` already has one of these shapes, so
+ * this is a cheap gate before the lookup rather than an extra restriction; it states the rule out
+ * loud — a two-segment literal (`favorites.v1`, `star.fill`) is not an element id at all,
+ * whatever is registered — and keeps that true if the registry ever admits a looser shape.
+ */
+function isRegistryIdShape(value: string): boolean {
+  return ELEMENT_ID_REGEX.test(value) || MARKER_REGEX.test(value) || GATE_ID_REGEX.test(value) || GATE_DISMISS_REGEX.test(value);
 }
 
 /**
@@ -456,12 +483,24 @@ function scanSource(repoRoot: string, abs: string): ScannedSource {
 }
 
 /**
+ * The Swift argument label immediately before a literal: `Image(systemName: "…")`,
+ * `Label("…", systemImage: "…")`. Deliberately NOT a Swift parser — only the direct-literal form
+ * is recognised, so `systemImage: flag ? "a" : "b"` falls through. That is safe because the
+ * fallback is the full-id match in `literalIdsIn`, which has no false positives of its own.
+ */
+const SYSTEM_IMAGE_LABEL = /(?:systemName|systemImage)\s*:\s*$/;
+
+/**
  * One pass over Swift/Kotlin/Java/ObjC source: blank out `//` and block comments (keeping line
  * breaks so line numbers survive) and collect every string literal with its line. Kotlin raw
  * strings (`"""…"""`) are collected whole.
+ *
+ * The `systemImage` flag is decided by looking back at `code` — the blanked buffer, not `source`
+ * — so a comment (`// systemName: "x"`) or an earlier literal (`"systemName: " + "star.fill"`)
+ * has already been erased to spaces and cannot fake an SF Symbol argument.
  */
-function tokenize(source: string): { code: string; strings: Array<{ value: string; line: number }> } {
-  const strings: Array<{ value: string; line: number }> = [];
+function tokenize(source: string): { code: string; strings: SourceString[] } {
+  const strings: SourceString[] = [];
   let code = '';
   let line = 1;
   let i = 0;
@@ -488,13 +527,15 @@ function tokenize(source: string): { code: string; strings: Array<{ value: strin
       const end = source.indexOf('"""', start);
       const stop = end < 0 ? n : end;
       const value = source.slice(start, stop);
-      strings.push({ value, line });
+      strings.push({ value, line, systemImage: SYSTEM_IMAGE_LABEL.test(code.slice(-48)) });
       const consumed = source.slice(i, end < 0 ? n : end + 3);
       for (const ch of consumed) { code += ch === '\n' ? '\n' : ' '; if (ch === '\n') line++; }
       i = end < 0 ? n : end + 3;
       continue;
     }
     if (c === '"') {
+      // captured BEFORE this literal is blanked into `code`, which is what the lookback reads
+      const systemImage = SYSTEM_IMAGE_LABEL.test(code.slice(-48));
       let value = '';
       let j = i + 1;
       code += ' ';
@@ -507,7 +548,7 @@ function tokenize(source: string): { code: string; strings: Array<{ value: strin
         code += ' ';
         j++;
       }
-      strings.push({ value, line });
+      strings.push({ value, line, systemImage });
       i = j;
       continue;
     }

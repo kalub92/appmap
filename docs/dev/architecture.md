@@ -525,6 +525,23 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     screen whose edge target was off-screen at naming time ends up non-empty but still missing that
     target, and rule 2 errors again — correct per the rule, but worth a better message. Issue #12.
 
+59. **`string_literal_id` matches a WHOLE registered id, never a feature prefix** (01 R8). The
+    rule used to fire on any `ID_REGEX` literal sharing a first segment with a registered id, so
+    one `person.detail.name.text` claimed the entire `person.` namespace and ordinary SwiftUI
+    code — SF Symbol names (`person.3`, `star.fill`, `xmark.circle.fill`) and dotted storage keys
+    (`favorites.v1`) — became CI errors with no suppression mechanism, which pushed the reference
+    integration to change PRODUCT code the linter had no business touching (issue #14). R8 is
+    "use the constant instead of the literal", which only means anything for an id that exists,
+    so `literalIdsIn` now tests `registered.has(value)` against the same set the rest of the
+    module uses (markers, gate ids and dismiss ids, element ids), behind an `isRegistryIdShape`
+    gate; and `tokenize` marks `Image(systemName:)` / `Label(_:systemImage:)` arguments
+    `systemImage: true` so a symbol name is never a candidate even when it collides with a
+    registered id. Deliberate narrowing: a literal that is REGISTERED-BUT-MISSPELLED
+    (`"invoice.save.buton"`) or names no id at all (`"screen.not_a_screen"`) is no longer this
+    rule's finding — `bad_id` and `orphan_constant` are where a made-up id surfaces. This is
+    precision, not permission: unlike decision 53's counting shortcut, nothing here can turn the
+    rule off — every genuine literal id in the registry still errors.
+
 ## 8. How to implement your module
 
 Tests live in `src/test/<module>.test.ts` (node:test, `node --disable-warning=ExperimentalWarning
@@ -723,7 +740,11 @@ sources pass (06 R2; `invoice.list.table` is not an error); `fixtures/lint/Bad.s
 `string_literal_id` ×2 at the right lines and `marker_unreferenced {platform:'ios'}` for
 `client_picker`/`invoice_detail` when it is the only iOS source; `fixtures/lint/Bad.kt` →
 `string_literal_id` ×2 and `marker_unreferenced {platform:'android'}` for `login`; `--platform
-ios` suppresses the Android findings; `report.test.ts` — `fixtures/events/sample.events.jsonl`
+ios` suppresses the Android findings; a literal that only shares a feature prefix with a
+registered id (`"person.3"`, `"favorites.v1"`) and an `Image(systemName:)` / `Label(systemImage:)`
+argument are NOT `string_literal_id` findings while the whole registered id still is, and
+`"screen.<known>"`/`"gate.<known>"` still are while an unregistered `"screen.not_a_screen"` is not
+(decision 59, issue #14); `report.test.ts` — `fixtures/events/sample.events.jsonl`
 with `since: 2026-09-01`, `until: 2026-09-08` → replay_rate 3/5, fallback_rate_per_recipe
 `create_invoice` on build 4413 = 1, heal_rate 40/100 runs, intent_critical_rejections 1,
 unknown_screen_rate 1/5 and `unknown_screen_rate_7d` over 09-01…09-08, brittleness index over
