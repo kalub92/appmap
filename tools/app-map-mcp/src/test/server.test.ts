@@ -16,7 +16,7 @@ import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
 import { ERROR_CODES } from '../errors.ts';
 import { idsFile, ingestSocket, recipeFile, screenFile, serverLog } from '../paths.ts';
-import type { HookPayload, Observation, Tree, TreeNode } from '../types.ts';
+import type { HookPayload, Observation, RecipeFile, Tree, TreeNode } from '../types.ts';
 import { estimateTokens } from '../token.ts';
 import { TRUNCATION_MARKER } from '../token.ts';
 import { GET_SCREEN_MAX_TOKENS, STEP_MAX_TOKENS, SUMMARY_MAX_TOKENS } from '../format.ts';
@@ -538,6 +538,21 @@ describe('mark_recipe (04 §3.8, 07 §7)', () => {
     const exported = ok(await call('export'));
     assert.deepEqual(exported.written, []);
     assert.deepEqual(exported.conflicts, []);
+  });
+
+  it('names a machine recompile, and says nothing for an ordinary write (04 §8, issue #13)', async () => {
+    ok(await call('mark_recipe', { recipe_id: 'create_invoice', status: 'candidate' }));
+    const human = ok(await call('export'));
+    assert.deepEqual(human.written, ['ios/recipes/create_invoice.yaml']);
+    assert.equal(human.machine_recompiles, undefined, 'a human mark is not a machine recompile');
+    assert.equal(human.recompile_hint, undefined);
+
+    // what `lifecycle.recompileFrom` leaves behind once its 04 §8 guard passes
+    const recipe = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    ctx.db.putRecipe({ ...recipe, version: recipe.version + 1 }, { dirty: true, reason: 'recompile:recompile_failures' });
+    const machine = ok(await call('export'));
+    assert.deepEqual(machine.machine_recompiles, [{ path: 'ios/recipes/create_invoice.yaml', reason: 'recompile:recompile_failures' }]);
+    assert.match(String(machine.recompile_hint), /rebuilt from a replay trajectory/);
   });
 });
 

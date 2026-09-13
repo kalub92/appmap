@@ -400,6 +400,13 @@ function cmdExport(args: ParsedArgs, io: CliIo): number {
       io.stderr(`${result.conflicts.map((c) => `conflict: ${c.path}\n${c.diff}`).join('\n')}\n`);
       return 1;
     }
+    // issue #13 criterion 4: a file whose STEPS were rebuilt by an automated recompile (04 §8)
+    // is not the same event as a canonicalisation, so say so — on stderr, beside the conflict
+    // diffs, because stdout is the harness contract below and must stay a bare path list.
+    const machine = result.written_from.filter((w) => w.machine_recompile);
+    if (machine.length > 0) {
+      io.stderr(`${machine.map((w) => `machine recompile: ${w.path} (${w.reason}) — these steps were rebuilt from a replay trajectory, not authored; the file says so as provenance.machine_recompile: true. Review the diff before merging (04 §8)`).join('\n')}\n`);
+    }
     // harness contract: written paths, one per line, on stdout (deletions marked, 02 §8)
     if (bool(args, 'json')) io.stdout(`${JSON.stringify(result, null, 2)}\n`);
     else {

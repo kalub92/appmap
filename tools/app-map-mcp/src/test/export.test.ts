@@ -11,7 +11,7 @@ import { parse } from 'yaml';
 import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
 import { exportMap, relPathFor, renderEntities, unifiedDiff } from '../store/export.ts';
-import type { ElementDef, ScreenFile } from '../types.ts';
+import type { ElementDef, RecipeFile, ScreenFile } from '../types.ts';
 import { isCanonical } from '../yaml/canonical.ts';
 import { PILOT_APP_MAP_DIR, makeTempAppMapDir } from './helpers.ts';
 
@@ -60,8 +60,47 @@ describe('exportMap (03 §4 write path)', () => {
     withCtx((ctx, dir) => {
       const before = snapshotYaml(dir);
       const res = exportMap(ctx);
-      assert.deepEqual(res, { written: [], deleted: [], unchanged: [], conflicts: [], non_canonical: [] });
+      assert.deepEqual(res, { written: [], written_from: [], deleted: [], unchanged: [], conflicts: [], non_canonical: [] });
       assert.deepEqual(snapshotYaml(dir), before);
+    });
+  });
+
+  it('written_from labels a machine recompile distinctly from a heal or a canonicalisation (04 §8, issue #13)', () => {
+    withCtx((ctx, dir) => {
+      healButton(ctx); // reason `heal`: a locator changed, the steps did not
+      const recipe = ctx.map.recipes.get('create_invoice') as RecipeFile;
+      // what `lifecycle.recompileFrom` writes once its 04 §8 guard passes: the STEPS were rebuilt,
+      // so the recipe carries both the dirty reason and the in-file marker
+      ctx.db.putRecipe(
+        { ...recipe, status: 'candidate', provenance: { ...recipe.provenance, machine_recompile: true } },
+        { dirty: true, reason: 'recompile:recompile_failures' },
+      );
+      const res = exportMap(ctx);
+
+      assert.deepEqual(res.written_from.map((w) => w.path), res.written, 'one entry per written path, same order');
+      const byPath = new Map(res.written_from.map((w) => [w.path, w]));
+      assert.deepEqual(byPath.get('ios/recipes/create_invoice.yaml'), {
+        path: 'ios/recipes/create_invoice.yaml', reason: 'recompile:recompile_failures', machine_recompile: true,
+      });
+      assert.deepEqual(byPath.get('ios/screens/invoice_list.yaml'), {
+        path: 'ios/screens/invoice_list.yaml', reason: 'heal', machine_recompile: false,
+      }, 'a heal is not a machine recompile: it changes a locator, never the steps');
+      // criterion 4's other half: the PR diff carries the same signal without the reviewer having
+      // to read `written_from`, and it lands right above the reviewer it qualifies
+      const text = readFileSync(join(dir, 'ios/recipes/create_invoice.yaml'), 'utf8');
+      assert.match(text, /^ {2}machine_recompile: true\n {2}reviewed_by: caleb$/m);
+      assert.ok(isCanonical('recipe', text), 'and the marker does not break canonical form (02 §11)');
+    });
+  });
+
+  it('the status-only lifecycle reason is NOT labelled a machine recompile (issue #13)', () => {
+    withCtx((ctx) => {
+      const recipe = ctx.map.recipes.get('create_invoice') as RecipeFile;
+      // `recordRunOutcome` writes the 04 §8 demotion under `lifecycle:<reason>`; only the BODY
+      // rewrite uses `recompile:<reason>`. Confusing the two would cry wolf on every demotion.
+      ctx.db.putRecipe({ ...recipe, status: 'candidate' }, { dirty: true, reason: 'lifecycle:recompile_failures' });
+      const res = exportMap(ctx);
+      assert.deepEqual(res.written_from, [{ path: 'ios/recipes/create_invoice.yaml', reason: 'lifecycle:recompile_failures', machine_recompile: false }]);
     });
   });
 

@@ -138,6 +138,42 @@ Rejected → `fallback` to the LLM with the top-3 candidates listed. An `intent_
 
 Recipe `version` increments on every structural change (steps, params, entry). Locator heals do not bump the version.
 
+The automatic recompile is **guarded**: it replaces the previous recipe only when all three hold.
+
+1. **No incompleteness warning.** A compile warning that says the rebuild is missing something the
+   run did — a dropped driver call (§3.3), a call that failed and left the slice (§3.1),
+   placeholder prose (§3.8) — blocks the write, including when the missing call was never in the
+   previous recipe (coverage cannot see those). The §3.2 backtracking-collapse note is *not* one
+   of these: collapsing an excursion is what the compiler does to every trajectory by design,
+   including the one the reviewer approved, and anything it removed that the previous recipe needs
+   is caught by name by the coverage rule below. It is reported, not treated as a defect.
+2. **The rebuilt step list covers the previous one** — every previous step still present, in
+   order, matched on `action` plus the element/list/gate/url it acts on (never the data a step
+   carries, so a `{param}` slot and the literal it was compiled from compare equal), with no
+   matched step losing an `expect` assertion or its `intent_critical` mark. Extra steps are fine;
+   a rebuild is allowed to grow, never to shrink.
+3. **The rebuilt `preconditions` and `entry` cover the previous ones.** Every previous condition
+   must come back (extra ones are a narrowing, not a loss), and a previous `entry.deep_link` must
+   come back on the same screen with every query parameter it carried — dropping
+   `?fixture=logged_in` is `preconditions: [{auth: logged_in}]` loss in URL form, and a replay
+   whose slice starts after the entry navigation rebuilds neither. `entry.fallback_path` is
+   checked only when the previous recipe had no deep link, because §3.5 derives it from whatever
+   leading navigation the slice held.
+
+Otherwise the previous recipe is kept untouched, the refusal is logged and recorded as a `compile`
+event with `ok: false` and a `recompile_refused_*` reason (08 §2), and a diff is surfaced for a
+human to recompile by hand — the same posture as a rejected heal on an `intent_critical` element
+(§7.2). A rebuild can only encode what the driver managed to do, so an unguarded recompile erodes
+recipes towards the subset that always passes.
+
+`provenance.reviewed_by` survives a revision. The demotion to `candidate` stands either way, so a
+`ci_gate` recipe that is recompiled keeps its historical reviewer but must be promoted again by a
+human. Because that signature outlives the steps it was given for, an accepted rebuild also sets
+`provenance.machine_recompile: true` (02 §6) — deleted again when a human signs the recipe with
+`mark_recipe(ci_gate, reviewer)`. `APP_MAP_RECOMPILE=off` (03 §3) skips the rebuild entirely:
+replay is then strictly read-only against the map. `export` labels a file written from a machine
+recompile distinctly from one merely canonicalised.
+
 ## 9. Acceptance criteria
 
 - [ ] One exploration session of "create an invoice" in Claude Code compiles to `create_invoice.yaml` that validates and reads correctly in review.

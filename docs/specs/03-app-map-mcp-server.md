@@ -26,6 +26,7 @@ Environment variables (set from `.mcp.json`, all with defaults):
 | `APP_MAP_MAESTRO_BIN` | `maestro` | executor binary for headless replay |
 | `APP_MAP_LOG_LEVEL` | `info` | |
 | `APP_MAP_MAX_CONTEXT_TOKENS` | `600` | cap for `summary` and `get_screen` outputs |
+| `APP_MAP_RECOMPILE` | `guarded` | what the automatic 04 §8 recompile may do: `guarded` writes a rebuilt recipe only when it passes the 04 §8 write guard (steps, `preconditions` and `entry` all covered, no incompleteness warning) and stamps it `provenance.machine_recompile: true`; `off` makes replay strictly read-only against the map (the status transition still happens) |
 
 ## 4. Storage layer
 

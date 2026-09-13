@@ -13,18 +13,136 @@
  *
  * `version` increments on structural change only (steps/params/entry); heals never bump it.
  *
- * Layer: session (imports context, types, yaml/canonical, events).
+ * ## The recompile write guard (04 §8, issue #13)
+ *
+ * Row 4 above rebuilds the recipe from the latest successful trajectory. A rebuild can only ever
+ * encode what the driver managed to do, so whatever it failed at is compiled out and the recipe
+ * converges on the subset that always passes — silent test erosion, and the reported case was a
+ * reviewed 3-step search recipe whose `type` step vanished and which then reported PASS while
+ * testing nothing. `export`'s conflict check cannot see this: nobody edited the file on disk, so
+ * from its point of view the rewrite is the normal write path.
+ *
+ * So `recompileFrom` writes only when ALL THREE hold, and otherwise keeps the reviewed recipe and
+ * reports the refusal (`RecompileOutcome`, an `error` log line and a 08 §2 `compile` event with
+ * `ok:false`) — the same shape as a heal on an `intent_critical` element, which is rejected for
+ * a human rather than guessed (04 §7.2 `rejectHeal`):
+ *
+ * 1. **the compile raised no INCOMPLETENESS warning.** A `CompileRecipeResult.warnings` entry is
+ *    one of two things, and only one of them is a defect report:
+ *    - *incompleteness* — a driver call was dropped (04 §3.3), a call failed and left the slice
+ *      (04 §3.1), the prose is a placeholder (04 §3.8). Each says the rebuild is not a faithful
+ *      record of the run, so it never overwrites a reviewed file unattended. Note this blocks on
+ *      dropped calls the reviewed recipe never had: the coverage rule below cannot see those,
+ *      which is exactly why this gate exists beside it.
+ *    - *normalisation* — the 04 §3.2 backtracking-collapse note (`compile.isCollapseWarning`,
+ *      the one predicate both sides share). Collapsing an A→B→A excursion is what the compiler
+ *      does to EVERY trajectory by design, including the one the reviewer approved; it is a note
+ *      so a human can find the excursion, not evidence of loss. Anything it removed that the
+ *      reviewed recipe needs is caught by name by rule 2. Blocking on it instead would refuse
+ *      the pilot's own trajectory and make the 04 §9 automatic recompile true only on paper.
+ *      The note still travels on `RecompileOutcome.warnings` and into the `recipe recompiled`
+ *      log line.
+ * 2. **the rebuilt step list COVERS the reviewed one** (`recompileCovers`).
+ * 3. **the rebuilt `preconditions` and `entry` cover the reviewed ones** (`recompileCoversEntry`).
+ *
+ * ### Coverage
+ *
+ * `next` covers `previous` when the reviewed steps appear in the rebuilt list **in order, as a
+ * subsequence**, matched on a step's IDENTITY — its `action` plus the single thing it acts on:
+ *
+ * | action              | identity                              |
+ * |---------------------|---------------------------------------|
+ * | `tap` / `type`      | `element`                             |
+ * | `select`            | `list`                                |
+ * | `dismiss_gate`      | `gate`                                |
+ * | `open_link`         | `url`                                 |
+ * | `swipe`             | `direction` + `element` (if any)      |
+ * | `wait_for`          | `expect.screen`                       |
+ *
+ * A subsequence, not equality: EXTRA rebuilt steps between two reviewed ones are fine — that is
+ * what makes an accepted rebuild a superset. Deliberately NOT part of a step's identity:
+ *
+ * - `id`: every compile renumbers `s1…sn` (`compile.renumber`), so ids carry no meaning across
+ *   a rebuild.
+ * - the data a step carries (`type.text`, `select.match.text`). A value that was `{amount}` in
+ *   the reviewed recipe can come back as the literal `50`, or the reverse, purely because of
+ *   which `values` the replayed run happened to carry (04 §3.4) — so a `{param}` slot and the
+ *   literal it was compiled from ARE the same step here. Comparing them would report a removal
+ *   that did not happen, and the erosion this guard exists to catch is a step DISAPPEARING, not
+ *   a slot being re-resolved.
+ *
+ * Two further checks ride on the MATCHED PAIRS, because "still present" is not the same as
+ * "still testing anything" — a step that kept its action but lost its postcondition is exactly
+ * how a degraded recipe reports PASS:
+ *
+ * - a matched step must keep every assertion its reviewed `expect` made: `screen`, `focused` and
+ *   `text_present` equal, `visible`/`not_visible` supersets. A rebuild may make a postcondition
+ *   STRONGER, never weaker; a reviewed `expect` of `undefined` is covered by anything (02 §6).
+ * - a matched step that was `intent_critical: true` must come back `intent_critical: true`
+ *   (04 §3.7). `compile.markIntentCritical` recomputes it from ids.yaml, so this only fires when
+ *   a human un-marked the element — a decision that belongs in `mark_recipe`, not in a replay.
+ *
+ * Matching is greedy: a reviewed step pairs with the FIRST rebuilt step of the same identity at
+ * or after the previous match. On a recipe with two identical taps that can pair against the
+ * weaker of two twins and refuse where a smarter pairing would accept; refusing is the safe
+ * direction, so the simple rule stands.
+ *
+ * ### Preconditions and entry (`recompileCoversEntry`)
+ *
+ * Steps are not the only thing a rebuild can quietly drop. `compile` re-derives
+ * `preconditions: [{auth: logged_in}]` and `entry` from the trajectory (04 §3.5), so a replay
+ * whose slice starts AFTER the entry navigation rebuilds neither — the pilot's own recompile from
+ * seqs 4-8 loses `preconditions: [{auth: logged_in}]` and the `?fixture=logged_in` on its deep
+ * link, leaving a recipe that runs the same taps against a logged-OUT app. Same erosion, other
+ * route, so the same rule:
+ *
+ * - every reviewed `preconditions` entry must come back (compared on `conditionKey`, order-free);
+ *   an EXTRA one is a narrowing, not a loss;
+ * - a reviewed `entry.deep_link` must come back and still cover (`deepLinkCovers`): same screen,
+ *   and every query parameter it carried still present. Adding `?fixture=logged_in` is a
+ *   strengthening and is fine; dropping it is `preconditions` loss in URL form;
+ * - `entry.fallback_path` is checked ONLY when the reviewed recipe had no deep link, i.e. when
+ *   navigation is the one way in. Otherwise `optimizeEntry` derives it from whatever leading
+ *   navigation the slice happened to hold, so a shorter one says "this run entered by deep link",
+ *   not "the route was deleted"; refusing on it would refuse nearly every healthy recompile over
+ *   a signal carrying no information.
+ *
+ * OUT of scope by design: `params`, `verify`, `description`, `matches` — carried over from the
+ * previous recipe by `compile.compileRecipe`, so they cannot weaken here.
+ *
+ * ### What an accepted rebuild carries
+ *
+ * `provenance.reviewed_by` is carried forward (issue #13 criterion 3): an accepted rebuild never
+ * removes what the reviewer approved, and dropping the signature would make a machine-written
+ * file read as merely unreviewed while destroying the 07 §7 record of who signed it. The recipe
+ * is demoted to `candidate` either way, so a `ci_gate` recipe that gets recompiled keeps its
+ * historical reviewer but loses its gate status until a human runs `mark_recipe(ci_gate)` again.
+ *
+ * Because that signature outlives the steps it was given for, an accepted rebuild also stamps
+ * `provenance.machine_recompile: true` (issue #13 criterion 4, the in-file half). `compiled_from`
+ * moving to the replay session already implies as much, but only to a reader who knows what that
+ * implies; the marker says it outright, sits directly above `reviewed_by` in the canonical key
+ * order so a PR diff reads "machine-built steps, historical signature", and is deleted by
+ * `markRecipe` the moment a human signs the recipe again.
+ *
+ * `APP_MAP_RECOMPILE=off` (03 §3) skips the rebuild entirely — replay is then strictly read-only
+ * against the map and only the status transition happens.
+ *
+ * Layer: session (imports context, types, config, store/db, store/export.unifiedDiff,
+ * yaml/canonical, events).
  */
 import type { AppMapContext } from '../context.ts';
 import type { RecipeStats } from '../store/db.ts';
-import type { BuildNumber, EdgeAction, ElementDef, ElementId, Expect, MarkRecipeInput, MarkRecipeResult, RecipeFile, RecipeId, RecipeStatus, RunRecord, ScreenFile, ScreenId } from '../types.ts';
+import { RECOMPILE_DIRTY_PREFIX } from '../store/db.ts';
+import type { BuildNumber, Condition, EdgeAction, ElementDef, ElementId, Expect, MarkRecipeInput, MarkRecipeResult, RecipeFile, RecipeId, RecipeStatus, RecipeStep, RunRecord, ScreenFile, ScreenId, StepId } from '../types.ts';
 import { RECIPE_STATUSES, edgeElement, now, screenIdOfDeepLink, stepElement } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { schemaDir } from '../paths.ts';
 import { crossReferenceIssues } from '../validate.ts';
-import { parseYamlText } from '../yaml/canonical.ts';
+import { unifiedDiff } from '../store/export.ts';
+import { canonicalYaml, parseYamlText } from '../yaml/canonical.ts';
 import { validateAgainstSchema } from '../yaml/schemas.ts';
-import { compileRecipe } from './compile.ts';
+import { compileRecipe, isCollapseWarning } from './compile.ts';
 
 /** 08 §5 thresholds. */
 export const THRESHOLDS = {
@@ -61,6 +179,40 @@ export const THRESHOLDS = {
   target_brittleness_index: 0.15,
 } as const;
 
+/** Why a rebuilt recipe was NOT written over the reviewed one (04 §8 write guard, issue #13). */
+export type RecompileRefusal =
+  | 'disabled' | 'compile_failed' | 'warnings'
+  | 'missing_steps' | 'weakened_steps'
+  | 'missing_preconditions' | 'weakened_entry';
+
+/**
+ * What `recompileFrom` did. Reported on the `LifecycleDecision`, in the log, and — when it
+ * refused — as a 08 §2 `compile` event with `ok:false`.
+ */
+export interface RecompileOutcome {
+  /** true exactly when the rebuilt recipe replaced the previous one in the cache */
+  written: boolean;
+  /** empty exactly when `written`; EVERY reason that applied, so one report names them all */
+  refusals: RecompileRefusal[];
+  /** ids of reviewed steps the rebuild dropped (the reported case: a `type` step) */
+  missing_steps: StepId[];
+  /** ids of matched reviewed steps whose `expect` or `intent_critical` came back weaker */
+  weakened_steps: StepId[];
+  /** reviewed `preconditions` the rebuild dropped, rendered `auth=logged_in` (04 §8, issue #13) */
+  missing_preconditions: string[];
+  /** what the rebuilt `entry` lost: a deep link, one of its `?fixture=` params, a fallback screen */
+  entry_loss: string[];
+  /**
+   * every compile warning (or the failure reason), blocking or not — `refusals` says whether any
+   * of them stopped the write, and the 04 §3.2 collapse note never does (see the module header)
+   */
+  warnings: string[];
+  /** unified diff reviewed → rebuilt, for the human who has to decide; empty when there is no draft */
+  diff: string;
+  /** the reviewed recipe carried `provenance.reviewed_by` (07 §7) — a refusal here is louder */
+  was_reviewed: boolean;
+}
+
 export interface LifecycleDecision {
   recipe: RecipeId;
   from: RecipeStatus;
@@ -68,6 +220,8 @@ export interface LifecycleDecision {
   reason: 'verified' | 'recompile_failures' | 'recompile_fallbacks' | 'recompile_heals' | 'retired_screen';
   /** for recompiles: the session/seq of the latest successful trajectory to compile from */
   recompile_from?: { session: string; seq: number };
+  /** present only when a recompile was attempted (04 §8 row 4) — see `RecompileOutcome` */
+  recompile?: RecompileOutcome;
 }
 
 /** Pure: the automatic transition (if any) implied by `stats`; never returns `ci_gate` (human only). */
@@ -135,6 +289,149 @@ function currentRecipe(ctx: AppMapContext, id: RecipeId): RecipeFile | undefined
   return ctx.db.getRecipe(id) ?? ctx.map.recipes.get(id);
 }
 
+/**
+ * Pure: a step's identity for the 04 §8 coverage rule — its `action` plus the ONE thing it acts
+ * on. The data the step carries (`type.text`, `select.match.text`) is deliberately excluded, so
+ * a `{param}` slot and the literal it was compiled from are the same step; see the module header.
+ */
+export function stepIdentity(step: RecipeStep): string {
+  switch (step.action) {
+    case 'tap': return `tap:${step.element}`;
+    case 'type': return `type:${step.element}`;
+    case 'select': return `select:${step.list}`;
+    case 'swipe': return `swipe:${step.direction}:${step.element ?? '-'}`;
+    case 'open_link': return `open_link:${step.url}`;
+    case 'wait_for': return `wait_for:${step.expect.screen ?? '-'}`;
+    case 'dismiss_gate': return `dismiss_gate:${step.gate}`;
+  }
+}
+
+/**
+ * Pure: does `b` still assert everything `a` asserted? A rebuild may strengthen a postcondition,
+ * never weaken one — a step that kept its action but lost its `expect.screen` is exactly how a
+ * degraded recipe reports PASS while landing somewhere else (issue #13).
+ */
+function expectCovers(a: Expect | undefined, b: Expect | undefined): boolean {
+  if (a === undefined) return true; // the reviewed step asserted nothing; anything covers it
+  if (b === undefined) return false; // every assertion was dropped
+  if (a.screen !== undefined && b.screen !== a.screen) return false;
+  if (a.focused !== undefined && b.focused !== a.focused) return false;
+  if (a.text_present !== undefined && b.text_present !== a.text_present) return false;
+  for (const id of a.visible ?? []) if (!(b.visible ?? []).includes(id)) return false;
+  for (const id of a.not_visible ?? []) if (!(b.not_visible ?? []).includes(id)) return false;
+  return true;
+}
+
+/**
+ * Pure: does `next`'s step list cover `previous`'s? The 04 §8 recompile write guard — the rule
+ * is stated in full in the module header. `missing` names reviewed steps the rebuild dropped,
+ * `weakened` reviewed steps it kept but stripped of an assertion.
+ */
+export function recompileCovers(previous: RecipeFile, next: RecipeFile): { ok: boolean; missing: StepId[]; weakened: StepId[] } {
+  const missing: StepId[] = [];
+  const weakened: StepId[] = [];
+  const rebuilt = next?.steps ?? [];
+  // greedy two-pointer subsequence match: `cursor` never moves backwards, which is what makes
+  // this "in order"; scanning continues past a miss so the report names EVERY dropped step
+  let cursor = 0;
+  for (const step of previous?.steps ?? []) {
+    const want = stepIdentity(step);
+    let found = -1;
+    for (let k = cursor; k < rebuilt.length; k += 1) {
+      if (stepIdentity(rebuilt[k] as RecipeStep) === want) { found = k; break; }
+    }
+    if (found < 0) { missing.push(step.id); continue; }
+    const match = rebuilt[found] as RecipeStep;
+    if (!expectCovers(step.expect, match.expect) || (step.intent_critical === true && match.intent_critical !== true)) {
+      weakened.push(step.id);
+    }
+    cursor = found + 1;
+  }
+  return { ok: missing.length === 0 && weakened.length === 0, missing, weakened };
+}
+
+/** Pure: a `Condition` as one log-safe line (`auth=logged_in`, `flag=beta,value=true`); 02 §4.1 key order. */
+export function conditionKey(c: Condition): string {
+  const order: Array<keyof Condition> = ['auth', 'screen', 'flag', 'value', 'platform_version'];
+  return order.filter((k) => c?.[k] !== undefined).map((k) => `${k}=${String(c[k])}`).join(',');
+}
+
+/**
+ * Pure: split `appmap://invoice_new?fixture=logged_in` into its base and its query pairs.
+ * Hand-rolled rather than `new URL`, which normalizes case and percent-encoding and would make
+ * two links that differ on disk compare equal.
+ */
+function splitDeepLink(link: string): { base: string; query: Map<string, string> } {
+  const q = link.indexOf('?');
+  if (q < 0) return { base: link, query: new Map() };
+  const query = new Map<string, string>();
+  for (const part of link.slice(q + 1).split('&')) {
+    if (part === '') continue;
+    const eq = part.indexOf('=');
+    query.set(eq < 0 ? part : part.slice(0, eq), eq < 0 ? '' : part.slice(eq + 1));
+  }
+  return { base: link.slice(0, q), query };
+}
+
+/**
+ * Pure: does deep link `b` still get you where `a` did? Same screen, and every query parameter
+ * `a` carried still present with the same value. ADDING one is fine — `compile.optimizeEntry`
+ * appends `?fixture=logged_in` when the trajectory shows a logged-in session (04 §3.5), which is
+ * a strengthening — but dropping one is not: `?fixture=logged_in` is `preconditions: [{auth:
+ * logged_in}]` in URL form, and a replay that enters without it exercises a different app state.
+ */
+export function deepLinkCovers(a: string, b: string | undefined): boolean {
+  if (b === undefined) return false;
+  const from = splitDeepLink(a);
+  const to = splitDeepLink(b);
+  if (from.base !== to.base) return false;
+  for (const [k, v] of from.query) if (to.query.get(k) !== v) return false;
+  return true;
+}
+
+/**
+ * Pure: does `next` still say WHEN the recipe applies and HOW you get into it? The second half of
+ * the 04 §8 write guard, beside `recompileCovers` — a rebuild that kept every step but lost
+ * `preconditions: [{auth: logged_in}]` and the `?fixture=logged_in` on its deep link runs the
+ * same taps against a logged-OUT app, which is the same silent erosion by another route (the
+ * pilot's own recompile does exactly this when the replay slice starts after the entry).
+ *
+ * - every reviewed `preconditions` entry must come back (deep-equal, order-free); extra ones are
+ *   a narrowing, which is not erosion;
+ * - a reviewed `entry.deep_link` must come back and must still cover (see `deepLinkCovers`);
+ * - `entry.fallback_path` is checked ONLY when the reviewed recipe had no deep link, i.e. when
+ *   navigation is the one way in. Otherwise it is out of scope on purpose: `optimizeEntry`
+ *   derives it from whatever leading navigation the slice happened to contain (04 §3.5), so a
+ *   shorter one means "this run entered by deep link", not "the route was deleted", and refusing
+ *   on it would refuse nearly every healthy recompile for a signal that carries no information.
+ */
+export function recompileCoversEntry(previous: RecipeFile, next: RecipeFile): { ok: boolean; missing_preconditions: string[]; entry_loss: string[] } {
+  const missing_preconditions: string[] = [];
+  const entry_loss: string[] = [];
+  // `conditionKey` is total over 02 §4.1's five fields, so equal keys are equal conditions
+  const rebuilt = (next?.preconditions ?? []).map(conditionKey);
+  for (const c of previous?.preconditions ?? []) {
+    const key = conditionKey(c);
+    if (!rebuilt.includes(key)) missing_preconditions.push(key);
+  }
+  const before = previous?.entry ?? {};
+  const after = next?.entry ?? {};
+  if (before.deep_link !== undefined) {
+    if (!deepLinkCovers(before.deep_link, after.deep_link)) {
+      entry_loss.push(`deep_link ${before.deep_link} → ${after.deep_link ?? '(none)'}`);
+    }
+  } else {
+    // no deep link on the reviewed recipe: the fallback path IS the entry, so it may not shrink
+    let cursor = 0;
+    for (const screen of before.fallback_path ?? []) {
+      const found = (after.fallback_path ?? []).indexOf(screen, cursor);
+      if (found < 0) entry_loss.push(`fallback_path dropped ${screen}`);
+      else cursor = found + 1;
+    }
+  }
+  return { ok: missing_preconditions.length === 0 && entry_loss.length === 0, missing_preconditions, entry_loss };
+}
+
 /** 04 §8: `version` increments on structural change only (steps, params, entry) — heals never bump it. */
 function isStructuralChange(a: RecipeFile, b: RecipeFile): boolean {
   return JSON.stringify([a.steps, a.params, a.entry]) !== JSON.stringify([b.steps, b.params, b.entry]);
@@ -184,20 +481,47 @@ export function recordRunOutcome(ctx: AppMapContext, run: RunRecord, outcome: { 
     ctx.db.putRecipe({ ...recipe, status: decision.to }, { dirty: true, reason: `lifecycle:${decision.reason}` });
   }
   if (decision.reason !== 'verified' && successful !== undefined) {
-    recompileFrom(ctx, recipe, decision, successful);
+    decision.recompile = recompileFrom(ctx, recipe, decision, successful);
   }
   ctx.log.info('lifecycle decision', { recipe: decision.recipe, from: decision.from, to: decision.to, reason: decision.reason });
   return decision;
 }
 
+/** the empty outcome every `recompileFrom` path starts from */
+function noRecompile(over: Partial<RecompileOutcome> = {}): RecompileOutcome {
+  return {
+    written: false, refusals: [], missing_steps: [], weakened_steps: [],
+    missing_preconditions: [], entry_loss: [], warnings: [], diff: '', was_reviewed: false, ...over,
+  };
+}
+
+/** a recipe diff is ids, `{param}` slots and static copy only (07 §2.3.3), but keep the line bounded */
+const REFUSAL_DIFF_MAX_CHARS = 4000;
+
 /**
- * 04 §8 "the compiler produces a new `version` from the latest successful trajectory". A compile
- * failure never fails the run that triggered it — it is logged and the recipe simply stays
- * `candidate` for a human to recompile.
+ * 04 §8 "the compiler produces a new `version` from the latest successful trajectory", behind the
+ * issue #13 write guard: the rebuild replaces the reviewed recipe only when the compile raised no
+ * incompleteness warning AND its steps cover the reviewed ones AND its `preconditions`/`entry`
+ * do too (see the module header for the rule in full).
+ *
+ * Nothing here ever fails the run that triggered it — not a compile failure, not a refusal. A
+ * refusal is not silent either: it is an `error` log line, a 08 §2 `compile` event with
+ * `ok:false`, and a `RecompileOutcome` on the returned `LifecycleDecision`.
  */
-function recompileFrom(ctx: AppMapContext, recipe: RecipeFile, decision: LifecycleDecision, successful: RunRecord): void {
+function recompileFrom(ctx: AppMapContext, recipe: RecipeFile, decision: LifecycleDecision, successful: RunRecord): RecompileOutcome {
   const from = decision.recompile_from;
-  if (from === undefined) return;
+  if (from === undefined) return noRecompile();
+  const wasReviewed = typeof recipe.provenance?.reviewed_by === 'string' && recipe.provenance.reviewed_by !== '';
+  const base = (over: Partial<RecompileOutcome> = {}): RecompileOutcome => noRecompile({ was_reviewed: wasReviewed, ...over });
+
+  // 03 §3 `APP_MAP_RECOMPILE=off`: replay is read-only against the map. Checked BEFORE compiling,
+  // so "read-only" means nothing is even computed from the trajectory. The demotion already
+  // happened in `recordRunOutcome` — that is the 08 §5 signal, not a write to the recipe body.
+  if (ctx.config.recompile === 'off') {
+    ctx.log.info('recompile skipped: APP_MAP_RECOMPILE=off', { recipe: recipe.id, trigger: decision.reason });
+    return base({ refusals: ['disabled'] });
+  }
+
   try {
     const session = ctx.db.getSession(from.session);
     // the successful run already carried the concrete values for every param (04 §3.4): they are
@@ -217,12 +541,7 @@ function recompileFrom(ctx: AppMapContext, recipe: RecipeFile, decision: Lifecyc
     });
     if (!result.ok) {
       ctx.log.warn('recompile produced no draft', { recipe: recipe.id, reason: result.reason });
-      return;
-    }
-    // this is the path that silently replaced a reviewed recipe with a degraded one (issue #9):
-    // a dropped driver call means the revision exercises less than the reviewed version did
-    if (result.warnings.length > 0) {
-      ctx.log.warn('recompile dropped driver calls', { recipe: recipe.id, warnings: result.warnings });
+      return base({ refusals: ['compile_failed'], warnings: [`${result.reason}: ${result.message}`] });
     }
     // a revision of an already-reviewed recipe keeps the reviewed prose (04 §8: only the
     // structure is recompiled) and lands dirty so the diff shows up in the next PR
@@ -232,6 +551,14 @@ function recompileFrom(ctx: AppMapContext, recipe: RecipeFile, decision: Lifecyc
       matches: recipe.matches,
       verify: recipe.verify,
       status: 'candidate',
+      provenance: {
+        ...result.recipe.provenance,
+        // issue #13 criterion 3: the reviewer's signature survives a revision. An accepted
+        // rebuild is a warning-free superset, so it never removes what was approved; dropping
+        // `reviewed_by` would make a machine-written file read as merely unreviewed and would
+        // destroy the 07 §7 record of who signed it.
+        ...(wasReviewed ? { reviewed_by: recipe.provenance.reviewed_by as string } : {}),
+      },
     };
     // 04 §8: `version` increments on STRUCTURAL change only. A recompile that reproduces the
     // same steps/params/entry (the common case — the failures were environmental) is a status
@@ -240,10 +567,110 @@ function recompileFrom(ctx: AppMapContext, recipe: RecipeFile, decision: Lifecyc
       next.version = recipe.version;
       delete next.provenance.revision_of;
     }
-    ctx.db.putRecipe(next, { dirty: true, reason: `lifecycle:${decision.reason}` });
-    ctx.log.info('recipe recompiled', { recipe: recipe.id, version: next.version, from_session: from.session });
+
+    // ---- the issue #13 write guard ------------------------------------------------------
+    // Every gate is evaluated (not short-circuited) so one report names every reason.
+    const refusals: RecompileRefusal[] = [];
+    // 1. a warning that says the rebuild is INCOMPLETE — a dropped driver call, a failed call,
+    //    placeholder prose — means it is not a faithful record of the run and must not overwrite
+    //    a reviewed file unattended. The 04 §3.2 collapse note is not one of those: see
+    //    `compile.isCollapseWarning` and the module header.
+    const blocking = result.warnings.filter((w) => !isCollapseWarning(w));
+    if (blocking.length > 0) refusals.push('warnings');
+    // 2. the rebuilt steps must cover the reviewed ones …
+    const coverage = recompileCovers(recipe, next);
+    if (coverage.missing.length > 0) refusals.push('missing_steps');
+    if (coverage.weakened.length > 0) refusals.push('weakened_steps');
+    // 3. … and so must the preconditions and entry that say when it applies and how to get in
+    const reach = recompileCoversEntry(recipe, next);
+    if (reach.missing_preconditions.length > 0) refusals.push('missing_preconditions');
+    if (reach.entry_loss.length > 0) refusals.push('weakened_entry');
+
+    if (refusals.length > 0) {
+      const outcome = base({
+        refusals,
+        missing_steps: coverage.missing,
+        weakened_steps: coverage.weakened,
+        missing_preconditions: reach.missing_preconditions,
+        entry_loss: reach.entry_loss,
+        warnings: result.warnings,
+        diff: unifiedDiff(canonicalYaml('recipe', recipe), canonicalYaml('recipe', next), `${ctx.map.platform}/recipes/${recipe.id}.yaml`),
+      });
+      reportRecompileRefusal(ctx, recipe, decision, from, next, outcome);
+      return outcome;
+    }
+
+    // issue #13 criterion 4, the in-file half: the YAML itself says these steps came from a
+    // machine. `compiled_from` moving to the replay session already implies it, but only to a
+    // reader who knows what that means; this is the line a reviewer can act on, and it sits
+    // directly above the carried-over `reviewed_by` (yaml/canonical KEY_ORDER) so the diff reads
+    // "machine-built steps, historical signature". A human clears it by signing again.
+    next.provenance.machine_recompile = true;
+    // the body write carries its OWN dirty reason, distinct from the `lifecycle:<reason>` of the
+    // status-only transition, so `export` can label it a machine recompile (issue #13 criterion 4)
+    ctx.db.putRecipe(next, { dirty: true, reason: `${RECOMPILE_DIRTY_PREFIX}${decision.reason}` });
+    ctx.log.info('recipe recompiled', {
+      recipe: recipe.id, version: next.version, from_session: from.session, trigger: decision.reason,
+      steps: next.steps.length, reviewed_by: next.provenance.reviewed_by,
+      // the collapse notes did not block, but they are the reason a human might still want to look
+      ...(result.warnings.length > 0 ? { notes: result.warnings } : {}),
+    });
+    return base({ written: true, warnings: result.warnings });
   } catch (e) {
     ctx.log.warn('recompile failed', { recipe: recipe.id, error: (e as Error).message });
+    return base({ refusals: ['compile_failed'], warnings: [(e as Error).message] });
+  }
+}
+
+/**
+ * Report a refused recompile. Mirrors `heal.rejectHeal` (04 §7.2), the precedent for "a machine
+ * that cannot prove it is safe hands the decision to a human instead of guessing": the refusal
+ * is logged, recorded as an event, and travels back to the caller with the evidence.
+ *
+ * It logs at `error` — a machine trying to shrink a reviewed recipe is the loudest thing this
+ * module has to say — and appends the existing 08 §2 `compile` kind with `ok:false` and a
+ * `recompile_refused_*` reason, so no new event kind is invented (`CompileEvent` already carries
+ * `ok`/`reason`; `compile.fail` uses the same shape). Note this leaves TWO `compile` lines for
+ * one rebuild: the `ok:true` one `compileRecipe` appends (the compile itself did succeed)
+ * followed by this `ok:false` one (the write did not happen).
+ *
+ * The unified diff goes in the log MESSAGE, not a field: `log.sanitizeFields` drops keys named
+ * `text`/`label`/`value`, so half a recipe diff would silently vanish from a structured field.
+ * A recipe diff is ids, `{param}` slots and static copy only (07 §2.3.3) — the same content
+ * `export` already prints to stderr for a 03 §4 conflict — but it is capped so the line stays
+ * bounded.
+ */
+function reportRecompileRefusal(
+  ctx: AppMapContext,
+  recipe: RecipeFile,
+  decision: LifecycleDecision,
+  from: { session: string; seq: number },
+  next: RecipeFile,
+  outcome: RecompileOutcome,
+): void {
+  ctx.events.append({
+    kind: 'compile', session: from.session, recipe: recipe.id, version: next.version,
+    from_session: from.session, steps: next.steps.length,
+    params: (recipe.params ?? []).map((p) => p.name),
+    ok: false, reason: `recompile_refused_${outcome.refusals.join('+')}`,
+  });
+  ctx.log.error('recompile refused: the rebuilt recipe does not cover the reviewed one', {
+    recipe: recipe.id,
+    trigger: decision.reason,
+    refusals: outcome.refusals,
+    missing_steps: outcome.missing_steps,
+    weakened_steps: outcome.weakened_steps,
+    missing_preconditions: outcome.missing_preconditions,
+    entry_loss: outcome.entry_loss,
+    warnings: outcome.warnings,
+    reviewed_by: outcome.was_reviewed ? recipe.provenance.reviewed_by : undefined,
+    kept_version: recipe.version,
+    rejected_version: next.version,
+    from_session: from.session,
+    hint: 'recompile by hand with compile_recipe + mark_recipe, or fix the trajectory and replay (04 §8)',
+  });
+  if (outcome.diff !== '') {
+    ctx.log.warn(`recompile refused — rejected draft for ${recipe.id}:\n${outcome.diff.slice(0, REFUSAL_DIFF_MAX_CHARS)}`);
   }
 }
 
@@ -341,7 +768,11 @@ export function markRecipe(ctx: AppMapContext, input: MarkRecipeInput): MarkReci
         );
       }
     }
+    // the reviewer has now read these steps, so the issue #13 "a machine wrote this" marker is
+    // spent: it exists to tell a reader that `reviewed_by` below it is historical, and here it
+    // stops being historical. `delete` rather than `false` so the key leaves the YAML entirely.
     next = { ...next, provenance: { ...next.provenance, reviewed_by: reviewer } };
+    delete next.provenance.machine_recompile;
   }
 
   next = { ...next, status: input.status };

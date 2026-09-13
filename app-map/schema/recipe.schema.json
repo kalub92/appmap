@@ -487,6 +487,10 @@
           "type": "string",
           "pattern": "^app-map-mcp@[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.\\-]+)?$"
         },
+        "machine_recompile": {
+          "type": "boolean",
+          "description": "04 §8: this version's steps were rebuilt by the automatic recompile, not authored or approved by a human; cleared when a reviewer signs it again (07 §7)"
+        },
         "reviewed_by": {
           "type": "string",
           "minLength": 1

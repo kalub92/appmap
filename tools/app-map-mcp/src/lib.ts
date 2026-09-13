@@ -10,8 +10,8 @@
 
 // ---- leaf -------------------------------------------------------------------------------------
 export * from './types.ts';
-export { CONFIG_DEFAULTS, ENV_VARS, LOG_LEVELS, PLATFORMS, configToEnv, driverToolPattern, isPlatform, loadConfig } from './config.ts';
-export type { AppMapConfig, LogLevel } from './config.ts';
+export { CONFIG_DEFAULTS, ENV_VARS, LOG_LEVELS, PLATFORMS, RECOMPILE_MODES, configToEnv, driverToolPattern, isPlatform, loadConfig } from './config.ts';
+export type { AppMapConfig, LogLevel, RecompileMode } from './config.ts';
 export { AppMapError, ERROR_CODES, NotImplementedError, toErrorJson } from './errors.ts';
 export type { ErrorCode, ErrorJson } from './errors.ts';
 export * as paths from './paths.ts';
@@ -37,7 +37,7 @@ export { PII_PATTERNS, buildScrubPolicy, findForbiddenContent, perceptionBytes, 
 export { gateSignatureMatches, labelNorm, observedSignature, requiredIdsFraction, roleLabelMatches, structuralHash, titleOf } from './signature.ts';
 
 // ---- store / map --------------------------------------------------------------------------------
-export { AppMapDb, DB_SCHEMA_VERSION, DDL, openDb } from './store/db.ts';
+export { AppMapDb, DB_SCHEMA_VERSION, DDL, RECOMPILE_DIRTY_PREFIX, isMachineRecompile, openDb } from './store/db.ts';
 export type { CounterKind, CounterName, DirtyKind, DirtyRow, OpenDbOptions, RecipeStats, SessionRow } from './store/db.ts';
 export { exportMap, renderEntities, unifiedDiff } from './store/export.ts';
 export type { ExportOptions } from './store/export.ts';
@@ -57,8 +57,8 @@ export { MATCH_CONFIDENCE, eligibleRecipes, inferParams, matchRecipe, paramsNeed
 export * as compile from './recipes/compile.ts';
 export { ARGENT_VERBS, DRIVER_VERBS, UNIVERSAL_VERBS, bareToolName, classifyVerb, isStepVerb, normalizeVerb } from './recipes/verbs.ts';
 export type { DriverVerbTable, StepVerb, VerbKind } from './recipes/verbs.ts';
-export { THRESHOLDS, decideTransition, eligibleForCiGate, markRecipe, markVerified, recordRunOutcome, retireRecipesForScreen, screensReferenced, shouldRecompile } from './recipes/lifecycle.ts';
-export type { LifecycleDecision, VerifiedEntities } from './recipes/lifecycle.ts';
+export { THRESHOLDS, conditionKey, decideTransition, deepLinkCovers, eligibleForCiGate, markRecipe, markVerified, recompileCovers, recompileCoversEntry, recordRunOutcome, retireRecipesForScreen, screensReferenced, shouldRecompile, stepIdentity } from './recipes/lifecycle.ts';
+export type { LifecycleDecision, RecompileOutcome, RecompileRefusal, VerifiedEntities } from './recipes/lifecycle.ts';
 export { COMPATIBLE_ROLES, applyHeal, bboxProximity, heal, healedElement, jaroWinkler, lcsLength, proposeHeal, rejectHeal, scoreCandidates, toPendingHeal } from './heal.ts';
 export type { HealProposal } from './heal.ts';
 export { assertDebugSandbox, checkExpect, defaultBuildProbe, expandSteps, reportStep, resolveRunSession, startGuidedRun, substituteParams, toRunStep } from './recipes/guided.ts';

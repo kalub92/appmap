@@ -62,6 +62,30 @@ import { readTrajectory } from '../observe.ts';
 /** 07 §4 / recipe.schema.json: a `matches[]` source is at most this many characters. */
 const MAX_MATCH_SOURCE = 200;
 
+/**
+ * The 04 §3.2 backtracking-collapse note, produced and recognised in ONE place.
+ *
+ * `CompileRecipeResult.warnings` mixes two kinds of line, and the 04 §8 recompile write guard
+ * (`recipes/lifecycle.ts`, issue #13) has to tell them apart:
+ *
+ * - **incompleteness** — a driver call was dropped (step 3), a call failed and left the slice
+ *   (step 1), prose is still a placeholder (step 8). Each says the rebuild is not a faithful
+ *   record of the run, so it must never overwrite a reviewed recipe unattended.
+ * - **normalisation** — THIS one. Collapsing an A→B→A excursion is what the compiler does to
+ *   every trajectory by design, including the one the reviewer approved; it removes nothing the
+ *   run achieved. It is a note so a human can find the excursion, not a defect report.
+ *
+ * The predicate lives next to the producer so the two can never drift; never match the text
+ * anywhere else.
+ */
+export const collapseWarning = (removed: readonly number[]): string =>
+  `collapsed ${removed.length} backtracking observation(s): seq ${removed.join(', ')}`;
+
+/** Pure: is this `CompileRecipeResult.warnings` line the 04 §3.2 normalisation note above? */
+export function isCollapseWarning(warning: string): boolean {
+  return /^collapsed \d+ backtracking observation\(s\): seq /.test(warning);
+}
+
 /** `app-map-mcp@<semver>` for `provenance.compiled_by` (read once, falls back to the declared version). */
 let cachedVersion: string | undefined;
 export function compiledBy(): string {
@@ -642,7 +666,7 @@ export function compileRecipe(ctx: AppMapContext, input: CompileRecipeInput): Co
     },
   };
   if (previous === undefined) warnings.push('`description` and `matches` are placeholders derived from the recipe id — write real ones (structure only, never task data), and add `verify.visible` assertions, before mark_recipe (04 §3.8, 02 §10.8)');
-  if (collapsed.removed.length > 0) warnings.push(`collapsed ${collapsed.removed.length} backtracking observation(s): seq ${collapsed.removed.join(', ')}`);
+  if (collapsed.removed.length > 0) warnings.push(collapseWarning(collapsed.removed));
 
   const yaml = canonicalYaml('recipe', recipe);
   ctx.events.append({

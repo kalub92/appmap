@@ -167,11 +167,14 @@ status: verified                     # candidate | verified | ci_gate | retired
 provenance:
   compiled_from: traj_2026-09-01_0007
   compiled_by: app-map-mcp@0.1.0
+  # machine_recompile: true          # set by the 04 §8 automatic recompile; see below
   reviewed_by: caleb
 last_verified_build: "4412"
 ```
 
 Step actions: `tap`, `type`, `select`, `swipe`, `open_link`, `wait_for`, `dismiss_gate`. `expect` conditions: `screen`, `focused`, `visible`, `not_visible`, `text_present` (static copy only). Every step with an `expect` is a verification point; steps without one inherit "screen unchanged".
+
+`provenance.machine_recompile: true` means this version's *steps* were rebuilt by the automatic recompile (04 §8), not authored or approved by a human. It sits directly above `reviewed_by` because that is what it qualifies: the signature is historical, carried over from the version the reviewer actually read. `mark_recipe(ci_gate, reviewer)` deletes the key (07 §7).
 
 Status lifecycle (04 §8): `candidate` on compile → `verified` after ≥3 successful replays across ≥2 sessions → `ci_gate` after ≥95% replay success across ≥3 builds → `retired` when a screen it depends on is removed.
 

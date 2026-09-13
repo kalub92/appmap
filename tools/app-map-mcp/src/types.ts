@@ -379,6 +379,15 @@ export interface RecipeProvenance {
   compiled_from: string;
   /** `app-map-mcp@<semver>` */
   compiled_by: string;
+  /**
+   * `true` when this version's STEPS were rebuilt by the automatic 04 §8 recompile rather than
+   * authored or approved by a human (issue #13 criterion 4). It is the in-file half of the
+   * signal `export` prints at the terminal: in a PR diff `+  machine_recompile: true` sitting
+   * above a carried-over `reviewed_by` says, without the reviewer having to know what a changed
+   * `compiled_from` implies, that the signature below it is historical. Cleared when a human
+   * signs the recipe again (`markRecipe` with a `reviewer`, 07 §7).
+   */
+  machine_recompile?: boolean;
   reviewed_by?: string;
   /** previous version this revision was compiled from (04 §8) */
   revision_of?: number;
@@ -1212,9 +1221,25 @@ export type CompileRecipeResult =
   | { ok: true; recipe: RecipeFile; /** canonical YAML for review */ yaml: string; collapsed_observations: number; warnings: string[] }
   | { ok: false; reason: 'unparameterized_value' | 'no_task' | 'no_observations' | 'loops_never_converge' | 'missing_postcondition' | 'unknown_screen'; message: string; offending_values?: string[] };
 export interface MarkRecipeResult { recipe_id: RecipeId; from: RecipeStatus | null; to: RecipeStatus; written: boolean }
+/** How one written path was produced (03 §4 write path, 04 §8 recompile guard — issue #13). */
+export interface ExportWrite {
+  /** relative path; the same string appears at the same index in `ExportResult.written` */
+  path: string;
+  /** the `DirtyRow.reason` behind the write (`heal`, `verify`, `mark_recipe:ci_gate`, `recompile:<trigger>`, …) */
+  reason: string;
+  /**
+   * True when this file's CONTENT was rebuilt by an automated recompile (04 §8) rather than
+   * authored by a human, healed, or merely canonicalised — `db.isMachineRecompile(reason)`. The
+   * same "wrote x.yaml" line means something very different in the two cases, and a reviewer
+   * reading a PR diff needs to be told which one this was (issue #13 criterion 4).
+   */
+  machine_recompile: boolean;
+}
 export interface ExportResult {
   /** relative paths written */
   written: string[];
+  /** one entry per `written` path, in the same order, saying how that write was produced (04 §8) */
+  written_from: ExportWrite[];
   /** relative paths unlinked (02 §8 purge of a screen retired on an earlier release) */
   deleted: string[];
   /** paths skipped because unchanged */

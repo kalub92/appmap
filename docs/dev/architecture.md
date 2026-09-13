@@ -470,6 +470,31 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     silently is the worst failure this system has (a recipe that passes while exercising
     nothing: `@swmansion/argent@0.25.0` types with `keyboard`, not `type_text`, issue #9).
 
+57. **An automated recompile may only grow a recipe.** `recipes/lifecycle.recompileFrom` writes
+    the rebuilt recipe over the previous one only when three gates pass, and otherwise keeps the
+    reviewed recipe. (a) No *incompleteness* warning — a dropped or failed driver call,
+    placeholder prose. The 04 §3.2 backtracking-collapse note is explicitly not one
+    (`compile.isCollapseWarning`, the predicate the producer and the guard share): collapsing is
+    what the compiler does to every trajectory by design, including the one the reviewer
+    approved, and anything it removed that the reviewed recipe needs is named by gate (b).
+    Treating it as a defect refused the pilot's own trajectory and left 04 §9's automatic
+    recompile true only on paper. (b) The new step list covers the old one as an ordered
+    subsequence (`recompileCovers`/`stepIdentity`, identity = action + the element/list/gate/url
+    acted on; `expect` may strengthen, never weaken; `intent_critical` may not be dropped).
+    (c) The rebuilt `preconditions` and `entry` cover the old ones (`recompileCoversEntry`):
+    every condition still present, and a reviewed `entry.deep_link` back on the same screen with
+    every query parameter intact — losing `?fixture=logged_in` is `auth: logged_in` loss in URL
+    form, which the pilot's own recompile from a post-entry slice does. `entry.fallback_path` is
+    checked only when there is no deep link, since 04 §3.5 derives it from whatever leading
+    navigation the slice held. A refusal is loud: an `error` log line, the unified diff, and a
+    `compile` event with `ok:false` and a `recompile_refused_*` reason — no new event kind, since
+    `CompileEvent` already carries `ok`/`reason`. An accepted revision carries
+    `provenance.reviewed_by` forward and stamps `provenance.machine_recompile: true` directly
+    above it, so a PR diff reads "machine-built steps, historical signature"; `markRecipe` deletes
+    the stamp when a human signs again. The body write uses the dirty reason `recompile:<trigger>`
+    (`store/db.RECOMPILE_DIRTY_PREFIX`), which is what lets `export` report
+    `written_from[].machine_recompile` and the CLI name it on stderr. Issue #13.
+
 ## 8. How to implement your module
 
 Tests live in `src/test/<module>.test.ts` (node:test, `node --disable-warning=ExperimentalWarning

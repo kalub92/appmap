@@ -92,7 +92,10 @@ export const KEY_ORDER: Readonly<Record<CanonicalType, readonly string[]>> = {
   step: ['id', 'action', 'element', 'list', 'match', 'text', 'direction', 'duration_ms', 'url', 'gate', 'timeout_ms', 'expect', 'intent_critical'],
   match: ['text'],
   expect: ['screen', 'focused', 'visible', 'not_visible', 'text_present'],
-  provenance: ['compiled_from', 'compiled_by', 'reviewed_by', 'revision_of'],
+  // `machine_recompile` sits directly above `reviewed_by` on purpose (issue #13 criterion 4): in a
+  // PR diff the two lines are then read together — "these steps are machine-made, the signature
+  // below is historical" — instead of the marker landing at the end where it reads as a footnote.
+  provenance: ['compiled_from', 'compiled_by', 'machine_recompile', 'reviewed_by', 'revision_of'],
   'mcp-allowlist': ['schema_version', 'servers'],
   server: ['name', 'source', 'transport', 'command', 'args', 'package', 'version', 'reviewer', 'reviewed_at', 'notes'],
 };

@@ -48,6 +48,23 @@ export interface DirtyRow {
   blob_sha?: string;
 }
 
+/**
+ * The `DirtyRow.reason` prefix that a recipe BODY rebuilt by `recipes/lifecycle.recompileFrom`
+ * is written under (04 §8, issue #13). Deliberately distinct from the `lifecycle:<reason>` a
+ * status-only transition uses, so `export` can tell "a machine rewrote this file's steps" apart
+ * from "this file's status changed" and label the write for the reviewer.
+ *
+ * It lives here, next to `DirtyRow`, because it is a contract between a producer
+ * (`recipes/lifecycle.ts`) and a consumer (`store/export.ts`) that must not drift; never inline
+ * the literal anywhere else.
+ */
+export const RECOMPILE_DIRTY_PREFIX = 'recompile:';
+
+/** Pure: does this `DirtyRow.reason` mean the row's content came from an automated recompile? */
+export function isMachineRecompile(reason: string): boolean {
+  return typeof reason === 'string' && reason.startsWith(RECOMPILE_DIRTY_PREFIX);
+}
+
 export interface SessionRow {
   session: SessionId;
   task?: string;

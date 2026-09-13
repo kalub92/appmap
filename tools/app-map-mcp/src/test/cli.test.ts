@@ -8,7 +8,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import type { SessionStartHookOutput } from '../types.ts';
+import type { RecipeFile, SessionStartHookOutput } from '../types.ts';
+import { openContext } from '../context.ts';
 import { estimateTokens } from '../token.ts';
 import { parseArgs, USAGE } from '../cli.ts';
 import { validateAgainstSchema } from '../yaml/schemas.ts';
@@ -240,6 +241,28 @@ describe('app-map CI commands', () => {
       assert.deepEqual(lines, ['ios/recipes/create_invoice.yaml'], r.stdout);
       for (const line of lines) assert.match(line, /^[\w./-]+\.yaml$/, 'one relative path per line');
       assert.equal(runCli(['export', '--check'], { dir: t.dir }).code, 0, 'what export wrote is canonical');
+    });
+  });
+
+  it('export names a machine recompile on stderr while stdout stays a bare path list (issue #13 criterion 4, harness-notes §4)', () => {
+    withTemp((t) => {
+      // stage what `lifecycle.recompileFrom` leaves behind once its 04 §8 guard passes: a recipe
+      // row whose STEPS came from a replay trajectory rather than from a human.
+      const ctx = openContext(t.config, { logSink: 'none', skipRetention: true });
+      try {
+        const recipe = ctx.map.recipes.get('create_invoice') as RecipeFile;
+        ctx.db.putRecipe({ ...recipe, status: 'candidate' }, { dirty: true, reason: 'recompile:recompile_failures' });
+      } finally {
+        ctx.close();
+      }
+      const r = runCli(['export'], { dir: t.dir });
+      assert.equal(r.code, 0, r.stderr);
+      const lines = r.stdout.split('\n').filter((l) => l.trim().length > 0);
+      assert.deepEqual(lines, ['ios/recipes/create_invoice.yaml'], r.stdout);
+      // the Stop hook parses stdout as paths, so the warning must never land there (§4)
+      for (const line of lines) assert.match(line, /^[\w./-]+\.yaml$/, 'one relative path per line');
+      assert.match(r.stderr, /machine recompile: ios\/recipes\/create_invoice\.yaml/);
+      assert.match(r.stderr, /rebuilt from a replay trajectory/);
     });
   });
 

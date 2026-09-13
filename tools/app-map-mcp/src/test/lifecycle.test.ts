@@ -3,6 +3,7 @@
  * Every threshold is exercised at its boundary (the number below it and the number at it).
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import type { RecipeStats } from '../store/db.ts';
 import type { AppMapContext } from '../context.ts';
@@ -10,11 +11,17 @@ import { openContext } from '../context.ts';
 import type { ElementDef, RecipeFile, RecipeStatus, RunRecord, ScreenFile } from '../types.ts';
 import { now } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
+import { loadConfig } from '../config.ts';
 import { readEvents } from '../events.ts';
+import { schemaDir, serverLog } from '../paths.ts';
+import { validateAgainstSchema, validateEventLine } from '../yaml/schemas.ts';
 import {
-  THRESHOLDS, decideTransition, eligibleForCiGate, markRecipe, markVerified, recordRunOutcome,
-  retireRecipesForScreen, screensReferenced, shouldRecompile,
+  THRESHOLDS, conditionKey, decideTransition, deepLinkCovers, eligibleForCiGate, markRecipe,
+  markVerified, recompileCovers, recompileCoversEntry, recordRunOutcome, retireRecipesForScreen,
+  screensReferenced, shouldRecompile, stepIdentity,
 } from '../recipes/lifecycle.ts';
+import { isCollapseWarning } from '../recipes/compile.ts';
+import { canonicalYaml } from '../yaml/canonical.ts';
 import { loadTrajectoryFixture, makeTempAppMapDir } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
@@ -174,6 +181,150 @@ describe('screensReferenced — 02 §8 / 04 §8', () => {
   });
 });
 
+describe('recompileCovers / stepIdentity — the 04 §8 coverage rule (issue #13)', () => {
+  /** a recipe whose only interesting part is its step list */
+  const withSteps = (steps: RecipeFile['steps']): RecipeFile => recipe('verified', { steps });
+  const tap = (id: string, element: string, over: Partial<RecipeFile['steps'][number]> = {}): RecipeFile['steps'][number] =>
+    ({ id, action: 'tap', element, ...over } as RecipeFile['steps'][number]);
+
+  it('identity is the action plus the one thing the step acts on, never the data it carries', () => {
+    assert.equal(stepIdentity({ id: 's1', action: 'tap', element: 'invoice.save.button' }), 'tap:invoice.save.button');
+    assert.equal(stepIdentity({ id: 's1', action: 'select', list: 'client.picker.list', match: { text: 'Acme' } }), 'select:client.picker.list');
+    assert.equal(stepIdentity({ id: 's1', action: 'dismiss_gate', gate: 'push_permission' }), 'dismiss_gate:push_permission');
+    assert.equal(stepIdentity({ id: 's1', action: 'open_link', url: 'appmap://invoice_new' }), 'open_link:appmap://invoice_new');
+    assert.equal(stepIdentity({ id: 's1', action: 'swipe', direction: 'up' }), 'swipe:up:-');
+    assert.equal(stepIdentity({ id: 's1', action: 'wait_for', expect: { screen: 'invoice_detail' } }), 'wait_for:invoice_detail');
+  });
+
+  it('a {param} slot and the literal it was compiled from are the same step (04 §3.4)', () => {
+    // which of the two a rebuild produces depends only on the `values` the replayed run carried,
+    // so comparing them would report a removal that did not happen
+    const reviewed = withSteps([{ id: 's1', action: 'type', element: 'invoice.amount.field', text: '{amount}' }]);
+    const rebuilt = withSteps([{ id: 's1', action: 'type', element: 'invoice.amount.field', text: '50' }]);
+    assert.deepEqual(recompileCovers(reviewed, rebuilt), { ok: true, missing: [], weakened: [] });
+    assert.deepEqual(recompileCovers(rebuilt, reviewed), { ok: true, missing: [], weakened: [] });
+    // and the same for a select's match text
+    const selReviewed = withSteps([{ id: 's1', action: 'select', list: 'client.picker.list', match: { text: '{client}' } }]);
+    const selRebuilt = withSteps([{ id: 's1', action: 'select', list: 'client.picker.list', match: { text: 'Acme Corp' } }]);
+    assert.equal(recompileCovers(selReviewed, selRebuilt).ok, true);
+  });
+
+  it('an extra step between two reviewed ones still covers; a dropped step does not', () => {
+    const reviewed = withSteps([tap('s1', 'a.b.one'), tap('s2', 'a.b.two')]);
+    const grown = withSteps([tap('s1', 'a.b.one'), tap('s2', 'a.b.extra'), tap('s3', 'a.b.two')]);
+    assert.deepEqual(recompileCovers(reviewed, grown), { ok: true, missing: [], weakened: [] }, 'a superset is allowed to grow');
+    // the reported case (#13): the middle step vanished
+    const shrunk = withSteps([tap('s1', 'a.b.one')]);
+    assert.deepEqual(recompileCovers(reviewed, shrunk), { ok: false, missing: ['s2'], weakened: [] });
+  });
+
+  it('every dropped step is named, not just the first', () => {
+    const reviewed = withSteps([tap('s1', 'a.b.one'), tap('s2', 'a.b.two'), tap('s3', 'a.b.three')]);
+    assert.deepEqual(recompileCovers(reviewed, withSteps([tap('s1', 'a.b.two')])).missing, ['s1', 's3']);
+  });
+
+  it('covering steps in the WRONG ORDER is not coverage', () => {
+    const reviewed = withSteps([tap('s1', 'a.b.one'), tap('s2', 'a.b.two')]);
+    const reversed = withSteps([tap('s1', 'a.b.two'), tap('s2', 'a.b.one')]);
+    // both identities are present, but a recipe is a sequence: taking them in the other order is
+    // a different flow, so the reviewed s2 has nothing left after the match at index 1
+    assert.deepEqual(recompileCovers(reviewed, reversed), { ok: false, missing: ['s2'], weakened: [] });
+  });
+
+  it('a matched step that lost its expect.screen is weakened; a stronger expect is not', () => {
+    const reviewed = withSteps([tap('s1', 'invoice.save.button', { expect: { screen: 'invoice_detail' } })]);
+    assert.deepEqual(
+      recompileCovers(reviewed, withSteps([tap('s1', 'invoice.save.button')])),
+      { ok: false, missing: [], weakened: ['s1'] },
+      'kept the tap, dropped the assertion — this is the recipe that PASSes while testing nothing',
+    );
+    const stronger = withSteps([tap('s1', 'invoice.save.button', { expect: { screen: 'invoice_detail', visible: ['invoice.detail.amount.text'] } })]);
+    assert.equal(recompileCovers(reviewed, stronger).ok, true, 'a rebuild may strengthen a postcondition');
+    const wrongScreen = withSteps([tap('s1', 'invoice.save.button', { expect: { screen: 'invoice_list' } })]);
+    assert.deepEqual(recompileCovers(reviewed, wrongScreen).weakened, ['s1']);
+  });
+
+  it('a dropped entry from expect.visible / not_visible is a weakening', () => {
+    const reviewed = withSteps([tap('s1', 'invoice.save.button', { expect: { visible: ['a.b.one', 'a.b.two'], not_visible: ['a.b.err'] } })]);
+    assert.deepEqual(recompileCovers(reviewed, withSteps([tap('s1', 'invoice.save.button', { expect: { visible: ['a.b.one'], not_visible: ['a.b.err'] } })])).weakened, ['s1']);
+    assert.deepEqual(recompileCovers(reviewed, withSteps([tap('s1', 'invoice.save.button', { expect: { visible: ['a.b.one', 'a.b.two'] } })])).weakened, ['s1']);
+  });
+
+  it('a reviewed intent_critical step that comes back unmarked is weakened (04 §3.7)', () => {
+    const reviewed = withSteps([tap('s1', 'invoice.save.button', { intent_critical: true })]);
+    assert.deepEqual(recompileCovers(reviewed, withSteps([tap('s1', 'invoice.save.button')])), { ok: false, missing: [], weakened: ['s1'] });
+    // the other direction is a strengthening, and 02 §10.6 reads an absent mark as false
+    assert.equal(recompileCovers(withSteps([tap('s1', 'invoice.save.button')]), reviewed).ok, true);
+  });
+
+  it('a reviewed step with no expect is covered by a rebuilt step with any expect (02 §6)', () => {
+    const reviewed = withSteps([tap('s1', 'invoice.save.button')]);
+    assert.equal(recompileCovers(reviewed, withSteps([tap('s1', 'invoice.save.button', { expect: { screen: 'invoice_detail' } })])).ok, true);
+    assert.equal(recompileCovers(reviewed, withSteps([tap('s1', 'invoice.save.button')])).ok, true);
+  });
+
+  it('an empty reviewed step list is covered by anything', () => {
+    assert.deepEqual(recompileCovers(withSteps([]), withSteps([tap('s1', 'a.b.one')])), { ok: true, missing: [], weakened: [] });
+  });
+});
+
+describe('recompileCoversEntry / deepLinkCovers — preconditions and entry (04 §8, issue #13)', () => {
+  /** a recipe whose only interesting parts are `preconditions` and `entry` */
+  const withEntry = (over: Partial<RecipeFile>): RecipeFile => recipe('verified', over);
+
+  it('conditionKey renders a condition on one log-safe line in 02 §4.1 key order', () => {
+    assert.equal(conditionKey({ auth: 'logged_in' }), 'auth=logged_in');
+    assert.equal(conditionKey({ value: true, flag: 'beta' }), 'flag=beta,value=true');
+    assert.equal(conditionKey({}), '');
+  });
+
+  it('a deep link covers another when the screen matches and every query param survives', () => {
+    assert.equal(deepLinkCovers('appmap://invoice_new', 'appmap://invoice_new'), true);
+    assert.equal(deepLinkCovers('appmap://invoice_new', 'appmap://invoice_new?fixture=logged_in'), true, 'adding ?fixture is a strengthening');
+    assert.equal(deepLinkCovers('appmap://invoice_new?fixture=logged_in', 'appmap://invoice_new'), false, 'dropping it is preconditions loss in URL form');
+    assert.equal(deepLinkCovers('appmap://invoice_new?fixture=logged_in', 'appmap://invoice_new?fixture=logged_out'), false);
+    assert.equal(deepLinkCovers('appmap://invoice_new', 'appmap://invoice_list'), false, 'a different screen is a different entry');
+    assert.equal(deepLinkCovers('appmap://invoice_new', undefined), false, 'no deep link at all is the worst case');
+  });
+
+  it('a rebuild that drops a reviewed precondition does not cover it; an extra one is a narrowing, not a loss', () => {
+    const reviewed = withEntry({ preconditions: [{ auth: 'logged_in' }] });
+    assert.deepEqual(
+      recompileCoversEntry(reviewed, withEntry({})),
+      { ok: false, missing_preconditions: ['auth=logged_in'], entry_loss: [] },
+      'this is what the pilot recompile from a slice that starts after the entry actually does',
+    );
+    assert.equal(recompileCoversEntry(reviewed, withEntry({ preconditions: [{ flag: 'beta', value: true }, { auth: 'logged_in' }] })).ok, true, 'order-free, and extra conditions are fine');
+    assert.equal(recompileCoversEntry(withEntry({}), withEntry({ preconditions: [{ auth: 'logged_in' }] })).ok, true);
+  });
+
+  it('a rebuilt entry that loses the reviewed deep link (or its fixture) is a weakening', () => {
+    const reviewed = withEntry({ entry: { deep_link: 'appmap://invoice_new?fixture=logged_in', fallback_path: ['invoice_list', 'invoice_new'] } });
+    assert.deepEqual(
+      recompileCoversEntry(reviewed, withEntry({ entry: { deep_link: 'appmap://invoice_new', fallback_path: ['invoice_new'] } })).entry_loss,
+      ['deep_link appmap://invoice_new?fixture=logged_in → appmap://invoice_new'],
+    );
+    assert.deepEqual(
+      recompileCoversEntry(reviewed, withEntry({ entry: { fallback_path: ['invoice_new'] } })).entry_loss,
+      ['deep_link appmap://invoice_new?fixture=logged_in → (none)'],
+    );
+  });
+
+  it('a shorter fallback_path is NOT a loss while the deep link stands — it says the run entered by deep link', () => {
+    // `optimizeEntry` (04 §3.5) derives fallback_path from whatever leading navigation the slice
+    // held, so refusing on it would refuse nearly every healthy recompile for no information
+    const reviewed = withEntry({ entry: { deep_link: 'appmap://invoice_new', fallback_path: ['invoice_list', 'invoice_new'] } });
+    assert.equal(recompileCoversEntry(reviewed, withEntry({ entry: { deep_link: 'appmap://invoice_new', fallback_path: ['invoice_new'] } })).ok, true);
+  });
+
+  it('with NO deep link the fallback_path IS the entry, so it may not shrink or reorder', () => {
+    const reviewed = withEntry({ entry: { fallback_path: ['invoice_list', 'invoice_new'] } });
+    assert.equal(recompileCoversEntry(reviewed, withEntry({ entry: { fallback_path: ['invoice_list', 'client_picker', 'invoice_new'] } })).ok, true, 'a longer route still walks the same screens in order');
+    assert.deepEqual(recompileCoversEntry(reviewed, withEntry({ entry: { fallback_path: ['invoice_new'] } })).entry_loss, ['fallback_path dropped invoice_list']);
+    assert.deepEqual(recompileCoversEntry(reviewed, withEntry({ entry: { fallback_path: ['invoice_new', 'invoice_list'] } })).entry_loss, ['fallback_path dropped invoice_new']);
+  });
+});
+
 // ---------------------------------------------------------------------------------------------
 // Effectful half: markRecipe, markVerified, retireRecipesForScreen, recordRunOutcome
 // ---------------------------------------------------------------------------------------------
@@ -201,6 +352,53 @@ function finishedRun(over: Partial<RunRecord> = {}): RunRecord {
     started_at: now(), build: ctx.build, start_seq: 0, last_seq: 5, ...over,
   };
 }
+
+// --- the issue #13 recompile fixtures --------------------------------------------------------
+/** the session the committed trajectory fixture was recorded under */
+const TRAJECTORY_SESSION = 'sess_2026-09-10_0007';
+/** the values the successful replay carried, so `compileRecipe` can re-parameterize (04 §3.4) */
+const REPLAY_PARAMS = { amount: 50, client: 'Acme Corp' };
+
+/**
+ * The reporter's shape (#13): a REVIEWED 3-step recipe over pilot ids whose middle step is the
+ * one a degraded rebuild drops. Steps s1/s3 are what seqs 4 and 8 of the fixture compile to.
+ */
+const reviewedThreeStep = (over: Partial<RecipeFile> = {}): RecipeFile => ({
+  id: 'create_invoice', version: 3, platform: 'ios',
+  description: 'Create an invoice for a client with an amount and save it',
+  matches: ['(create|new|make)( an?)? invoice'],
+  params: [{ name: 'amount', type: 'money', required: true }, { name: 'client', type: 'string', required: true }],
+  entry: { deep_link: 'appmap://invoice_new', fallback_path: ['invoice_new'] },
+  steps: [
+    { id: 's1', action: 'tap', element: 'invoice.amount.field', expect: { focused: 'invoice.amount.field' } },
+    { id: 's2', action: 'type', element: 'invoice.amount.field', text: '{amount}' },
+    { id: 's3', action: 'tap', element: 'invoice.save.button', expect: { screen: 'invoice_detail' }, intent_critical: true },
+  ],
+  verify: { screen: 'invoice_detail' }, status: 'verified',
+  provenance: { compiled_from: 'traj_old', compiled_by: 'app-map-mcp@0.1.0', reviewed_by: 'caleb' },
+  ...over,
+});
+
+/** insert only the named seqs of the committed trajectory, so the rebuild's shape is controlled */
+function seedSeqs(seqs: number[], c: AppMapContext = ctx): void {
+  for (const o of loadTrajectoryFixture('create_invoice.session')) if (seqs.includes(o.seq)) c.db.insertObservation(o);
+}
+
+/**
+ * 4 successful runs then 6 failed ones (6/10 > 50 %, 08 §5 row 3) with only the LAST one recorded,
+ * so exactly one recompile is attempted and the assertions below are unambiguous.
+ */
+function forceRecompile(c: AppMapContext = ctx): ReturnType<typeof recordRunOutcome> {
+  for (let i = 0; i < 4; i++) c.db.insertRun({ ...finishedRun({ session: TRAJECTORY_SESSION, start_seq: 0, params: REPLAY_PARAMS }), build: c.build });
+  for (let i = 0; i < 5; i++) c.db.insertRun({ ...finishedRun({ session: `sess_bad_${i}`, state: 'failed' }), build: c.build });
+  const run = { ...finishedRun({ session: 'sess_bad_last', state: 'failed' }), build: c.build };
+  c.db.insertRun(run);
+  return recordRunOutcome(c, run, { ok: false, steps: 3, steps_done: 1, ms: 500 });
+}
+
+/** the dirty rows `recompileFrom` writes the recipe BODY under (never the status-only transition) */
+const recompileDirtyRows = (c: AppMapContext = ctx): ReturnType<AppMapContext['db']['listDirty']> =>
+  c.db.listDirty().filter((d) => d.reason.startsWith('recompile:'));
 
 describe('markRecipe — 04 §3.8 / 07 §7', () => {
   it('candidate on an unknown recipe without a draft is bad_input', () => {
@@ -424,9 +622,15 @@ describe('recordRunOutcome — counters, the recipe_run event (08 §2) and the d
   // 04 §8: "version increments on every structural change". A recompile that reproduces the same
   // steps/params/entry is not a structural change, so repeated failures must not walk the version.
   it('repeated recompiles from the same trajectory do not bump the version (04 §8)', () => {
-    for (const o of loadTrajectoryFixture('create_invoice.session')) ctx.db.insertObservation(o);
-    const okSession = 'sess_2026-09-10_0007';
-    for (let i = 0; i < 4; i++) ctx.db.insertRun(finishedRun({ session: okSession, start_seq: 0 }));
+    // the WHOLE fixture, so the rebuild reaches the version invariant this test exists for: a
+    // slice starting at seq 4 rebuilds neither `preconditions: [{auth: logged_in}]` nor the
+    // `?fixture=logged_in` on the deep link the pilot recipe carries, and the issue #13 guard
+    // refuses it (see the dedicated test below). The 04 §3.2 collapse note the excursion at seqs
+    // 2-3 raises does NOT block — it is a normalisation note, not incompleteness. The successful
+    // runs carry the values the replay used, without which the recompile fails on
+    // `unparameterized_value` and this test proves nothing at all.
+    seedSeqs([1, 2, 3, 4, 5, 6, 7, 8]);
+    for (let i = 0; i < 4; i++) ctx.db.insertRun(finishedRun({ session: TRAJECTORY_SESSION, start_seq: 0, params: REPLAY_PARAMS }));
     const fail = (): void => {
       const run = finishedRun({ session: `sess_bad_${Math.random().toString(36).slice(2, 8)}`, state: 'failed' });
       ctx.db.insertRun(run);
@@ -436,8 +640,8 @@ describe('recordRunOutcome — counters, the recipe_run event (08 §2) and the d
     const afterFirst = ctx.db.getRecipe('create_invoice')!;
     assert.equal(afterFirst.status, 'candidate');
     assert.ok(
-      ctx.db.listDirty().some((d) => d.kind === 'recipe' && d.key === 'create_invoice' && d.reason === 'lifecycle:recompile_failures'),
-      'the recompile actually ran (otherwise this test proves nothing)',
+      recompileDirtyRows().some((d) => d.kind === 'recipe' && d.key === 'create_invoice' && d.reason === 'recompile:recompile_failures'),
+      'the recompile actually WROTE (only recompileFrom sets this reason, never the status transition)',
     );
     const steps = JSON.stringify(afterFirst.steps);
     for (let i = 0; i < 5; i++) fail();
@@ -455,5 +659,225 @@ describe('recordRunOutcome — counters, the recipe_run event (08 §2) and the d
 
   it('a malformed run record is bad_input', () => {
     assert.throws(() => recordRunOutcome(ctx, undefined as unknown as RunRecord, { ok: true, steps: 0, steps_done: 0, ms: 0 }), isCode(ERROR_CODES.BAD_INPUT));
+  });
+});
+
+describe('recompileFrom — the 04 §8 recompile write guard (issue #13)', () => {
+  it('a rebuild that drops a reviewed step does not replace it: steps, version and provenance.reviewed_by all survive (criteria 1 and 3)', () => {
+    ctx.db.putRecipe(reviewedThreeStep(), { dirty: false });
+    // seqs 4 and 8 only: the tap and the save. The `type` in between never happened, which is
+    // exactly the trajectory the reporter's degraded 2-step recipe was compiled from.
+    seedSeqs([4, 8]);
+    const decision = forceRecompile();
+
+    assert.equal(decision?.reason, 'recompile_failures');
+    assert.equal(decision?.recompile?.written, false, 'the reviewed recipe was NOT replaced');
+    assert.deepEqual(decision?.recompile?.refusals, ['missing_steps'], 'this trajectory compiles warning-free, so the superset gate is what refused');
+    assert.deepEqual(decision?.recompile?.missing_steps, ['s2']);
+    assert.deepEqual(decision?.recompile?.weakened_steps, []);
+    assert.equal(decision?.recompile?.was_reviewed, true);
+    assert.match(decision?.recompile?.diff ?? '', /^-\s+action: type$/m, 'the refusal hands a human the diff that shows the dropped step');
+
+    const kept = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    assert.equal(kept.steps.length, 3, 'all three reviewed steps are still there');
+    assert.equal(kept.steps[1]?.action, 'type');
+    assert.equal(kept.version, 3, 'the version did not silently move');
+    assert.equal(kept.provenance.reviewed_by, 'caleb', 'the reviewer survived (criterion 3)');
+    assert.equal(kept.provenance.compiled_from, 'traj_old', 'and the body was never rewritten');
+    assert.deepEqual(recompileDirtyRows(), [], 'no machine-recompile write reached export');
+
+    // the demotion is real even though the rewrite is not — that is the 08 §5 signal
+    assert.equal(kept.status, 'candidate');
+    assert.ok(ctx.db.listDirty().some((d) => d.kind === 'recipe' && d.key === 'create_invoice' && d.reason === 'lifecycle:recompile_failures'));
+  });
+
+  it('the refusal is a compile event with ok:false and a recompile_refused_ reason that validates against events.schema.json (08 §2)', () => {
+    ctx.db.putRecipe(reviewedThreeStep(), { dirty: false });
+    seedSeqs([4, 8]);
+    forceRecompile();
+    const compiles = readEvents(t.config).events.filter((e) => e.kind === 'compile');
+    const refusal = compiles.at(-1);
+    assert.equal(refusal?.kind === 'compile' && refusal.ok, false);
+    assert.equal(refusal?.kind === 'compile' && refusal.reason, 'recompile_refused_missing_steps');
+    assert.equal(refusal?.kind === 'compile' && refusal.recipe, 'create_invoice');
+    // the compile itself succeeded; only the write was refused, so both lines are on record
+    assert.equal(compiles.at(-2)?.kind === 'compile' && compiles.at(-2)?.ok, true);
+    for (const event of readEvents(t.config).events) {
+      assert.deepEqual(validateEventLine(schemaDir(t.config), JSON.stringify(event)), [], `${event.kind}: no new event kind was needed`);
+    }
+  });
+
+  it('a rebuild that covers every reviewed step is written, keeps reviewed_by, and lands dirty under the recompile: reason (criterion 4)', () => {
+    ctx.db.putRecipe(reviewedThreeStep(), { dirty: false });
+    // seqs 4-8: the same three steps plus the client picker tap and select — a STRICT superset
+    seedSeqs([4, 5, 6, 7, 8]);
+    const decision = forceRecompile();
+
+    assert.equal(decision?.recompile?.written, true);
+    assert.deepEqual(decision?.recompile?.refusals, []);
+    const next = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    assert.deepEqual(next.steps.map((x) => x.action), ['tap', 'type', 'tap', 'select', 'tap'], 'the rebuilt superset keeps all three reviewed steps and adds two');
+    assert.equal(next.provenance.reviewed_by, 'caleb', 'an accepted revision carries the reviewer forward');
+    assert.equal(next.provenance.compiled_from, TRAJECTORY_SESSION);
+    assert.equal(next.provenance.revision_of, 3);
+    assert.equal(next.version, 4, 'a structural change is a new revision (04 §8)');
+    assert.equal(next.status, 'candidate', 'and it still needs a human before it can gate CI');
+    assert.deepEqual(
+      recompileDirtyRows().map((d) => ({ kind: d.kind, key: d.key, reason: d.reason })),
+      [{ kind: 'recipe', key: 'create_invoice', reason: 'recompile:recompile_failures' }],
+      'the body write is labelled distinctly from the status transition',
+    );
+  });
+
+  it('an INCOMPLETENESS warning blocks the write even when the steps cover the reviewed ones (criterion 2)', () => {
+    ctx.db.putRecipe(reviewedThreeStep(), { dirty: false });
+    // seqs 1 and 4-8 (the excursion at 2-3 left out, so the collapse note is not in play), plus a
+    // driver call at seq 2 that FAILED. 04 §3.1 drops failed calls from the slice and says so:
+    // whatever the run did there is missing from the rebuild, and the coverage rule below cannot
+    // see it because the reviewed recipe never had that step. That is the gap this gate covers.
+    seedSeqs([1, 4, 5, 6, 7, 8]);
+    const source = loadTrajectoryFixture('create_invoice.session').find((o) => o.seq === 4)!;
+    ctx.db.insertObservation({ ...source, seq: 2, ok: false });
+    const decision = forceRecompile();
+
+    assert.deepEqual(decision?.recompile?.refusals, ['warnings']);
+    assert.equal(decision?.recompile?.written, false);
+    assert.deepEqual(decision?.recompile?.missing_steps, [], 'the steps DID cover — the warning alone refused');
+    assert.ok(decision?.recompile?.warnings.some((w) => w.includes('failed driver call')), decision?.recompile?.warnings.join('; '));
+    const kept = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    assert.equal(kept.steps.length, 3);
+    assert.equal(kept.version, 3);
+    assert.deepEqual(recompileDirtyRows(), []);
+  });
+
+  // deliberately NOT a refusal: see the module header. The 04 §3.2 collapse is what the compiler
+  // does to every trajectory by design — including the one the reviewer approved — so treating
+  // its note as a defect report refused the pilot's own trajectory and left 04 §9's automatic
+  // recompile true only on paper.
+  it('the 04 §3.2 backtracking-collapse note is normalisation, not incompleteness, so it does not block', () => {
+    ctx.db.putRecipe(reviewedThreeStep(), { dirty: false });
+    // the WHOLE fixture: covering steps plus the A→B→A excursion at seqs 2-3 that is collapsed away
+    seedSeqs([1, 2, 3, 4, 5, 6, 7, 8]);
+    const decision = forceRecompile();
+
+    assert.deepEqual(decision?.recompile?.refusals, []);
+    assert.equal(decision?.recompile?.written, true);
+    assert.ok(
+      decision?.recompile?.warnings.some((w) => w.includes('backtracking')),
+      'the note is still reported on the outcome, it just does not veto the write',
+    );
+    assert.equal(isCollapseWarning(decision!.recompile!.warnings[0]!), true, 'and it is the note the compiler produces, matched by the shared predicate');
+    const next = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    assert.equal(next.steps.length, 5);
+    assert.equal(next.provenance.reviewed_by, 'caleb');
+  });
+
+  // the second erosion route, and the one the pilot's own map demonstrates: the steps all come
+  // back, but `preconditions: [{auth: logged_in}]` and the `?fixture=logged_in` on the deep link
+  // do not, so the surviving taps would run against a logged-OUT app
+  it('a rebuild that keeps every step but loses the reviewed preconditions and deep-link fixture is refused', () => {
+    const reviewed = ctx.map.recipes.get('create_invoice') as RecipeFile;
+    assert.deepEqual(reviewed.preconditions, [{ auth: 'logged_in' }], 'the committed pilot recipe is the fixture here');
+    assert.equal(reviewed.entry.deep_link, 'appmap://invoice_new?fixture=logged_in');
+    // seqs 4-8: every step of the recipe, but the slice starts AFTER the entry open_url, so
+    // `compile` sees no evidence of a logged-in session and rebuilds neither (04 §3.5)
+    seedSeqs([4, 5, 6, 7, 8]);
+    const decision = forceRecompile();
+
+    assert.equal(decision?.recompile?.written, false);
+    assert.deepEqual(decision?.recompile?.refusals, ['missing_preconditions', 'weakened_entry']);
+    assert.deepEqual(decision?.recompile?.missing_steps, [], 'every step DID come back — this is not the step rule');
+    assert.deepEqual(decision?.recompile?.missing_preconditions, ['auth=logged_in']);
+    assert.deepEqual(decision?.recompile?.entry_loss, ['deep_link appmap://invoice_new?fixture=logged_in → appmap://invoice_new']);
+    assert.match(decision?.recompile?.diff ?? '', /^-\s+- auth: logged_in$/m, 'and the human gets the diff that shows the drop');
+
+    const kept = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    assert.deepEqual(kept.preconditions, [{ auth: 'logged_in' }]);
+    assert.equal(kept.entry.deep_link, 'appmap://invoice_new?fixture=logged_in');
+    assert.equal(kept.version, 3, 'the version did not silently move');
+    assert.deepEqual(recompileDirtyRows(), []);
+  });
+
+  it('an accepted rebuild stamps provenance.machine_recompile: true, and a human signing it clears the stamp (criterion 4)', () => {
+    ctx.db.putRecipe(reviewedThreeStep(), { dirty: false });
+    seedSeqs([4, 5, 6, 7, 8]);
+    assert.equal(forceRecompile()?.recompile?.written, true);
+
+    const written = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    assert.equal(written.provenance.machine_recompile, true);
+    assert.deepEqual(
+      validateAgainstSchema(schemaDir(t.config), 'recipe', written), [],
+      'a stamped recipe is still a legal recipe.schema.json document — export writes it unchanged',
+    );
+    // the in-file half of criterion 4: the marker sits directly above the carried-over reviewer,
+    // so a PR diff reads "machine-built steps, historical signature" without the reviewer having
+    // to know what a changed `compiled_from` implies
+    assert.match(
+      canonicalYaml('recipe', written),
+      /^ {2}machine_recompile: true\n {2}reviewed_by: caleb$/m,
+    );
+
+    // 07 §7: once a human has read these steps the marker is spent
+    for (let i = 0; i < 3; i++) ctx.db.insertRun({ ...finishedRun({ session: `sess_ok_${i}` }), build: ctx.build });
+    markRecipe(ctx, { recipe_id: 'create_invoice', status: 'ci_gate', reviewer: 'dana', force: true });
+    const signed = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    assert.equal(signed.provenance.machine_recompile, undefined, 'the key leaves the YAML entirely, it does not become false');
+    assert.equal(signed.provenance.reviewed_by, 'dana');
+    assert.doesNotMatch(canonicalYaml('recipe', signed), /machine_recompile/);
+  });
+
+  it('the refusal reaches the log at error level, not only the returned outcome', () => {
+    // every other test in this file opens the context with `logSink: 'none'`, so the loudness
+    // half of "a refusal never fails the run but must be discoverable" needs its own context
+    // `makeTempAppMapDir` defaults to APP_MAP_LOG_LEVEL=error; the diff rides at `warn`
+    const logged = makeTempAppMapDir({ env: { APP_MAP_LOG_LEVEL: 'warn' } });
+    const logCtx = openContext(logged.config, { logSink: 'file', skipRetention: true, dbPath: ':memory:' });
+    try {
+      logCtx.db.putRecipe(reviewedThreeStep(), { dirty: false });
+      seedSeqs([4, 8], logCtx);
+      assert.equal(forceRecompile(logCtx)?.recompile?.written, false);
+      logCtx.close(); // flush the rotating file sink before reading it
+
+      const lines = readFileSync(serverLog(logged.config), 'utf8').split('\n').filter((l) => l !== '')
+        .map((l) => JSON.parse(l) as Record<string, unknown>);
+      const refusal = lines.find((l) => l.level === 'error' && String(l.msg).startsWith('recompile refused'));
+      assert.ok(refusal, `no error line; saw ${lines.map((l) => `${String(l.level)}:${String(l.msg)}`).join(' | ')}`);
+      assert.equal(refusal.recipe, 'create_invoice');
+      assert.deepEqual(refusal.refusals, ['missing_steps']);
+      assert.deepEqual(refusal.missing_steps, ['s2']);
+      assert.equal(refusal.reviewed_by, 'caleb', 'the reviewer whose signature is at stake is named');
+      // the diff rides on a `warn` line's MESSAGE (log.sanitizeFields drops `text`-ish fields)
+      assert.ok(lines.some((l) => l.level === 'warn' && String(l.msg).includes('rejected draft for create_invoice')));
+    } finally {
+      logCtx.close();
+      logged.cleanup();
+    }
+  });
+
+  it('APP_MAP_RECOMPILE=off makes replay read-only against the map: the demotion happens, the steps are never rebuilt', () => {
+    const off = makeTempAppMapDir({ env: { APP_MAP_RECOMPILE: 'off' } });
+    const offCtx = openContext(off.config, { logSink: 'none', skipRetention: true, dbPath: ':memory:' });
+    try {
+      assert.equal(offCtx.config.recompile, 'off');
+      offCtx.db.putRecipe(reviewedThreeStep(), { dirty: false });
+      seedSeqs([4, 8], offCtx);
+      const decision = forceRecompile(offCtx);
+
+      assert.deepEqual(decision?.recompile?.refusals, ['disabled']);
+      assert.equal(decision?.recompile?.written, false);
+      assert.equal(offCtx.db.getRecipe('create_invoice')?.status, 'candidate', 'the 08 §5 demotion still happens');
+      assert.equal(offCtx.db.getRecipe('create_invoice')?.steps.length, 3);
+      assert.deepEqual(recompileDirtyRows(offCtx), []);
+      assert.deepEqual(readEvents(off.config).events.filter((e) => e.kind === 'compile'), [], 'nothing was even compiled from the trajectory');
+    } finally {
+      offCtx.close();
+      off.cleanup();
+    }
+  });
+
+  it('a bad APP_MAP_RECOMPILE value is bad_input (03 §3)', () => {
+    assert.throws(() => loadConfig({ APP_MAP_RECOMPILE: 'yes' }), isCode(ERROR_CODES.BAD_INPUT));
+    assert.equal(loadConfig({}).recompile, 'guarded', 'the default is the guarded write, not the old unguarded one');
+    assert.equal(loadConfig({ APP_MAP_RECOMPILE: 'off' }).recompile, 'off');
   });
 });

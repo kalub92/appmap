@@ -17,7 +17,7 @@
  * | name_screen          | {screen_id, title?, deep_link?, session?}        | observe.nameScreen (explore mode)                         |
  * | compile_recipe       | {session, task, recipe_id, params[], values?}    | observe.declareTask when the session has none; compile.compileRecipe → draft YAML; on `ok` `observe.finishTask(ctx, session, {ok: true, mode_end})` (04 §3.1) |
  * | mark_recipe          | {recipe_id, status, recipe?, reviewer?}          | lifecycle.markRecipe(ctx, MarkRecipeInput) — `recipe` is the reviewed draft (RecipeFile or YAML text), required for `candidate` (04 §3.8); `reviewer` required for `ci_gate` (07 §7) |
- * | export               | {}                                               | store/export.exportMap (never `force`; that is the CLI's) |
+ * | export               | {}                                               | store/export.exportMap (never `force`; that is the CLI's); names any `machine_recompiles` (04 §8) |
  *
  * Every handler: `try { … } catch (e) { return toolError(e) }` — never throws (03 §11); every
  * text output passes through `capTokens(text, config.maxContextTokens)`. Results are JSON in
@@ -494,10 +494,17 @@ function toolExport(ctx: AppMapContext): ToolResult {
       ctx.log.warn('export: reload after write failed', { error: (e as Error).message });
     }
   }
+  // issue #13 criterion 4: only the machine-recompiled paths are listed (the capped tool output
+  // stays small), because those are the ones whose steps a human still has to review (04 §8).
+  const machine = result.written_from.filter((w) => w.machine_recompile);
   return toolJson({
     written: result.written, deleted: result.deleted, unchanged: result.unchanged,
     conflicts: result.conflicts.map((c) => c.path),
     ...(result.conflicts.length > 0 ? { hint: 'a YAML file changed on disk since load; rerun `app-map export --force` or reload (03 §4)' } : {}),
+    ...(machine.length > 0 ? {
+      machine_recompiles: machine.map((w) => ({ path: w.path, reason: w.reason })),
+      recompile_hint: "these files' steps were rebuilt from a replay trajectory, not authored by a human — each carries provenance.machine_recompile: true; review the diff before merging (04 §8)",
+    } : {}),
   }, cap(ctx));
 }
 
