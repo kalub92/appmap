@@ -1,0 +1,427 @@
+{
+  "_note": "real `argent run native-describe-screen --udid <UDID> --bundleId <ID> --json` shape (@swmansion/argent@0.25.0, issue #10): a FLAT element list, no nesting, no `type`, no `enabled` and no focus flag of any name. `elements` is in CAPTURE order, which is what `sibling_index` records. Reconstructed from the reference integration's committed map (swapi-explorer app-map/ios/screens/people_list.yaml): normalizing it must reproduce that file's roles, paths, sibling_index, bbox_norm, geometry locators and structural_hash.",
+  "status": "ok",
+  "screenFrame": {
+    "x": 0,
+    "y": 0,
+    "width": 402.0,
+    "height": 874.0
+  },
+  "elements": [
+    {
+      "frame": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 1.0,
+        "height": 1.0
+      },
+      "normalizedFrame": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 0.0025,
+        "height": 0.0011
+      },
+      "normalizedTapPoint": {
+        "x": 0.0013,
+        "y": 0.0006
+      },
+      "tapPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "traits": [],
+      "identifier": "screen.people_list",
+      "viewClassName": "SwiftUI.AccessibilityNode"
+    },
+    {
+      "frame": {
+        "x": 56.3,
+        "y": 177,
+        "width": 317.7,
+        "height": 22
+      },
+      "normalizedFrame": {
+        "x": 0.1401,
+        "y": 0.2025,
+        "width": 0.7902,
+        "height": 0.0252
+      },
+      "normalizedTapPoint": {
+        "x": 0.5352,
+        "y": 0.2151
+      },
+      "tapPoint": {
+        "x": 215.2,
+        "y": 188.0
+      },
+      "traits": [],
+      "value": "Search characters",
+      "identifier": "people.search.field",
+      "viewClassName": "UITextField"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 256.3,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.2933,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.3315
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 289.7
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Luke Skywalker",
+      "identifier": "people.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 323.0,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.3696,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.4078
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 356.4
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "C-3PO",
+      "identifier": "people.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 389.7,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.4459,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.4841
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 423.1
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "R2-D2",
+      "identifier": "people.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 456.4,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.5222,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.5604
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 489.8
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Darth Vader",
+      "identifier": "people.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 523.1,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.5985,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.6367
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 556.5
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Leia Organa",
+      "identifier": "people.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 589.8,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.6748,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.7129
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 623.1
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Owen Lars",
+      "identifier": "people.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 656.5,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.7511,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.7893
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 689.8
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Beru Whitesun lars",
+      "identifier": "people.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 723.1,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.8274,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.8656
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 756.5
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "R5-D4",
+      "identifier": "people.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 789.8,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.9037,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.9418
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 823.1
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Biggs Darklighter",
+      "identifier": "people.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 856.5,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.98,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 1.0181
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 889.8
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Obi-Wan Kenobi",
+      "identifier": "people.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 216.0,
+        "width": 370.0,
+        "height": 40.3
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.2471,
+        "width": 0.9204,
+        "height": 0.0461
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.2702
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 236.2
+      },
+      "traits": [
+        "staticText"
+      ],
+      "label": "10 of 82",
+      "identifier": "people.count.text",
+      "viewClassName": "UILabel"
+    },
+    {
+      "frame": {
+        "x": 346.0,
+        "y": 66.0,
+        "width": 36.0,
+        "height": 36.0
+      },
+      "normalizedFrame": {
+        "x": 0.8607,
+        "y": 0.0755,
+        "width": 0.0896,
+        "height": 0.0412
+      },
+      "normalizedTapPoint": {
+        "x": 0.9055,
+        "y": 0.0961
+      },
+      "tapPoint": {
+        "x": 364.0,
+        "y": 84.0
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Sort",
+      "identifier": "people.sort.button",
+      "viewClassName": "_UIButtonBarButton"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 84.4,
+        "width": 201.0,
+        "height": 45.0
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.0966,
+        "width": 0.5,
+        "height": 0.0515
+      },
+      "normalizedTapPoint": {
+        "x": 0.2898,
+        "y": 0.1224
+      },
+      "tapPoint": {
+        "x": 116.5,
+        "y": 107.0
+      },
+      "traits": [
+        "header",
+        "staticText"
+      ],
+      "label": "Characters",
+      "viewClassName": "UILabel"
+    }
+  ]
+}

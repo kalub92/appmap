@@ -2,14 +2,14 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { AnyTree, IdentifySignal, LoadedMap, ScreenFile, Tree, TreeNode } from '../types.ts';
-import { IDENTIFY_SCORES, IDENTIFY_UNKNOWN_THRESHOLD, UNKNOWN_SCREEN, probeConditions } from '../types.ts';
+import { IDENTIFY_SCORES, IDENTIFY_UNKNOWN_THRESHOLD, UNKNOWN_SCREEN, probeConditions, roleHintsFor } from '../types.ts';
 import { loadMap } from '../yaml/load.ts';
 import { structuralHash } from '../signature.ts';
-import { findByA11yId, walk } from '../tree.ts';
+import { findByA11yId, normalizeTree, walk } from '../tree.ts';
 import {
   DECAY_FACTOR, DECAY_FLOOR, buildsSince, combineSignals, decayConfidence, evaluateCondition, identify, scoreScreen,
 } from '../identify.ts';
-import { PILOT_SCREEN_TREES, cloneTree, loadFixtureTree, makeTempAppMapDir } from './helpers.ts';
+import { PILOT_SCREEN_TREES, cloneTree, loadFixtureTree, makeTempAppMapDir, readJsonFixture } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
 let t: TempAppMapDir;
@@ -102,13 +102,25 @@ describe('identify — marker (03 §5.2)', () => {
     assert.equal(r.marker, 'screen.not_in_map', 'the marker seen is still reported');
   });
 
-  it('two marker nodes → not "exactly one": the cascade decides and no marker is reported', () => {
+  it('two markers → the deepest wins: a pushed detail leaves the parent marker in the tree (01 R3, issue #10)', () => {
+    // the reporter saw `identify_screen` answer `films_list` while `person_detail` was on screen:
+    // taking the first marker identifies the screen the pushed one COVERS
     const tree = cloneTree(loadFixtureTree('invoice_list'));
     findByA11yId(tree, 'invoice.list.table')[0]!.children.push(node('container', { a11y_id: 'screen.login' }));
     const r = identify(map, tree);
-    assert.equal(r.marker, undefined);
-    assert.ok(!r.signals.some((s) => s.kind === 'marker'));
-    assert.equal(r.screen_id, 'invoice_list', 'required_ids + title still win');
+    assert.equal(r.marker, 'screen.login');
+    assert.deepEqual(r.signals.map((s) => s.kind), ['marker']);
+    assert.equal(r.screen_id, 'login');
+    assert.equal(r.confidence, 1);
+  });
+
+  it('identifies a real flat Argent capture of a pushed screen as the pushed screen (issue #10)', () => {
+    const raw = readJsonFixture('raw/argent-native-describe-screen.invoice_detail.json');
+    const tree = normalizeTree(raw, { platform: 'ios', roleHints: roleHintsFor(map) });
+    const r = identify(map, tree);
+    assert.equal(r.screen_id, 'invoice_detail', 'not invoice_list, whose marker is still in the tree');
+    assert.equal(r.marker, 'screen.invoice_detail');
+    assert.equal(r.confidence, 1);
   });
 
   it('a gate-only tree is unknown with the gate present, never the gate as screen_id (decision 19)', () => {

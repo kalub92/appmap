@@ -1,5 +1,5 @@
 {
-  "_note": "best-effort XCUITest-like shape as returned by an Argent snapshot tool; src/tree.ts normalizes it. Field names unverified against the real driver.",
+  "_note": "best-effort XCUITest-like NESTED shape ({type, frame, children}); src/tree.ts normalizes it as the `xcuitest` shape. NOT what @swmansion/argent@0.25.0 returns: that driver answers `native-describe-screen` with a flat element list, see argent-native-describe-screen.*.json (issue #10).",
   "platform": "ios",
   "udid": "00000000-0000-0000-0000-000000000000",
   "bundle_id": "com.example.app",

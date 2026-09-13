@@ -72,6 +72,16 @@ export type Timestamp = string;
 export const ELEMENT_KINDS = ['button', 'field', 'list', 'cell', 'toggle', 'tab', 'picker', 'link', 'text', 'sheet'] as const;
 export type ElementKind = (typeof ELEMENT_KINDS)[number];
 
+/**
+ * `ids.yaml` `kind` (01 R2) → tree `role` (02 §3). Identical spellings apart from `text` →
+ * `staticText`. Used by `roleHintsFor` to give a capture that carries no element type at all
+ * (the real Argent flat shape, 03 §5) the role the registry already declares.
+ */
+export const ROLE_FOR_KIND: Readonly<Record<ElementKind, Role>> = {
+  button: 'button', field: 'field', list: 'list', cell: 'cell', toggle: 'toggle',
+  tab: 'tab', picker: 'picker', link: 'link', text: 'staticText', sheet: 'sheet',
+};
+
 /** Normalized accessibility roles shared by both platforms (schema `role` enum). */
 export const ROLES = [
   'application', 'window', 'container', 'navigationBar', 'tabBar', 'toolbar', 'scrollView', 'list', 'cell',
@@ -484,7 +494,13 @@ export interface TreeNode {
   children: TreeNode[];
 }
 
-export const TREE_SOURCES = ['argent', 'maestro', 'normalized', 'synthetic'] as const;
+/**
+ * Which driver the tree was normalized from. `argent` is the real `@swmansion/argent`
+ * `native-describe-screen` flat capture; `xcuitest` is the nested XCUITest-like snapshot some
+ * other drivers emit (tree.ts header, issue #10). Informational only — nothing keys behaviour
+ * off it, so trees written by an older build that spelled the nested shape `argent` stay legible.
+ */
+export const TREE_SOURCES = ['argent', 'maestro', 'normalized', 'synthetic', 'xcuitest'] as const;
 export type TreeSource = (typeof TREE_SOURCES)[number];
 
 /** A raw (unscrubbed) normalized tree. Must never be written to disk (03 §7). */
@@ -1374,6 +1390,32 @@ export function edgeElement(action: EdgeAction): ElementId | undefined {
     default: return undefined;
   }
 }
+/** cached per registry instance: ingest re-normalizes on every driver call (03 §11, <50 ms) */
+const ROLE_HINTS = new WeakMap<object, ReadonlyMap<ElementId, Role>>();
+
+/**
+ * The registry's `kind`s as tree roles, for drivers whose capture carries no element type at all
+ * (03 §5: the flat Argent shape has only `traits`/`viewClassName`). `tree.ts` is a pure tree
+ * layer that must work without a loaded map, so the *policy* — "a registered id is whatever
+ * `ids.yaml` says it is" — is computed here and handed to `normalizeTree` as plain data; the
+ * tree layer consults it only for the shape that has no type of its own, and never lets a hint
+ * demote a more specific derived role (`field` never overwrites `searchField`).
+ */
+export function roleHintsFor(map: LoadedMap): ReadonlyMap<ElementId, Role> {
+  const registry = map.elementRegistry;
+  let hints = ROLE_HINTS.get(registry);
+  if (hints === undefined) {
+    const built = new Map<ElementId, Role>();
+    for (const [id, entry] of registry) {
+      const role = ROLE_FOR_KIND[entry.kind];
+      if (role !== undefined) built.set(id, role);
+    }
+    hints = built;
+    ROLE_HINTS.set(registry, hints);
+  }
+  return hints;
+}
+
 export function isScrubbed(t: AnyTree): t is ScrubbedTree {
   return t.scrubbed === true;
 }

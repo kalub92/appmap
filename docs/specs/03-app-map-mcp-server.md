@@ -21,7 +21,7 @@ Environment variables (set from `.mcp.json`, all with defaults):
 |---|---|---|
 | `APP_MAP_DIR` | `./app-map` | root of YAML + `.local/` |
 | `APP_MAP_PLATFORM` | `ios` | which platform map to serve |
-| `APP_MAP_BUILD` | auto | current build number; auto-detected from the running app's bundle when Argent reports it, else from `manifest.yaml` |
+| `APP_MAP_BUILD` | auto | current build number; auto-detected when the driver reports it (the nested XCUITest-like snapshot carries `build_number`; Argent's `native-describe-screen` does not — issue #10), else from `manifest.yaml` |
 | `APP_MAP_DRIVER` | `argent` | driver tool name prefix hooks match on |
 | `APP_MAP_MAESTRO_BIN` | `maestro` | executor binary for headless replay |
 | `APP_MAP_LOG_LEVEL` | `info` | |
@@ -36,11 +36,13 @@ Environment variables (set from `.mcp.json`, all with defaults):
 
 ## 5. Screen identification
 
-Input: a normalized accessibility tree (from an observation or a Maestro hierarchy dump). Output: `{screen_id, variant?, confidence, signals, gates_present[]}`.
+Input: a normalized accessibility tree. The driver shapes `tree.ts` normalizes are the real Argent flat capture (`argent run native-describe-screen --json`: `{screenFrame, elements[]}`, no nesting and no element type — roles come from `traits`/`viewClassName` plus the registry's kinds), the nested XCUITest-like snapshot, a Maestro hierarchy dump, and an already-normalized tree. Output: `{screen_id, variant?, confidence, signals, gates_present[]}`.
 
 ```
 1. gates: for each kind:gate screen, test its signature; collect matches → gates_present
-2. marker: if exactly one node has id matching ^screen\. → screen_id = suffix, confidence 1.0, done
+2. marker: the DEEPEST node with id matching ^screen\. → screen_id = suffix, confidence 1.0, done
+   (a pushed screen leaves the covered screen's marker behind, 01 R3; deepest in the tree,
+    ties by greatest y, then document order)
 3. route: if the observation carries a known deep link/route → 0.9
 4. required_ids: fraction f of a screen's required_ids present → 0.8 × f  (only if f ≥ 0.5)
 5. structural_hash: exact match → 0.7
@@ -152,5 +154,5 @@ Resources exist for harnesses that prefer reading over tool calls; tools remain 
 
 ## 13. Open questions
 
-- Whether Argent exposes the running build number; if not, `APP_MAP_BUILD` is set by the developer or read from the app via a debug endpoint.
+- ~~Whether Argent exposes the running build number~~ — it does not: `native-describe-screen` answers `{status, screenFrame, elements[]}` and nothing else (issue #10), so `APP_MAP_BUILD` is set by the developer, read from the app via a debug endpoint, or taken from a driver whose snapshot carries `build_number`.
 - Whether to bundle Maestro or require it on PATH; bundling pins the version, PATH is simpler. Lean: require on PATH, pin the expected version in `package.json` `engines`-style metadata and check at start.

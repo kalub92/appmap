@@ -55,7 +55,9 @@ Box(Modifier.appMapScreen(AppMapId.Screen.INVOICE_LIST)) { … }   // semantics 
 Button(onClick = …, modifier = Modifier.appMapId(AppMapId.Element.INVOICE_ADD_BUTTON)) { … }
 // Views: android:id resource ids named after the registry id (dots → underscores)
 ```
-Exactly one marker is visible per full-screen state; sheets and modals carry their own. Cells of one
+Exactly one marker is visible per full-screen state; sheets and modals carry their own. Tooling does
+not rely on that — a pushed screen leaves the covered screen's marker in the accessibility tree, so
+app-map prefers the **deepest** marker (01 R3). Cells of one
 kind share an id (`invoice.list.cell`); containers with data-driven content are `dynamic: true` in
 `ids.yaml` so the scrubber drops their text (07 §2.3).
 

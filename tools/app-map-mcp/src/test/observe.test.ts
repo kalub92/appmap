@@ -15,12 +15,12 @@ import { readEvents } from '../events.ts';
 import { idsFile, trajectoryFile } from '../paths.ts';
 import { buildScrubPolicy, scrub } from '../scrub.ts';
 import { observedSignature } from '../signature.ts';
-import { normalizeTree } from '../tree.ts';
+import { findByA11yId, normalizeTree, nodesWithRole } from '../tree.ts';
 import {
   declareTask, finishTask, hookPayloadToObservation, inferTaskOutcome, ingestObservation, isDriverTool, lastObservation,
   nameScreen, readTrajectory, recordHookPayload, recordObservation,
 } from '../observe.ts';
-import { loadFixtureTree, loadHookFixture, makeTempAppMapDir } from './helpers.ts';
+import { loadFixtureTree, loadHookFixture, makeTempAppMapDir, readJsonFixture } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
 const SESSION = 'sess_2026-09-10_0007';
@@ -217,10 +217,48 @@ describe('element resolution — 04 §2 step 4', () => {
   });
 });
 
+describe('ingest of a real flat Argent capture — 03 §5, issue #10', () => {
+  const flat = (screen: string): unknown => readJsonFixture(`raw/argent-native-describe-screen.${screen}.json`);
+
+  it('ingests the driver\'s own output end to end, with the registry kinds wired in', () => {
+    const payload = tapPayload({
+      tool_input: { id: 'nav.invoices.tab' },
+      tool_response: { structuredContent: { ok: true, latency_ms: 12, snapshot: flat('invoice_list') } },
+    });
+    recordHookPayload(ctx, payload);
+    const obs = ctx.db.lastObservation(SESSION)!;
+    assert.equal(obs.screen_after, 'invoice_list');
+    assert.equal(obs.signature_after.marker, 'screen.invoice_list');
+    const snapshot = obs.snapshot!;
+    assert.ok(isScrubbed(snapshot));
+    assert.equal(snapshot.source, 'argent');
+    // the capture carries no element type: `cell` comes from the SwiftUI list-cell class, with
+    // the registry kind (`roleHintsFor`) behind it as the net for classes we cannot read
+    const cells = findByA11yId(snapshot, 'invoice.list.cell');
+    assert.equal(cells.length, 3);
+    assert.ok(cells.every((c) => c.role === 'cell'));
+    // AC4 end to end: three tabs, not six
+    assert.equal(findByA11yId(snapshot, 'nav.clients.tab').length, 1);
+    assert.equal(nodesWithRole(snapshot, 'tab').length, 3);
+  });
+
+  it('a pushed screen is recorded as the pushed screen, not the one it covers (01 R3)', () => {
+    recordHookPayload(ctx, tapPayload({
+      tool_input: { id: 'invoice.list.cell' },
+      tool_response: { structuredContent: { ok: true, latency_ms: 12, snapshot: flat('invoice_detail') } },
+    }));
+    const obs = ctx.db.lastObservation(SESSION)!;
+    assert.equal(obs.screen_after, 'invoice_detail');
+    // observe.ts step 7 grades the evidence by comparing this against `markerOfScreen(screen_after)`
+    assert.equal(obs.signature_after.marker, 'screen.invoice_detail');
+    assert.equal(readEvents(t.config).events.filter((e) => e.kind === 'identify').at(-1)?.signal, 'marker');
+  });
+});
+
 describe('build auto-detection — 03 §3', () => {
   it('a driver-reported build_number becomes the effective build when APP_MAP_BUILD=auto', () => {
     const payload = tapPayload();
-    // the Argent wrapper carries `build_number` next to `root` (tree.ts fromArgentSnapshot)
+    // the XCUITest-like wrapper carries `build_number` next to `root` (tree.ts fromXcuiSnapshot)
     ((payload.tool_response as { structuredContent: { snapshot: Record<string, unknown> } }).structuredContent.snapshot)['build_number'] = '4500';
     assert.equal(ctx.config.build, 'auto');
     recordHookPayload(ctx, payload);

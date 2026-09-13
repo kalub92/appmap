@@ -227,7 +227,12 @@ describe('observedSignature (02 §7)', () => {
     assert.equal(noIds.required_present, 0);
     const two = cloneTree(tree);
     two.root.children[0]!.children[0]!.a11y_id = 'screen.other';
-    assert.equal(observedSignature(two, screen).marker, 'none', 'two markers → none');
+    // 01 R3 as amended by issue #10: two markers no longer degrade to `none` — the deepest wins,
+    // and at equal depth that is the greater `y` (`screen.other` is the status bar at y 0)
+    assert.equal(observedSignature(two, screen).marker, 'screen.invoice_list', 'two markers → the deepest');
+    const pushed = cloneTree(tree);
+    findByA11yId(pushed, 'invoice.list.table')[0]!.children.push({ role: 'container', a11y_id: 'screen.invoice_detail', bbox_norm: { x: 0, y: 0, w: 1, h: 1 }, children: [] });
+    assert.equal(observedSignature(pushed, screen).marker, 'screen.invoice_detail', 'a pushed screen is deeper');
     const synthetic: Tree = { schema_version: 1, platform: 'ios', source: 'synthetic', root: { role: 'application', bbox_norm: { x: 0, y: 0, w: 1, h: 1 }, children: [] } };
     assert.deepEqual(observedSignature(synthetic, { ...screen, signature: { marker: 'screen.x' } }), { marker: 'none', structural_hash: structuralHash(synthetic), required_present: 1 });
   });

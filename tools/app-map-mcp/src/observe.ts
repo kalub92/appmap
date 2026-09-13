@@ -51,7 +51,7 @@ import type { AppMapContext } from './context.ts';
 import type { DriverInput, ElementDef, ElementId, Fingerprint, HookPayload, IdentifyResult, IdentifySignalKind, Locator, NameScreenInput, NameScreenResult, Observation, ObservedSignature, RecordObservationInput, RecordResult, ScreenFile, ScrubPolicy, ScrubbedTree, SessionId, SessionMode, TreeNode } from './types.ts';
 import {
   DEEP_LINK_REGEX, DEFAULT_LOCATOR_WEIGHTS, UNKNOWN_SCREEN, assertScrubbed, isMarker, markerOfScreen, now,
-  probeConditions, routeKey,
+  probeConditions, roleHintsFor, routeKey,
 } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { trajectoriesDir, trajectoryFile } from './paths.ts';
@@ -181,7 +181,9 @@ export function hookPayloadToObservation(ctx: AppMapContext, payload: HookPayloa
   const raw = extractSnapshot(payload.tool_response);
   if (raw !== undefined) {
     try {
-      const tree = normalizeTree(raw, { platform: ctx.map.platform });
+      // `roleHints`: a flat driver capture (03 §5, issue #10) carries no element type, so the
+      // registry's kinds are what make a registered list row come out `cell` and not `other`
+      const tree = normalizeTree(raw, { platform: ctx.map.platform, roleHints: roleHintsFor(ctx.map) });
       // 03 §3: `APP_MAP_BUILD=auto` takes the build the driver reported
       if (ctx.config.build === 'auto' && typeof tree.build === 'string' && tree.build !== '' && tree.build !== ctx.build) ctx.setBuild(tree.build);
       snapshot = scrub(tree, policyFor(ctx));

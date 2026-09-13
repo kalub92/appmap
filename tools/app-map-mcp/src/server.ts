@@ -64,7 +64,7 @@ import { recipeFile, screenFile } from './paths.ts';
 import type {
   DriverInput, LoadedMap, RecipeFile, RecipeParam, RecipeParams, RecipeStatus, RunMode, ScreenId, SessionId,
 } from './types.ts';
-import { RECIPE_STATUSES, RUN_MODES, probeConditions } from './types.ts';
+import { RECIPE_STATUSES, RUN_MODES, probeConditions, roleHintsFor } from './types.ts';
 import { capTokens } from './token.ts';
 import { indexMap } from './yaml/load.ts';
 import { decayConfidence, buildsSince, identify } from './identify.ts';
@@ -250,7 +250,9 @@ function toolIdentifyScreen(ctx: AppMapContext, args: { snapshot?: unknown; sess
   if (args.snapshot !== undefined && args.snapshot !== null) {
     // an LLM-supplied tree is normalized and SCRUBBED before anything looks at it (03 §7);
     // nothing is persisted — identify_screen never writes (raw trees never reach disk, 07 §2)
-    const tree = normalizeTree(args.snapshot, { platform: map.platform });
+    // same `roleHints` as ingest (observe.ts), so a caller-supplied flat capture identifies
+    // exactly the way a recorded one does (03 §5, issue #10)
+    const tree = normalizeTree(args.snapshot, { platform: map.platform, roleHints: roleHintsFor(map) });
     const scrubbed = scrub(tree, buildScrubPolicy(map.ids, map.staticLabels));
     const result = identify(map, scrubbed, { build: ctx.build, ...probeConditions(ctx.probe) });
     return toolJson({ ...result, source: 'snapshot' }, cap(ctx));

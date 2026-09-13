@@ -286,10 +286,14 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 10. **Drift status `skipped`** added to `ok|degraded|broken` (06 R4) for screens without deep
     link or absent from the router export; never blocks.
 11. **`recipe_run` covers guided_fallback** (no separate event kind; §6).
-12. **Driver shapes are best-effort**: Argent snapshot (`{type, identifier, label, value, frame,
-    children}`), Maestro hierarchy (`{elements:[{attributes, children}]}`), the hook
-    `tool_response` (`structuredContent.snapshot`) — fixtures carry a `_note`; `tree.ts`
-    detects shapes and must stay tolerant.
+12. **Driver shapes**: four, detected by `tree.ts`, which must stay tolerant. The real Argent
+    capture (`argent run native-describe-screen --json`) is FLAT — `{status, screenFrame,
+    elements:[{frame, normalizedFrame, traits, viewClassName, identifier?}]}`, verified against
+    `@swmansion/argent@0.25.0` (issue #10) and rebuilt into the two levels app-map reads
+    (`application > window > [marker-subtree, tabBar]`); `xcuitest` is the nested `{type,
+    identifier, label, value, frame, children}` snapshot other drivers emit (best-effort);
+    Maestro hierarchy is `{elements:[{attributes, children}]}` (best-effort); plus the hook
+    `tool_response` (`structuredContent.snapshot`) wrapper. Fixtures carry a `_note`.
 13. **Trajectory `input.text` and the task text are kept, PII-redacted** — a deliberate
     deviation from the letter of 07 §2.2/§4 ("nothing raw touches disk"): the compiler needs
     equality between what was typed and a declared param value (04 §3.4). Both strings pass
@@ -545,9 +549,12 @@ limit, no `label`/`value`/`snapshot` fields at any level.
 
 ### B1 — trees
 Fill: `tree.ts`, `scrub.ts`, `signature.ts`.
-Tests: `tree.test.ts` — `normalizeTree` on `raw/argent-snapshot.invoice_list.json` and
+Tests: `tree.test.ts` — `normalizeTree` on `raw/xcuitest-snapshot.invoice_list.json` and
 `raw/maestro-hierarchy.invoice_list.json` yields the same roles/ids as
-`trees/invoice_list.normalized.json` (bbox within 0.01); `pathOf` reproduces every `path`
+`trees/invoice_list.normalized.json` (bbox within 0.01); the flat
+`raw/argent-native-describe-screen.*.json` captures reproduce the reference integration's
+committed map (roles, paths, `sibling_index`, `bbox_norm` and two `structural_hash` values);
+`pathOf` reproduces every `path`
 locator in the pilot screens; `extractSnapshot(loadHookFixture('post-tool-use.tap').tool_response)`
 finds the snapshot; `scrub.test.ts` — `trees/pii.normalized.json` through `scrub` with the
 fixture policy contains no email, phone, 16-digit run, `$1,250.00`, `€`, `£`, IBAN, SSN,
@@ -710,7 +717,7 @@ app-map/
 tools/app-map-mcp/
   src/**                      this package
   fixtures/trees/**           normalized iOS + android/ pilot trees (+ with_gate, no_ids, pii variants)
-  fixtures/raw/**             Argent snapshot and Maestro hierarchy dumps (best-effort shapes)
+  fixtures/raw/**             real Argent flat captures, an XCUITest-like nested snapshot, a Maestro hierarchy dump
   fixtures/hooks/**           PostToolUse, PostToolUseFailure, SessionStart, Stop payloads
   fixtures/trajectories/**    create_invoice.session.jsonl (8 scrubbed observations)
   fixtures/strings.{ios,android}.txt   static string tables (07 §2.3.3)

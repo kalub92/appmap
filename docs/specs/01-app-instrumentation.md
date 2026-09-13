@@ -86,7 +86,7 @@ Box(Modifier
 ```
 Views: `android:id` or `view.tag` plus contentDescription is not the mechanism — use resource ids.
 
-Only one marker may be visible at a time for a full-screen state; sheets and modals carry their own marker (`screen.invoice_filter_sheet`).
+Only one marker may be visible at a time for a full-screen state; sheets and modals carry their own marker (`screen.invoice_filter_sheet`). Tooling must not *rely* on that: on iOS a pushed screen leaves the covered screen's marker in the accessibility tree, so two markers are routinely present. Readers therefore **prefer the deepest marker** — deepest in the node hierarchy, ties broken by the greatest `y` (a flat driver capture has no hierarchy to compare) and then by document order — rather than giving up when there is more than one.
 
 ### R4 — Element identifiers
 
