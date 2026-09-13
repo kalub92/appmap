@@ -14,7 +14,7 @@ signature without updating this file and every caller. Read `docs/dev/toolchain.
 | A2 | `src/log.ts`, `src/store/db.ts`, `src/store/export.ts`, `src/events.ts`, `src/context.ts` | stub | contract, A1 |
 | B1 | `src/tree.ts`, `src/scrub.ts`, `src/signature.ts` | stub | contract |
 | B2 | `src/identify.ts`, `src/resolve.ts`, `src/plan.ts`, `src/format.ts` | stub | contract, B1 |
-| C1 | `src/observe.ts`, `src/recipes/match.ts`, `src/recipes/compile.ts`, `src/recipes/lifecycle.ts` | stub | A2, B1, B2 |
+| C1 | `src/observe.ts`, `src/recipes/match.ts`, `src/recipes/compile.ts`, `src/recipes/verbs.ts`, `src/recipes/lifecycle.ts` | stub | A2, B1, B2 |
 | C2 | `src/heal.ts`, `src/recipes/guided.ts` | stub | A2, B1, B2, C1 (lifecycle, observe) |
 | C3 | `src/recipes/maestro.ts`, `src/recipes/headless.ts`, `src/drift.ts`, `src/router-import.ts` | stub | A2, B1, B2, C1, C2 |
 | D1 | `src/server.ts`, `src/ingest-socket.ts`, `src/index.ts` | stub | everything |
@@ -459,6 +459,16 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     else (that the reviewer is a real person, that they approved the PR, the two approvals for an
     `intent_critical` downgrade) is branch protection, which has no representation in this repo;
     docs/dev/rollout.md §2 Stage 1 lists the exact settings.
+56. **Driver verbs are a table, not a regex.** `recipes/verbs.ts` maps a normalized tool name
+    (`mcp__<driver>__gesture-tap` → `gesture_tap`) to a `VerbKind` through a table keyed on
+    `APP_MAP_DRIVER` (03 §3), with generic patterns for a driver that has none, so swapping
+    drivers is a table entry rather than a regex edit. `classifyVerb` is total: perception and
+    lifecycle calls (waits, launches, log dumps, `report_step`) are KNOWN non-steps and stay
+    silent, while `batch` (`run-sequence`), `unsupported` (`button`, `tv-remote`) and `unknown`
+    are dropped with a named warning. `translateSteps` therefore returns `{steps, warnings}` and
+    `compileRecipe` folds them into `CompileRecipeResult.warnings` — a step that vanishes
+    silently is the worst failure this system has (a recipe that passes while exercising
+    nothing: `@swmansion/argent@0.25.0` types with `keyboard`, not `type_text`, issue #9).
 
 ## 8. How to implement your module
 
@@ -561,6 +571,10 @@ recipe equal to `app-map/ios/recipes/create_invoice.yaml` modulo `matches`, `des
 `status: candidate`, `version: 1`, `provenance` (the A→B→A loop at seq 2–3 collapses; `50` →
 `{amount}`, `Acme Corp` → `{client}`) both with explicit `values` and via `inferParams`; an
 unparameterized literal → `unparameterized_value`; `to_seq: 5` slices to s1–s2;
+`verbs.test.ts` — every confirmed `@swmansion/argent@0.25.0` tool classifies to its `VerbKind`,
+`open-url` == `open_url`, an untabled driver still resolves `type_text`/`tap` and an untabled tool
+is `unknown`; `compile.test.ts` also proves a `mcp__argent__keyboard` `type` step survives the
+compile and that an unknown verb lands in `warnings` instead of vanishing (issue #9);
 `lifecycle.test.ts` — `decideTransition` for each row of the table (3 successes / 2 sessions →
 verified; 6 of last 10 failed → candidate, 04 §9; pending heals ≥2 → candidate; ci_gate never
 automatic); `markRecipe({status:'candidate'})` without `recipe` on an unknown id → `bad_input`,

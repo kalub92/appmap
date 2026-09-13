@@ -13,11 +13,17 @@
  *  2. collapse backtracking: remove `A → B → A` loops where no `type` happened in B (repeat until
  *     stable) and repeated identical consecutive taps; a trajectory that keeps looping without
  *     converging on a new screen → `loops_never_converge`;
- *  3. translate: tap with `element` → `tap`; `type_text` → `type` on the focused element of the
- *     previous snapshot (else the last tapped field); tap on a `dynamic` cell → `select` on the
- *     enclosing dynamic `list` with `match.text` = the tapped text; `open_url` → `open_link`;
- *     `swipe` → `swipe`; a tap that dismissed a gate (gate present before, absent after, element
- *     is a gate dismiss id) → `dismiss_gate`;
+ *  3. translate: each driver call is classified by `recipes/verbs.ts` (a table keyed on
+ *     `APP_MAP_DRIVER`, 03 §3, generic patterns for anything untabled). A tap with `element` →
+ *     `tap`; a type (Argent `keyboard`/`paste`, older `type_text`) → `type` on the focused
+ *     element of the previous snapshot (else the last tapped field); tap on a `dynamic` cell →
+ *     `select` on the enclosing dynamic `list` with `match.text` = the tapped text; an open-link
+ *     (Argent `open-url`) → `open_link`; `swipe` → `swipe`; a tap that dismissed a gate (gate
+ *     present before, absent after, element is a gate dismiss id) → `dismiss_gate`. Perception
+ *     and wait/lifecycle calls are KNOWN non-steps and pass silently; every other call that
+ *     yields no step is dropped WITH a warning naming its seq and tool, because a step that
+ *     disappears quietly turns a recipe into a test that passes while exercising nothing
+ *     (issue #9);
  *  4. parameterize: every typed/selected value equal (case-insensitive, trimmed; money values
  *     compared numerically) to a declared param's value becomes `{name}`; values come from
  *     `input.values` (the LLM/CLI knows what it typed) and, for params without one, from
@@ -37,7 +43,8 @@
  *     placeholder replaced by `[task]` escaped as a literal regex, and canonical YAML text;
  *     emit a `compile` event (08 §2).
  *
- * Layer: session (imports context, types, tree, identify, resolve, yaml/canonical, events).
+ * Layer: session (imports context, types, tree, identify, resolve, yaml/canonical, events,
+ * recipes/verbs).
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -49,6 +56,7 @@ import { PACKAGE_ROOT } from '../paths.ts';
 import { walk } from '../tree.ts';
 import { canonicalYaml } from '../yaml/canonical.ts';
 import { inferParams } from './match.ts';
+import { classifyVerb } from './verbs.ts';
 import { readTrajectory } from '../observe.ts';
 
 /** 07 §4 / recipe.schema.json: a `matches[]` source is at most this many characters. */
@@ -113,8 +121,8 @@ export function sliceTrajectory(observations: readonly Observation[], opts: { fr
  * no map): the scrubber may have dropped the row's text from the tree, but the driver `input`
  * still carries what the agent asked for (architecture §7 decision 13).
  */
-function entersValue(obs: Observation): boolean {
-  if (/type|input_text|set_text|enter_text/i.test(obs.tool)) return true;
+function entersValue(obs: Observation, driver: string): boolean {
+  if (classifyVerb(obs.tool, driver) === 'type') return true;
   return typeof obs.input.text === 'string' && obs.input.text !== '';
 }
 
@@ -127,8 +135,8 @@ function sameTap(a: Observation, b: Observation): boolean {
   return ka === kb;
 }
 
-/** Step 2. Pure. `removed` = seqs dropped. */
-export function collapseBacktracking(observations: readonly Observation[]): { observations: Observation[]; removed: number[] } {
+/** Step 2. Pure. `driver` = `APP_MAP_DRIVER` (03 §3), for "nothing was typed in B". `removed` = seqs dropped. */
+export function collapseBacktracking(observations: readonly Observation[], driver: string): { observations: Observation[]; removed: number[] } {
   let list = [...observations];
   const removed: number[] = [];
   // bounded: each pass removes at least one observation, so at most `length` passes run
@@ -144,7 +152,7 @@ export function collapseBacktracking(observations: readonly Observation[]): { ob
       for (let j = i + 1; j < list.length; j++) {
         const back = list[j]!;
         // the excursion must stay inside B and leave no value behind
-        if (list.slice(i + 1, j + 1).some(entersValue)) break;
+        if (list.slice(i + 1, j + 1).some((o) => entersValue(o, driver))) break;
         if (back.screen_before !== B) break;
         if (back.screen_after === A) {
           for (const o of list.slice(i, j + 1)) removed.push(o.seq);
@@ -194,13 +202,6 @@ export function focusedElement(map: LoadedMap, obs: Observation): ElementId | un
   return id !== undefined && map.elementRegistry.has(id) ? id : undefined;
 }
 
-const OPEN_LINK_RE = /open_url|open_link|openlink|deep_?link/i;
-const SWIPE_RE = /swipe|scroll/i;
-const TYPE_RE = /type|input_text|set_text|enter_text/i;
-const TAP_RE = /tap|click|press|touch/i;
-/** perception-only calls are not steps (03 §8 "do not take screenshots"); they never reach a recipe */
-const PERCEPTION_RE = /screenshot|snapshot|hierarchy|describe|dump|accessibility/i;
-
 /** the dynamic `list` enclosing a dynamic cell on `screen` (04 §3.3 `select`) */
 function enclosingDynamicList(map: LoadedMap, screen: ScreenId, cell: ElementId): ElementId | undefined {
   const file = map.screens.get(screen);
@@ -212,9 +213,16 @@ function enclosingDynamicList(map: LoadedMap, screen: ScreenId, cell: ElementId)
   return lists.find((e) => e.id.startsWith(prefix))?.id;
 }
 
-/** Step 3. Pure. */
-export function translateSteps(map: LoadedMap, observations: readonly Observation[]): TranslatedStep[] {
+/**
+ * Step 3's output: the steps, plus one line per observation that did NOT become one and is not a
+ * known non-step. `compileRecipe` folds these into `CompileRecipeResult.warnings` (issue #9).
+ */
+export interface TranslateResult { steps: TranslatedStep[]; warnings: string[] }
+
+/** Step 3. Pure. `driver` = `APP_MAP_DRIVER` (03 §3), which decides the verb table (verbs.ts). */
+export function translateSteps(map: LoadedMap, observations: readonly Observation[], driver: string): TranslateResult {
   const out: TranslatedStep[] = [];
+  const warnings: string[] = [];
   let lastTypedTarget: ElementId | undefined;
   for (let i = 0; i < observations.length; i++) {
     const obs = observations[i]!;
@@ -223,27 +231,51 @@ export function translateSteps(map: LoadedMap, observations: readonly Observatio
     const screen: ScreenId = obs.screen_before;
     const id = `s${out.length + 1}`;
     const push = (step: RecipeStep): void => { out.push({ step, screen, from_seq: obs.seq }); };
+    /** the driver call is gone from the recipe: say so, with enough to find it in the trajectory */
+    const drop = (why: string): void => { warnings.push(`seq ${obs.seq}: ${obs.tool} ${why}`); };
 
-    if (PERCEPTION_RE.test(obs.tool) && !TAP_RE.test(obs.tool)) continue;
+    const kind = classifyVerb(obs.tool, driver);
+    // a KNOWN non-step (perception, a wait, a launch, `report_step`): expected, so never a warning
+    if (kind === 'perception' || kind === 'lifecycle') continue;
 
-    if (OPEN_LINK_RE.test(obs.tool) && typeof obs.input.url === 'string') {
+    if (kind === 'open_link') {
+      if (typeof obs.input.url !== 'string' || obs.input.url === '') {
+        drop('carried no url, so no open_link step could be written (04 §3.3)');
+        continue;
+      }
       push({ id, action: 'open_link', url: obs.input.url });
       continue;
     }
-    if (TYPE_RE.test(obs.tool)) {
+    if (kind === 'type') {
+      // Argent's `keyboard --key return` presses a named key and types nothing; 02 §6 has no step
+      // for that (recipe.schema.json requires `type.text` minLength 1), so it is a drop, not a
+      // step the draft would fail `mark_recipe` with.
+      const text = typeof obs.input.text === 'string' ? obs.input.text : '';
+      if (text === '') {
+        const key = typeof obs.input.key === 'string' ? ` (key: ${obs.input.key})` : '';
+        drop(`entered no text${key}; no recipe step expresses a key press (02 §6)`);
+        continue;
+      }
       // 04 §3.3: `type` lands on the focused element of the previous snapshot, else the last tapped field
       const element = (prev !== undefined ? focusedElement(map, prev) : undefined) ?? obs.element ?? lastTypedTarget;
-      if (element === undefined) continue;
-      push({ id, action: 'type', element, text: String(obs.input.text ?? '') });
+      if (element === undefined) {
+        drop('typed into no determinable element: the previous snapshot reports no focus and no field was tapped (04 §3.3)');
+        continue;
+      }
+      push({ id, action: 'type', element, text });
       continue;
     }
-    if (SWIPE_RE.test(obs.tool) && !TAP_RE.test(obs.tool)) {
+    if (kind === 'swipe') {
       push({ id, action: 'swipe', direction: obs.input.direction ?? 'up', ...(obs.element !== undefined ? { element: obs.element } : {}) });
       continue;
     }
-    if (TAP_RE.test(obs.tool)) {
+    if (kind === 'tap') {
       const element = obs.element;
-      if (element === undefined) continue; // an unresolvable tap is not compilable into a step
+      if (element === undefined) {
+        // an unresolvable tap (by point or by text) is not compilable into a step
+        drop('hit no registered element, so the step cannot be written (04 §3.3)');
+        continue;
+      }
       lastTypedTarget = element;
       // a tap that dismissed a gate: the gate was present before and is gone after, and the
       // element is that gate's dismiss control (04 §3.3)
@@ -265,9 +297,22 @@ export function translateSteps(map: LoadedMap, observations: readonly Observatio
       push({ id, action: 'tap', element });
       continue;
     }
-    // an unknown driver verb is not a step; the LLM sees it in `warnings`
+    if (kind === 'batch') {
+      // one observation carries one screen pair and one resolved element (02 §7), so the N
+      // interactions inside it cannot be given per-step postconditions (04 §3.6). Expanding it
+      // would fabricate `expect`s that replay then "verifies" — explicit rejection instead.
+      drop('batches several interactions into one call and cannot be split into steps: re-drive the flow with one call per interaction (04 §3.3)');
+      continue;
+    }
+    if (kind === 'unsupported') {
+      drop('is an interaction no recipe step can express (02 §6)');
+      continue;
+    }
+    // `unknown`: not in this driver's table and matching no generic pattern. Never silent —
+    // a step that vanishes is what made a recipe pass while exercising nothing (issue #9).
+    drop(`is not a known ${driver} verb, so nothing in the recipe reproduces it (04 §3.3)`);
   }
-  return out;
+  return { steps: out, warnings };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -523,18 +568,19 @@ export function compileRecipe(ctx: AppMapContext, input: CompileRecipeInput): Co
   }
 
   // 2. collapse backtracking (04 §3.2)
-  const collapsed = collapseBacktracking(usable);
+  const collapsed = collapseBacktracking(usable, ctx.config.driver);
   if (collapsed.observations.length === 0) {
     return fail(ctx, input, version, 'loops_never_converge', 'every observation in the slice was part of a backtracking loop: the trajectory never converged on a new screen');
   }
 
-  // 3. translate (04 §3.3)
-  let steps = translateSteps(ctx.map, collapsed.observations);
+  // 3. translate (04 §3.3). Every dropped call is named (issue #9): the old aggregate count said
+  // neither which tool nor which seq, and counted perception calls as losses.
+  const translated = translateSteps(ctx.map, collapsed.observations, ctx.config.driver);
+  warnings.push(...translated.warnings);
+  let steps = translated.steps;
   if (steps.length === 0) {
-    return fail(ctx, input, version, 'no_observations', 'no driver call in the slice translates to a recipe step');
-  }
-  if (steps.length < collapsed.observations.length) {
-    warnings.push(`${collapsed.observations.length - steps.length} observation(s) were not translatable to a step (unknown driver verb or unresolved element)`);
+    // a failure carries no `warnings` field, so the dropped calls go into the message instead
+    return fail(ctx, input, version, 'no_observations', ['no driver call in the slice translates to a recipe step', ...translated.warnings].join(' · '));
   }
 
   // 4. parameterize (04 §3.4) — explicit `values` win over what the task text implies

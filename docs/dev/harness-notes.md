@@ -25,8 +25,15 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
   `permissionMode`, `maxTurns`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, …
 - `tools` accepts MCP patterns: `mcp__argent` (whole server) and `mcp__argent__*` (all tools of a
   server). Per-tool globs beyond that are not documented, so `.claude/agents/app-nav-replayer.md`
-  lists the tools explicitly exactly as 05 §5 does. Confirm Argent's actual tool names (`tap`,
-  `type_text`, `open_url`, `swipe`) against `@swmansion/argent@0.25.0` on first run.
+  lists the tools explicitly exactly as 05 §5 does. **Argent's tool names are now confirmed**
+  against `@swmansion/argent@0.25.0` (`argent tools`, 76 tools): `gesture-tap`, `gesture-swipe`,
+  `gesture-scroll`, `keyboard` (`--text` types, `--key` presses a named key), `paste`, `open-url`,
+  `button`, `tv-remote`, `run-sequence`, `describe`, `native-describe-screen`,
+  `native-full-hierarchy`, `screenshot`, `await-ui-element`, `await-screen-idle`,
+  `launch-app`/`restart-app`/`reinstall-app`, `native-network-logs`/`view-network-logs`. Neither
+  `type_text` nor `open_url` exists — the compiler's mapping lives in
+  `tools/app-map-mcp/src/recipes/verbs.ts` (`ARGENT_VERBS`), which the old regexes missed so
+  `keyboard` and `open-url` observations were dropped from compiled recipes (issue #9).
 
 ## 3. Verified against https://code.claude.com/docs/en/skills
 
@@ -86,7 +93,7 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
 
 ## 6. Things to confirm on first real run
 
-- Argent tool names and whether it reports the running build (03 §13) — otherwise set `APP_MAP_BUILD`.
+- Whether Argent reports the running build (03 §13) — otherwise set `APP_MAP_BUILD`. (Its tool names are confirmed: see §2.)
 - Whether `PostToolUse` can rewrite the driver's tool output (05 §8) — the docs list `updatedInput` for
   PreToolUse only; rely on the driver's snapshot options.
 - Maestro's install script honours `MAESTRO_VERSION` (pinned to 2.10.0 in the workflow; the package

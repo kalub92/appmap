@@ -55,6 +55,8 @@ export * as format from './format.ts';
 export { declareTask, finishTask, hookPayloadToObservation, inferTaskOutcome, ingestObservation, isDriverTool, lastObservation, nameScreen, readTrajectory, recordHookPayload, recordObservation } from './observe.ts';
 export { MATCH_CONFIDENCE, eligibleRecipes, inferParams, matchRecipe, paramsNeeded } from './recipes/match.ts';
 export * as compile from './recipes/compile.ts';
+export { ARGENT_VERBS, DRIVER_VERBS, UNIVERSAL_VERBS, bareToolName, classifyVerb, isStepVerb, normalizeVerb } from './recipes/verbs.ts';
+export type { DriverVerbTable, StepVerb, VerbKind } from './recipes/verbs.ts';
 export { THRESHOLDS, decideTransition, eligibleForCiGate, markRecipe, markVerified, recordRunOutcome, retireRecipesForScreen, screensReferenced, shouldRecompile } from './recipes/lifecycle.ts';
 export type { LifecycleDecision, VerifiedEntities } from './recipes/lifecycle.ts';
 export { COMPATIBLE_ROLES, applyHeal, bboxProximity, heal, healedElement, jaroWinkler, lcsLength, proposeHeal, rejectHeal, scoreCandidates, toPendingHeal } from './heal.ts';

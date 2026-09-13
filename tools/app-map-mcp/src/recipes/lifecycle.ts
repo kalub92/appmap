@@ -219,6 +219,11 @@ function recompileFrom(ctx: AppMapContext, recipe: RecipeFile, decision: Lifecyc
       ctx.log.warn('recompile produced no draft', { recipe: recipe.id, reason: result.reason });
       return;
     }
+    // this is the path that silently replaced a reviewed recipe with a degraded one (issue #9):
+    // a dropped driver call means the revision exercises less than the reviewed version did
+    if (result.warnings.length > 0) {
+      ctx.log.warn('recompile dropped driver calls', { recipe: recipe.id, warnings: result.warnings });
+    }
     // a revision of an already-reviewed recipe keeps the reviewed prose (04 §8: only the
     // structure is recompiled) and lands dirty so the diff shows up in the next PR
     const next: RecipeFile = {

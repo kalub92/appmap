@@ -558,6 +558,8 @@ export interface ObservedSignature {
 export interface DriverInput {
   id?: string;
   text?: string;
+  /** a named key rather than text (Argent `keyboard --key return`): no step expresses it (04 §3.3) */
+  key?: string;
   url?: string;
   direction?: SwipeDirection;
   x?: number;

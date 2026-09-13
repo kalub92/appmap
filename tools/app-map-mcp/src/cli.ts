@@ -524,6 +524,9 @@ function cmdCompile(args: ParsedArgs, io: CliIo): number {
       emit(io, args, result, `compile failed: ${result.reason} — ${result.message}`);
       return 1;
     }
+    // a dropped driver call must be visible without `--json` too: stdout is the draft YAML
+    // (03 §11), so the warnings — "the `type` step is gone" above all — go to stderr (issue #9)
+    for (const w of result.warnings) io.stderr(`warning: ${w}\n`);
     emit(io, args, result, result.yaml);
     return 0;
   });
