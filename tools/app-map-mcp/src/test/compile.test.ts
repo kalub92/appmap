@@ -10,7 +10,7 @@ import { parse } from 'yaml';
 import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
 import type { CompileRecipeInput, Expect, Observation, RecipeFile, RecipeParam, RecipeStep, ScreenFile, ScrubbedTree } from '../types.ts';
-import { UNKNOWN_SCREEN, now } from '../types.ts';
+import { STEP_ACTIONS, UNKNOWN_SCREEN, now } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { readEvents } from '../events.ts';
 import { schemaDir, screenFile, trajectoriesDir, trajectoryFile } from '../paths.ts';
@@ -21,9 +21,9 @@ import { canonicalYaml, isCanonical } from '../yaml/canonical.ts';
 import { validateAgainstSchema } from '../yaml/schemas.ts';
 import { forbiddenContentIssues } from '../validate.ts';
 import {
-  collapseBacktracking, compileRecipe, focusedElement, inferPostconditions, isFocusFallbackWarning,
-  isNormalisationWarning, markIntentCritical, optimizeEntry, parameterize, sliceTrajectory,
-  swipeDirection, translateSteps,
+  COMPILABLE_STEP_ACTIONS, collapseBacktracking, compileRecipe, compilerCanEmit, focusedElement,
+  inferPostconditions, isFocusFallbackWarning, isNormalisationWarning, markIntentCritical,
+  optimizeEntry, parameterize, sliceTrajectory, swipeDirection, translateSteps,
 } from '../recipes/compile.ts';
 import type { TranslatedStep } from '../recipes/compile.ts';
 import { loadFixtureTree, loadTrajectoryFixture, makeTempAppMapDir } from './helpers.ts';
@@ -898,5 +898,48 @@ describe('compileRecipe — revisions (04 §8)', () => {
     assert.deepEqual(r.recipe.matches, committed().matches);
     assert.equal(r.recipe.description, committed().description);
     assert.equal(r.recipe.status, 'candidate', 'a revision goes back through review');
+  });
+
+  // 04 §3.5 re-derives exactly ONE condition, `{auth: logged_in}`. Everything else a recipe can
+  // be gated on — `platform_version`, a feature flag — is hand-authored and unrecoverable from a
+  // trajectory, so a revision that emitted only what it derived would DROP it, and the 04 §8
+  // write guard would then refuse that rebuild with `missing_preconditions` for ever.
+  it('a revision carries the reviewed preconditions forward and does not duplicate the derived one', () => {
+    insert(trajectory());
+    ctx.db.putRecipe({ ...committed(), preconditions: [{ platform_version: '>=17.0' }, { auth: 'logged_in' }] }, { dirty: false });
+    const r = compile({ values: { amount: 50, client: 'Acme Corp' }, revision_of: 3 });
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.deepEqual(
+      r.recipe.preconditions,
+      [{ platform_version: '>=17.0' }, { auth: 'logged_in' }],
+      'the hand-authored condition survives, in its reviewed order, and the trajectory-derived `auth` is not added twice',
+    );
+    assert.deepEqual(validateAgainstSchema(schemaDir(t.config), 'recipe', r.recipe), []);
+  });
+
+  it('a revision of a recipe with no preconditions still derives `auth: logged_in` from the trajectory (04 §3.5)', () => {
+    insert(trajectory());
+    ctx.db.putRecipe({ ...committed(), preconditions: undefined }, { dirty: false });
+    const r = compile({ values: { amount: 50, client: 'Acme Corp' }, revision_of: 3 });
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.deepEqual(r.recipe.preconditions, [{ auth: 'logged_in' }], 'carrying forward is a union, never a replacement');
+  });
+});
+
+describe('COMPILABLE_STEP_ACTIONS — what step 3 can actually emit (04 §3.3)', () => {
+  // the 04 §8 coverage rule exempts reviewed steps of a kind with no producer here
+  // (`lifecycle.recompileCovers`), so this list is load-bearing: it must stay exactly the set of
+  // `translateSteps`' `push` sites, and shrink the day one of them learns a new kind.
+  it('is every 02 §6 action except `wait_for`, which nothing in the compiler produces', () => {
+    assert.deepEqual([...COMPILABLE_STEP_ACTIONS].sort(), STEP_ACTIONS.filter((a) => a !== 'wait_for').slice().sort());
+    for (const action of STEP_ACTIONS) assert.equal(compilerCanEmit(action), action !== 'wait_for');
+  });
+
+  it('the pilot trajectory translates to nothing outside it', () => {
+    const translated = translateSteps(ctx.map, trajectory(), ctx.config.driver);
+    assert.ok(translated.steps.length > 0);
+    for (const t of translated.steps) assert.equal(compilerCanEmit(t.step.action), true, `${t.step.action} is emitted but not listed`);
   });
 });

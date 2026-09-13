@@ -107,17 +107,60 @@
  * weaker of two twins and refuse where a smarter pairing would accept; refusing is the safe
  * direction, so the simple rule stands.
  *
+ * ### Step kinds the compiler cannot produce
+ *
+ * ONE narrow exemption rides on that rule: a reviewed step whose ACTION has no producer in
+ * `compile.translateSteps` is not "missing". Today that is exactly one kind — `wait_for`. 02 §6
+ * defines it and 04 §6.2 maps it to Maestro's `extendedWaitUntil`, a human writes one between a
+ * tap and the `select` that needs the list to have loaded (the React Native / Flutter case the
+ * row exists for), and yet NO driver call translates to one and nothing synthesises one, so no
+ * rebuild can ever contain one. Without the exemption a reviewed recipe holding a `wait_for`
+ * refused EVERY rebuild for ever (`missing: ['s9']`) and 04 §9's automatic recompile was inert
+ * while logging an `error` and an `ok:false` compile event on each failing replay — erosion's
+ * alarm ringing at the compiler's own blind spot.
+ *
+ * It is sound because it cannot excuse a real loss:
+ *
+ * - the exempt kinds are read off `compile.COMPILABLE_STEP_ACTIONS`, the producer's own list of
+ *   `push` sites, so no kind a rebuild COULD have emitted is ever exempt: a dropped `tap`,
+ *   `type`, `select`, `swipe`, `open_link` or `dismiss_gate` is still `missing`, which is issue
+ *   #13's entire case;
+ * - it applies only where there was no match at all, and does NOT advance the match cursor, so
+ *   the subsequence and ordering rules for every other reviewed step are unchanged — a rebuild
+ *   that drops a real step sitting either side of an exempt one is still refused;
+ * - a rebuild cannot manufacture it. What is exempt is decided by the ACTION in the file the
+ *   reviewer signed, never by the draft, so a `type` step cannot acquire the exemption by
+ *   coming back as something else; only a human `mark` writes the reviewed side.
+ *
+ * What it costs, plainly: an accepted rebuild does not contain that `wait_for`, so the written
+ * recipe waits where the reviewed one did. That is a bounded, visible loss rather than an open
+ * hole — the write lands dirty with `provenance.machine_recompile: true`, demotes the recipe to
+ * `candidate`, shows the removed step in the diff `export` prints, is named in the
+ * `recipe recompiled` log line (`dropped_uncompilable`), and `verify` — reviewed prose the
+ * compiler carries forward — still asserts where the recipe has to end up. Re-inserting the step
+ * positionally would be guesswork (a `wait_for` has no element to anchor it to in the rebuilt
+ * list), so the real choice was "refuse for ever" or "write without it, loudly"; 04 §9 asks for
+ * the second. Carrying reviewed `wait_for` steps into the rebuild is filed as the follow-up.
+ *
+ * To REMOVE the exemption, change nothing here: add the action to
+ * `compile.COMPILABLE_STEP_ACTIONS` the day step 3 learns to emit it, and it disappears.
+ *
  * ### Preconditions and entry (`recompileCoversEntry`)
  *
- * Steps are not the only thing a rebuild can quietly drop. `compile` re-derives
- * `preconditions: [{auth: logged_in}]` and `entry` from the trajectory (04 §3.5), so a replay
- * whose slice starts AFTER the entry navigation rebuilds neither — the pilot's own recompile from
- * seqs 4-8 loses `preconditions: [{auth: logged_in}]` and the `?fixture=logged_in` on its deep
- * link, leaving a recipe that runs the same taps against a logged-OUT app. Same erosion, other
- * route, so the same rule:
+ * Steps are not the only thing a rebuild can quietly drop. `compile` re-derives `entry` from the
+ * trajectory (04 §3.5), so a replay whose slice starts AFTER the entry navigation rebuilds the
+ * deep link without it — the pilot's own recompile from seqs 4-8 loses the `?fixture=logged_in`,
+ * leaving a recipe that runs the same taps against a logged-OUT app. Same erosion, other route,
+ * so the same rule:
  *
  * - every reviewed `preconditions` entry must come back (compared on `conditionKey`, order-free);
- *   an EXTRA one is a narrowing, not a loss;
+ *   an EXTRA one is a narrowing, not a loss. `compile.revisionPreconditions` now CARRIES the
+ *   reviewed conditions into the rebuild, for the same reason it carries `verify` and `matches`:
+ *   a trajectory can re-derive only `{auth: logged_in}`, so a hand-authored
+ *   `{platform_version: '>=17.0'}` or feature-flag condition was dropped by every rebuild and
+ *   this gate then refused every one of them, permanently. That makes the gate pass on a
+ *   condition that is REALLY in the written file — it is not bypassed, and it still refuses the
+ *   day anything else loses one;
  * - a reviewed `entry.deep_link` must come back and still cover (`deepLinkCovers`): same screen,
  *   and every query parameter it carried still present. Adding `?fixture=logged_in` is a
  *   strengthening and is fine; dropping it is `preconditions` loss in URL form;
@@ -155,7 +198,7 @@ import type { AppMapContext } from '../context.ts';
 import type { RecipeStats } from '../store/db.ts';
 import { RECOMPILE_DIRTY_PREFIX } from '../store/db.ts';
 import type { BuildNumber, Condition, EdgeAction, ElementDef, ElementId, Expect, MarkRecipeInput, MarkRecipeResult, MarkScreenInput, MarkScreenResult, RecipeFile, RecipeId, RecipeStatus, RecipeStep, RunRecord, ScreenFile, ScreenId, ScreenStatus, StepId } from '../types.ts';
-import { RECIPE_STATUSES, SCREEN_STATUSES, edgeElement, now, screenIdOfDeepLink, selectTarget, stepElement } from '../types.ts';
+import { RECIPE_STATUSES, SCREEN_STATUSES, conditionKey, edgeElement, now, screenIdOfDeepLink, selectTarget, stepElement } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { schemaDir } from '../paths.ts';
 import { crossReferenceIssues } from '../validate.ts';
@@ -163,7 +206,12 @@ import { unifiedDiff } from '../store/export.ts';
 import type { ParsedYaml } from '../yaml/canonical.ts';
 import { canonicalYaml, parseYamlDoc } from '../yaml/canonical.ts';
 import { formatSchemaIssue, validateAgainstSchema } from '../yaml/schemas.ts';
-import { compileRecipe, isNormalisationWarning } from './compile.ts';
+import { compileRecipe, compilerCanEmit, isNormalisationWarning } from './compile.ts';
+
+// `conditionKey` used to live here; it moved to types.ts so the COMPILER can dedupe the
+// conditions it carries forward on the very key this guard compares them with (see its doc
+// comment). It stays part of this module's published surface (`lib.ts`, 03 §10).
+export { conditionKey } from '../types.ts';
 
 /** 08 §5 thresholds. */
 export const THRESHOLDS = {
@@ -363,6 +411,13 @@ export function recompileCovers(previous: RecipeFile, next: RecipeFile): { ok: b
     for (let k = cursor; k < rebuilt.length; k += 1) {
       if (stepIdentity(rebuilt[k] as RecipeStep) === want) { found = k; break; }
     }
+    // the ONE exemption (see "Step kinds the compiler cannot produce" in the module header):
+    // a reviewed step of a kind `compile.translateSteps` has no producer for is absent from
+    // EVERY rebuild, so its absence is the compiler's silence, not evidence of erosion. It is
+    // read off the producer's own list (`compile.compilerCanEmit`), applies only on a miss, and
+    // deliberately does NOT advance `cursor`: every other reviewed step is matched, in order,
+    // by exactly the rule it was before.
+    if (found < 0 && !compilerCanEmit(step.action)) continue;
     if (found < 0) { missing.push(step.id); continue; }
     const match = rebuilt[found] as RecipeStep;
     if (!expectCovers(step.expect, match.expect) || (step.intent_critical === true && match.intent_critical !== true)) {
@@ -371,12 +426,6 @@ export function recompileCovers(previous: RecipeFile, next: RecipeFile): { ok: b
     cursor = found + 1;
   }
   return { ok: missing.length === 0 && weakened.length === 0, missing, weakened };
-}
-
-/** Pure: a `Condition` as one log-safe line (`auth=logged_in`, `flag=beta,value=true`); 02 §4.1 key order. */
-export function conditionKey(c: Condition): string {
-  const order: Array<keyof Condition> = ['auth', 'screen', 'flag', 'value', 'platform_version'];
-  return order.filter((k) => c?.[k] !== undefined).map((k) => `${k}=${String(c[k])}`).join(',');
 }
 
 /**
@@ -415,12 +464,16 @@ export function deepLinkCovers(a: string, b: string | undefined): boolean {
 /**
  * Pure: does `next` still say WHEN the recipe applies and HOW you get into it? The second half of
  * the 04 §8 write guard, beside `recompileCovers` — a rebuild that kept every step but lost
- * `preconditions: [{auth: logged_in}]` and the `?fixture=logged_in` on its deep link runs the
+ * `preconditions: [{auth: logged_in}]` or the `?fixture=logged_in` on its deep link runs the
  * same taps against a logged-OUT app, which is the same silent erosion by another route (the
- * pilot's own recompile does exactly this when the replay slice starts after the entry).
+ * pilot's own recompile loses the fixture parameter whenever the replay slice starts after the
+ * entry).
  *
  * - every reviewed `preconditions` entry must come back (deep-equal, order-free); extra ones are
- *   a narrowing, which is not erosion;
+ *   a narrowing, which is not erosion. `compile.revisionPreconditions` carries the reviewed ones
+ *   into the rebuild — a trajectory re-derives only `{auth: logged_in}`, so without that a
+ *   hand-authored condition was dropped by every rebuild and refused here for ever — which
+ *   leaves this a check on what the draft REALLY holds, not a formality;
  * - a reviewed `entry.deep_link` must come back and must still cover (see `deepLinkCovers`);
  * - `entry.fallback_path` is checked ONLY when the reviewed recipe had no deep link, i.e. when
  *   navigation is the one way in. Otherwise it is out of scope on purpose: `optimizeEntry`
@@ -632,9 +685,14 @@ function recompileFrom(ctx: AppMapContext, recipe: RecipeFile, decision: Lifecyc
     // the body write carries its OWN dirty reason, distinct from the `lifecycle:<reason>` of the
     // status-only transition, so `export` can label it a machine recompile (issue #13 criterion 4)
     ctx.db.putRecipe(next, { dirty: true, reason: `${RECOMPILE_DIRTY_PREFIX}${decision.reason}` });
+    // the reviewed steps of a kind the compiler has no producer for (`wait_for`): exempt from the
+    // coverage rule above, so they did not refuse the write — and therefore GONE from the recipe
+    // just written. Bounded and deliberate (see the module header), but never silent.
+    const exempt = (recipe.steps ?? []).filter((s) => !compilerCanEmit(s.action)).map((s) => s.id);
     ctx.log.info('recipe recompiled', {
       recipe: recipe.id, version: next.version, from_session: from.session, trigger: decision.reason,
       steps: next.steps.length, reviewed_by: next.provenance.reviewed_by,
+      ...(exempt.length > 0 ? { dropped_uncompilable: exempt } : {}),
       // the collapse notes did not block, but they are the reason a human might still want to look
       ...(result.warnings.length > 0 ? { notes: result.warnings } : {}),
     });

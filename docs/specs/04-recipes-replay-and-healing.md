@@ -23,7 +23,7 @@ Turn one successful exploration into a recipe that replays without the LLM, keep
 5. **Entry optimization**: if the first screen where a step is taken has a deep link, replace the leading navigation steps with `entry.deep_link` and keep the navigation as `fallback_path`.
 6. **Postconditions**: each step's `expect` is `screen: <screen_after>` when the screen changed, else `focused`/`visible` inferred from the next observation — `focused` only on a platform that reports focus (§10); elsewhere a newly focused element is written as a `visible` assertion, since an expectation the driver cannot check is not a postcondition.
 7. **Mark** any step touching an `intent_critical` element.
-8. Emit YAML with `status: candidate` and provenance; return it for LLM review. The LLM adds `matches`, `description`, checks params, and calls `mark(candidate)` to write it. Nothing is written without that call.
+8. Emit YAML with `status: candidate` and provenance; return it for LLM review. The LLM adds `matches`, `description`, checks params, and calls `mark(candidate)` to write it. Nothing is written without that call. A **revision** (`revision_of`) carries the previous recipe's `description`, `matches`, `verify` and `preconditions` forward: §8 recompiles the structure, not the prose, and step 5 can re-derive only one of the conditions a recipe may carry (`{auth: logged_in}`) — a hand-authored `platform_version` or feature-flag condition is unrecoverable from any trajectory.
 
 A recipe that cannot be compiled (loops that never converge, unparameterized values, missing postconditions) fails loudly with the reason; the trajectory stays for a human to inspect.
 
@@ -152,12 +152,21 @@ The automatic recompile is **guarded**: it replaces the previous recipe only whe
    order, matched on `action` plus the element/list/gate/url it acts on (never the data a step
    carries, so a `{param}` slot and the literal it was compiled from compare equal), with no
    matched step losing an `expect` assertion or its `intent_critical` mark. Extra steps are fine;
-   a rebuild is allowed to grow, never to shrink.
+   a rebuild is allowed to grow, never to shrink. One exemption, narrow and explicit: a previous
+   step whose action §3.3 has no producer for — today only `wait_for`, which §6.2 maps to
+   Maestro's `extendedWaitUntil` and which no driver call translates to — is not "missing", since
+   no rebuild could ever contain one and a step kind with no producer cannot be evidence of
+   erosion. It excuses that kind alone, only where nothing matched, and does not shift the
+   matching of any other step; the exempt step is absent from the recipe the accepted rebuild
+   writes, which the `recipe recompiled` log line names. It disappears on its own the day §3.3
+   learns to emit that kind.
 3. **The rebuilt `preconditions` and `entry` cover the previous ones.** Every previous condition
-   must come back (extra ones are a narrowing, not a loss), and a previous `entry.deep_link` must
+   must come back — §3.8 carries them into the revision, because §3.5 re-derives only
+   `{auth: logged_in}` and a rebuild that emitted just what it derived would drop every
+   hand-authored condition and be refused here for ever — and a previous `entry.deep_link` must
    come back on the same screen with every query parameter it carried — dropping
    `?fixture=logged_in` is `preconditions: [{auth: logged_in}]` loss in URL form, and a replay
-   whose slice starts after the entry navigation rebuilds neither. `entry.fallback_path` is
+   whose slice starts after the entry navigation rebuilds the link without it. `entry.fallback_path` is
    checked only when the previous recipe had no deep link, because §3.5 derives it from whatever
    leading navigation the slice held.
 

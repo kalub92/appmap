@@ -1556,6 +1556,20 @@ export function edgeElement(action: EdgeAction): ElementId | undefined {
     default: return undefined;
   }
 }
+/**
+ * Pure: a `Condition` as one log-safe line (`auth=logged_in`, `flag=beta,value=true`); 02 §4.1
+ * key order, and total over all five fields, so equal keys are equal conditions.
+ *
+ * It lives here rather than beside its first caller because BOTH sides of the 04 §8 recompile
+ * have to agree on it: `recipes/compile.ts` dedupes the conditions it carries forward on this
+ * key, and `recipes/lifecycle.recompileCoversEntry` refuses a rebuild that dropped one on the
+ * same key. Two notions of "the same condition" would let a carried-forward condition read as a
+ * dropped one.
+ */
+export function conditionKey(c: Condition): string {
+  const order: Array<keyof Condition> = ['auth', 'screen', 'flag', 'value', 'platform_version'];
+  return order.filter((k) => c?.[k] !== undefined).map((k) => `${k}=${String(c[k])}`).join(',');
+}
 /** cached per registry instance: ingest re-normalizes on every driver call (03 §11, <50 ms) */
 const ROLE_HINTS = new WeakMap<object, ReadonlyMap<ElementId, Role>>();
 

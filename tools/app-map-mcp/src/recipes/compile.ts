@@ -52,7 +52,10 @@
  *     `{compiled_from: session, compiled_by: app-map-mcp@<pkg version>}`, a placeholder `matches` derived from the recipe id (never the raw task text,
  *     which 02 §10 rule 8 would reject)
  *     placeholder replaced by `[task]` escaped as a literal regex, and canonical YAML text;
- *     emit a `compile` event (08 §2).
+ *     emit a `compile` event (08 §2). A REVISION (`revision_of`) carries the reviewed recipe's
+ *     `description`, `matches`, `verify` and `preconditions` forward — 04 §8 recompiles the
+ *     structure, not the prose, and a trajectory can re-derive only one of the conditions a
+ *     recipe may carry (`revisionPreconditions`).
  *
  * Layer: session (imports context, types, tree, identify, resolve, yaml/canonical, events,
  * recipes/verbs).
@@ -60,8 +63,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppMapContext } from '../context.ts';
-import type { CompileRecipeInput, CompileRecipeResult, DriverInput, ElementId, Expect, LoadedMap, Observation, RecipeEntry, RecipeFile, RecipeParam, RecipeStep, ScreenId, ScrubbedTree, StepId, SwipeDirection } from '../types.ts';
-import { PARAM_SLOT_REGEX, SWIPE_DIRECTIONS, UNKNOWN_SCREEN, focusObservable, screenIdOfDeepLink, stepElement } from '../types.ts';
+import type { CompileRecipeInput, CompileRecipeResult, Condition, DriverInput, ElementId, Expect, LoadedMap, Observation, RecipeEntry, RecipeFile, RecipeParam, RecipeStep, ScreenId, ScrubbedTree, StepAction, StepId, SwipeDirection } from '../types.ts';
+import { PARAM_SLOT_REGEX, SWIPE_DIRECTIONS, UNKNOWN_SCREEN, conditionKey, focusObservable, screenIdOfDeepLink, stepElement } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { PACKAGE_ROOT } from '../paths.ts';
 import { walk } from '../tree.ts';
@@ -368,6 +371,28 @@ export function swipeDirection(input: DriverInput): SwipeDirectionResult {
  * known non-step. `compileRecipe` folds these into `CompileRecipeResult.warnings` (issue #9).
  */
 export interface TranslateResult { steps: TranslatedStep[]; warnings: string[] }
+
+/**
+ * The step kinds step 3 below can ever emit — the exhaustive list of `translateSteps`' `push`
+ * call sites, kept HERE beside them so it cannot drift from the producer (the same reason
+ * `isCollapseWarning` sits next to `collapseWarning`).
+ *
+ * The complement is what makes this worth stating: `wait_for` is a legal 02 §6 step and 04 §6.2
+ * maps it to Maestro's `extendedWaitUntil`, but no driver call compiles to one and nothing here
+ * synthesises one — a `wait_for` only ever exists because a HUMAN wrote it. The 04 §8 recompile
+ * coverage rule (`recipes/lifecycle.recompileCovers`) keys its exemption on this, because a
+ * reviewed step of a kind the compiler cannot produce can never be evidence of erosion; without
+ * it, any reviewed recipe carrying a `wait_for` refuses every rebuild for ever.
+ *
+ * THE DAY A PRODUCER EXISTS — a `wait`/`waitForElement` driver verb translated in step 3, say —
+ * add its action here and the exemption disappears by itself, with no change in lifecycle.ts.
+ */
+export const COMPILABLE_STEP_ACTIONS: readonly StepAction[] = ['tap', 'type', 'select', 'swipe', 'open_link', 'dismiss_gate'];
+
+/** Pure: can the compiler produce a step of this kind at all? See `COMPILABLE_STEP_ACTIONS`. */
+export function compilerCanEmit(action: StepAction): boolean {
+  return COMPILABLE_STEP_ACTIONS.includes(action);
+}
 
 /** Step 3. Pure. `driver` = `APP_MAP_DRIVER` (03 §3), which decides the verb table (verbs.ts). */
 export function translateSteps(map: LoadedMap, observations: readonly Observation[], driver: string): TranslateResult {
@@ -803,6 +828,9 @@ export function compileRecipe(ctx: AppMapContext, input: CompileRecipeInput): Co
   // 04 §3.8: `description` and `matches` are the LLM's to author; a fresh compile emits a
   // structure-only placeholder so the draft itself never carries task data (02 §10.8, 07 §2).
   const description = previous?.description ?? placeholderDescription(input.recipe_id);
+  // 04 §3.5 derives `{auth: logged_in}`; everything else a reviewed recipe declares is
+  // hand-authored and unrecoverable from a replay, so a revision keeps it (`revisionPreconditions`)
+  const preconditions = revisionPreconditions(previous?.preconditions, loggedIn ? [{ auth: 'logged_in' as const }] : []);
   const recipe: RecipeFile = {
     id: input.recipe_id,
     version,
@@ -811,7 +839,7 @@ export function compileRecipe(ctx: AppMapContext, input: CompileRecipeInput): Co
     // the LLM replaces this with real patterns before mark (04 §3.8)
     matches: previous?.matches ?? placeholderMatches(input.recipe_id),
     params,
-    ...(loggedIn ? { preconditions: [{ auth: 'logged_in' as const }] } : {}),
+    ...(preconditions.length > 0 ? { preconditions } : {}),
     entry: optimized.entry,
     steps: finalSteps,
     verify,
@@ -831,6 +859,39 @@ export function compileRecipe(ctx: AppMapContext, input: CompileRecipeInput): Co
     from_session: input.session, steps: recipe.steps.length, params: params.map((p) => p.name), ok: true,
   });
   return { ok: true, recipe, yaml, collapsed_observations: collapsed.removed.length, warnings };
+}
+
+/**
+ * 04 §3.5 / 04 §8: the `preconditions` a REVISION carries.
+ *
+ * A trajectory can only ever re-derive ONE condition — `{auth: logged_in}`, from the probe or a
+ * `?fixture=logged_in` entry link (step 5). Every other condition a recipe may carry
+ * (`platform_version: '>=17.0'`, a feature `flag`, a `screen`) is hand-authored: nothing in a
+ * replay records it, so a rebuild that emitted only what it could derive would DROP it — the
+ * same loss `verify`, `matches`, `description` and `params` are already carried forward to avoid
+ * (04 §8: only the structure is recompiled, the reviewed prose is the human's).
+ *
+ * The consequence of not doing this was not a silently weakened recipe — the 04 §8 write guard
+ * caught the drop — but a recompile that could never succeed: a recipe gated on
+ * `platform_version` refused every rebuild with `missing_preconditions`, for ever, and the
+ * automatic recompile of 04 §9 went inert while logging an error on every failing replay.
+ * Carrying the conditions forward makes that gate pass because the condition is REALLY in the
+ * written file, not because the check was relaxed.
+ *
+ * Reviewed conditions keep their order and come first, so a revision's diff shows only what the
+ * trajectory added; a derived condition the reviewed recipe already declares is not duplicated
+ * (`conditionKey`, the same key the guard compares on).
+ */
+function revisionPreconditions(previous: readonly Condition[] | undefined, derived: readonly Condition[]): Condition[] {
+  const out: Condition[] = [...(previous ?? [])];
+  const seen = new Set(out.map(conditionKey));
+  for (const c of derived) {
+    const key = conditionKey(c);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
+  }
+  return out;
 }
 
 /** the screens a compiled draft walks through (`fallback_path` sanity check for callers) */

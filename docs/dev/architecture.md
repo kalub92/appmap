@@ -698,6 +698,40 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     branch" is a rule about DECAY, where the conservative branch is "do not decay"; on both of these
     the conservative branch is the one that keeps the map loading and the build honest. Issue #12.
 
+65. **A recompile gate may only refuse what the compiler could have produced.** Decision 57's
+    three gates are the right shape, but two of them were unsatisfiable for constructs the pilot
+    never used, so the 04 §9 automatic recompile went inert — refusing in the safe direction,
+    yet logging an `error` and an `ok:false` `compile` event on every failing replay, which reads
+    as erosion when it is really the compiler unable to re-derive something a human wrote.
+    (a) `compile` emitted `preconditions` only from the trajectory — 04 §3.5 derives exactly
+    `{auth: logged_in}` — and carried none of the previous recipe's forward, unlike `verify`,
+    `matches`, `description` and `params`. A recipe gated on `{platform_version: '>=17.0'}` or a
+    feature flag therefore lost it in every rebuild and gate (c) refused that rebuild for ever
+    (`missing_preconditions: ['platform_version=>=17.0']`). A revision now carries the reviewed
+    conditions and unions the derived one onto them (`compile.revisionPreconditions`, deduped on
+    `conditionKey` — which moved to `types.ts` so the producer and the guard cannot key the same
+    question two ways). The gate then passes because the condition is REALLY in the written file;
+    it is not bypassed, and it still refuses a draft that genuinely loses one.
+    (b) Nothing produces `action: 'wait_for'` — 02 §6 defines it, 04 §6.2 maps it to Maestro's
+    `extendedWaitUntil`, and `translateSteps` has no `push` site for it — so a human-authored
+    wait between a tap and a `select` (the React Native / Flutter case) was `missing` from every
+    rebuild and gate (b) refused it for ever. `recompileCovers` now exempts a reviewed step whose
+    action the compiler cannot emit, read off the producer's own list
+    (`compile.COMPILABLE_STEP_ACTIONS` / `compilerCanEmit`, beside the `push` sites, the same
+    arrangement as `collapseWarning`/`isCollapseWarning`). No erosion hole: the exemption is
+    decided by the ACTION in the reviewed file, which only a human `mark` writes, so a real step
+    cannot acquire it by coming back as something else; it applies only where nothing matched and
+    never advances the subsequence cursor, so a dropped `type` beside an exempt `wait_for` is
+    still refused by name; and no kind a rebuild could have emitted is ever exempt. Its real cost
+    is bounded and stated: the accepted rebuild does not contain that `wait_for`, so the write
+    loses the wait — visible in the export diff, stamped `machine_recompile: true`, demoted to
+    `candidate`, and named in the `recipe recompiled` log line (`dropped_uncompilable`), with
+    `verify` (carried prose) still asserting where the recipe must end up. Re-inserting the step
+    positionally would be guesswork, since a `wait_for` has no element to anchor it to in the
+    rebuilt list; carrying reviewed `wait_for` steps into a rebuild is the filed follow-up. Both
+    exemptions delete themselves: add the action to `COMPILABLE_STEP_ACTIONS` the day 04 §3.3
+    emits it. Follow-up to issue #13.
+
 ## 8. How to implement your module
 
 Tests live in `src/test/<module>.test.ts` (node:test, `node --disable-warning=ExperimentalWarning

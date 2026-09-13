@@ -9,7 +9,7 @@ import type { RecipeStats } from '../store/db.ts';
 import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
 import type { ElementDef, RecipeFile, RecipeStatus, RunRecord, ScreenFile, ScreenStatus } from '../types.ts';
-import { now } from '../types.ts';
+import { STEP_ACTIONS, now } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { loadConfig } from '../config.ts';
 import { readEvents } from '../events.ts';
@@ -20,7 +20,7 @@ import {
   markScreen, markVerified, recompileCovers, recompileCoversEntry, recordRunOutcome,
   retireRecipesForScreen, screensReferenced, shouldRecompile, stepIdentity,
 } from '../recipes/lifecycle.ts';
-import { isCollapseWarning, isFocusFallbackWarning } from '../recipes/compile.ts';
+import { compilerCanEmit, isCollapseWarning, isFocusFallbackWarning } from '../recipes/compile.ts';
 import { canonicalYaml } from '../yaml/canonical.ts';
 import { loadTrajectoryFixture, makeTempAppMapDir } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
@@ -269,6 +269,35 @@ describe('recompileCovers / stepIdentity — the 04 §8 coverage rule (issue #13
   it('an empty reviewed step list is covered by anything', () => {
     assert.deepEqual(recompileCovers(withSteps([]), withSteps([tap('s1', 'a.b.one')])), { ok: true, missing: [], weakened: [] });
   });
+
+  // the one exemption on top of the subsequence rule, keyed on the PRODUCER's own list of what
+  // step 3 of the compiler can emit: a kind with no producer is absent from every rebuild, so
+  // its absence is the compiler's silence and cannot be evidence of erosion
+  it('a reviewed `wait_for` is not missing — no rebuild can contain one (04 §6.2)', () => {
+    const wait = { id: 's2', action: 'wait_for', expect: { screen: 'invoice_new' } } as RecipeFile['steps'][number];
+    const reviewed = withSteps([tap('s1', 'a.b.one'), wait, tap('s3', 'a.b.two')]);
+    assert.deepEqual(
+      recompileCovers(reviewed, withSteps([tap('s1', 'a.b.one'), tap('s2', 'a.b.two')])),
+      { ok: true, missing: [], weakened: [] },
+    );
+    assert.equal(compilerCanEmit('wait_for'), false, 'and it is the compiler that says so, not a literal in the rule');
+  });
+
+  it('the exemption excuses ONLY the kind with no producer: a dropped step beside a `wait_for` still refuses', () => {
+    const wait = { id: 's3', action: 'wait_for', expect: { screen: 'invoice_new' } } as RecipeFile['steps'][number];
+    const type = { id: 's2', action: 'type', element: 'invoice.amount.field', text: '{amount}' } as RecipeFile['steps'][number];
+    const reviewed = withSteps([tap('s1', 'a.b.one'), type, wait, tap('s4', 'a.b.two')]);
+    // the rebuild kept both taps and dropped the `type` — issue #13's reported case, next door
+    // to an exempt step. The exemption never advances the match cursor, so ordering is untouched.
+    assert.deepEqual(
+      recompileCovers(reviewed, withSteps([tap('s1', 'a.b.one'), tap('s2', 'a.b.two')])),
+      { ok: false, missing: ['s2'], weakened: [] },
+    );
+    // and it cannot be claimed by a kind a rebuild COULD have produced
+    for (const action of STEP_ACTIONS) {
+      assert.equal(compilerCanEmit(action), action !== 'wait_for', `${action}: the exemption set is exactly the kinds with no producer`);
+    }
+  });
 });
 
 describe('recompileCoversEntry / deepLinkCovers — preconditions and entry (04 §8, issue #13)', () => {
@@ -298,6 +327,13 @@ describe('recompileCoversEntry / deepLinkCovers — preconditions and entry (04 
       'this is what the pilot recompile from a slice that starts after the entry actually does',
     );
     assert.equal(recompileCoversEntry(reviewed, withEntry({ preconditions: [{ flag: 'beta', value: true }, { auth: 'logged_in' }] })).ok, true, 'order-free, and extra conditions are fine');
+    // carrying the reviewed conditions into the rebuild (compile.revisionPreconditions) did not
+    // relax this gate: a draft that really lost one is still refused, by name
+    const gated = withEntry({ preconditions: [{ platform_version: '>=17.0' }, { auth: 'logged_in' }] });
+    assert.deepEqual(
+      recompileCoversEntry(gated, withEntry({ preconditions: [{ auth: 'logged_in' }] })),
+      { ok: false, missing_preconditions: ['platform_version=>=17.0'], entry_loss: [] },
+    );
     assert.equal(recompileCoversEntry(withEntry({}), withEntry({ preconditions: [{ auth: 'logged_in' }] })).ok, true);
   });
 
@@ -384,6 +420,18 @@ const reviewedThreeStep = (over: Partial<RecipeFile> = {}): RecipeFile => ({
   provenance: { compiled_from: 'traj_old', compiled_by: 'app-map-mcp@0.1.0', reviewed_by: 'caleb' },
   ...over,
 });
+
+/**
+ * The same reviewed recipe with a hand-authored `wait_for` between the `type` and the save —
+ * 04 §6.2's `extendedWaitUntil` row, and the step no driver call compiles to (issue #13
+ * follow-up). Its ids stay `s1…s4` so the refusal assertions name the `type` as `s2`.
+ */
+const withWaitFor = (): RecipeFile['steps'] => [
+  { id: 's1', action: 'tap', element: 'invoice.amount.field', expect: { visible: ['invoice.amount.field'] } },
+  { id: 's2', action: 'type', element: 'invoice.amount.field', text: '{amount}' },
+  { id: 's3', action: 'wait_for', expect: { screen: 'invoice_new' }, timeout_ms: 5000 },
+  { id: 's4', action: 'tap', element: 'invoice.save.button', expect: { screen: 'invoice_detail' }, intent_critical: true },
+];
 
 /** insert only the named seqs of the committed trajectory, so the rebuild's shape is controlled */
 function seedSeqs(seqs: number[], c: AppMapContext = ctx): void {
@@ -1008,28 +1056,90 @@ describe('recompileFrom — the 04 §8 recompile write guard (issue #13)', () =>
   });
 
   // the second erosion route, and the one the pilot's own map demonstrates: the steps all come
-  // back, but `preconditions: [{auth: logged_in}]` and the `?fixture=logged_in` on the deep link
-  // do not, so the surviving taps would run against a logged-OUT app
-  it('a rebuild that keeps every step but loses the reviewed preconditions and deep-link fixture is refused', () => {
+  // back, but the `?fixture=logged_in` on the deep link does not, so the surviving taps would
+  // run against a logged-OUT app. `preconditions: [{auth: logged_in}]` is no longer part of that
+  // loss — the compiler carries the reviewed conditions into the revision, the way it already
+  // carried `verify`/`matches` — so this now pins the half a replay really can erode, and pins
+  // the carry-forward from the other side: the condition must be IN the draft, not excused.
+  it('a rebuild that keeps every step but loses the reviewed deep-link fixture is refused, and its preconditions are carried not dropped', () => {
     const reviewed = ctx.map.recipes.get('create_invoice') as RecipeFile;
     assert.deepEqual(reviewed.preconditions, [{ auth: 'logged_in' }], 'the committed pilot recipe is the fixture here');
     assert.equal(reviewed.entry.deep_link, 'appmap://invoice_new?fixture=logged_in');
     // seqs 4-8: every step of the recipe, but the slice starts AFTER the entry open_url, so
-    // `compile` sees no evidence of a logged-in session and rebuilds neither (04 §3.5)
+    // `compile` sees no evidence of a logged-in session and cannot re-derive either (04 §3.5)
     seedSeqs([4, 5, 6, 7, 8]);
     const decision = forceRecompile();
 
     assert.equal(decision?.recompile?.written, false);
-    assert.deepEqual(decision?.recompile?.refusals, ['missing_preconditions', 'weakened_entry']);
+    assert.deepEqual(decision?.recompile?.refusals, ['weakened_entry']);
     assert.deepEqual(decision?.recompile?.missing_steps, [], 'every step DID come back — this is not the step rule');
-    assert.deepEqual(decision?.recompile?.missing_preconditions, ['auth=logged_in']);
+    assert.deepEqual(decision?.recompile?.missing_preconditions, [], 'nor the preconditions rule: the draft still declares the reviewed condition');
     assert.deepEqual(decision?.recompile?.entry_loss, ['deep_link appmap://invoice_new?fixture=logged_in → appmap://invoice_new']);
-    assert.match(decision?.recompile?.diff ?? '', /^-\s+- auth: logged_in$/m, 'and the human gets the diff that shows the drop');
+    assert.doesNotMatch(decision?.recompile?.diff ?? '', /^-\s+- auth: logged_in$/m, 'the condition is not in the diff as a removal …');
+    assert.match(decision?.recompile?.diff ?? '', /^-\s+deep_link: appmap:\/\/invoice_new\?fixture=logged_in$/m, '… and the human gets the diff of the loss that DID happen');
 
     const kept = ctx.db.getRecipe('create_invoice') as RecipeFile;
     assert.deepEqual(kept.preconditions, [{ auth: 'logged_in' }]);
     assert.equal(kept.entry.deep_link, 'appmap://invoice_new?fixture=logged_in');
     assert.equal(kept.version, 3, 'the version did not silently move');
+    assert.deepEqual(recompileDirtyRows(), []);
+  });
+
+  // (a) A recipe a human gated on anything but `auth` — `platform_version`, a feature flag — was
+  // refused for ever: 04 §3.5 re-derives only `{auth: logged_in}`, so every rebuild dropped the
+  // condition and the guard above (correctly) refused the shrunken draft. The automatic 04 §9
+  // recompile was inert on such a recipe, and loudly: an `error` line and an `ok:false` compile
+  // event on every failing replay, reading like erosion when it was the compiler's own blind spot.
+  it('a reviewed recipe gated on a hand-authored precondition recompiles, and the condition survives into the written recipe', () => {
+    ctx.db.putRecipe(reviewedThreeStep({ preconditions: [{ platform_version: '>=17.0' }] }), { dirty: false });
+    seedSeqs([4, 5, 6, 7, 8]);
+    const decision = forceRecompile();
+
+    assert.deepEqual(decision?.recompile?.refusals, [], 'was `missing_preconditions`, on every rebuild, for ever');
+    assert.deepEqual(decision?.recompile?.missing_preconditions, []);
+    assert.equal(decision?.recompile?.written, true);
+
+    const next = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    assert.deepEqual(next.preconditions, [{ platform_version: '>=17.0' }], 'carried INTO the rebuild — the gate passes on what the file really holds');
+    assert.equal(next.provenance.reviewed_by, 'caleb');
+    assert.deepEqual(validateAgainstSchema(schemaDir(t.config), 'recipe', next), [], 'and the carried condition leaves a legal recipe.schema.json document');
+  });
+
+  // (b) `wait_for` is a legal 02 §6 step (04 §6.2 maps it to Maestro's `extendedWaitUntil`) that
+  // NO driver call compiles to, so a human-authored one is missing from every rebuild by
+  // construction. The coverage rule read that as erosion and refused every recompile of such a
+  // recipe — the React Native / Flutter case the row exists for.
+  it('a reviewed `wait_for` no longer refuses the rebuild that structurally cannot contain one', () => {
+    ctx.db.putRecipe(reviewedThreeStep({ steps: withWaitFor() }), { dirty: false });
+    seedSeqs([4, 5, 6, 7, 8]);
+    const decision = forceRecompile();
+
+    assert.deepEqual(decision?.recompile?.refusals, [], 'was `missing_steps: [s3]`, on every rebuild, for ever');
+    assert.deepEqual(decision?.recompile?.missing_steps, []);
+    assert.equal(decision?.recompile?.written, true);
+    const next = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    assert.deepEqual(next.steps.map((x) => x.action), ['tap', 'type', 'tap', 'select', 'tap'], 'every compilable reviewed step came back');
+    assert.equal(next.steps.some((x) => x.action === 'wait_for'), false, 'the wait the compiler cannot emit is gone from the written recipe — the bounded, documented cost');
+    assert.equal(next.verify.screen, 'invoice_detail', 'the reviewed `verify` still says where the recipe has to end up');
+  });
+
+  // the exemption must not become a hole: it excuses ONE kind, and only where a rebuild could
+  // never have produced it. Everything issue #13 is about is untouched.
+  it('a reviewed `wait_for` does not excuse a dropped `type`: that rebuild is still refused', () => {
+    ctx.db.putRecipe(reviewedThreeStep({ steps: withWaitFor() }), { dirty: false });
+    // seqs 4 and 8 only: the tap and the save, with the `type` in between never recorded — the
+    // reporter's own degraded trajectory, now next door to an exempt step
+    seedSeqs([4, 8]);
+    const decision = forceRecompile();
+
+    assert.deepEqual(decision?.recompile?.refusals, ['missing_steps']);
+    assert.deepEqual(decision?.recompile?.missing_steps, ['s2'], 'the `type`, and only the `type`');
+    assert.equal(decision?.recompile?.written, false);
+
+    const kept = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    assert.equal(kept.steps.length, 4, 'the reviewed recipe is untouched, wait and all');
+    assert.equal(kept.steps[2]?.action, 'wait_for');
+    assert.equal(kept.version, 3);
     assert.deepEqual(recompileDirtyRows(), []);
   });
 
