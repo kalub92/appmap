@@ -645,6 +645,63 @@ describe('markVerified — 02 §8 / 08 §5 row 5 (architecture §7 decision 32)'
     assert.deepEqual(markVerified(ctx, { screens: ['nope'], elements: [{ screen: 'nope', element: 'a.b.c' }], edges: [{ screen: 'invoice_new', action: { type: 'tap', element: 'a.b.c' }, to: 'nope' }], recipe: 'nope' }), { screens: [], elements: [], edges: 0 });
     assert.deepEqual(markVerified(ctx, {}), { screens: [], elements: [], edges: 0 });
   });
+
+  /** exactly what `router-import` seeds: the app's edges, `elements: []` (01 R6) */
+  const seedScreen = (over: Partial<ScreenFile> = {}): ScreenFile => ({
+    id: 'settings', kind: 'screen', title: 'Settings', deep_link: 'appmap://settings',
+    signature: { marker: 'screen.settings', route: 'appmap://settings' },
+    elements: [],
+    edges: [{ action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list', status: 'candidate' }],
+    meta: { sources: ['router_export'], status: 'candidate' },
+    ...over,
+  });
+
+  it('never promotes a screen whose elements[] is empty — passing through a router seed is not a verification (issue #12)', () => {
+    ctx.db.putScreen(seedScreen(), { dirty: false });
+    const before = ctx.db.listDirty().length;
+    // every caller's shape: guided/headless name the screen, observe's lazy re-verify names it alone
+    const out = markVerified(ctx, { screens: ['settings'], edges: [{ screen: 'settings', action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list' }] }, '4413');
+    assert.deepEqual(out, { screens: [], elements: [], edges: 0 });
+    const after = ctx.db.getScreen('settings')!;
+    assert.equal(after.meta.status, 'candidate', '02 §8: a screen with no elements has never had a clean observation of its required ids');
+    assert.equal(after.meta.last_verified_build, undefined, 'and no build was earned either');
+    assert.equal(ctx.db.listDirty().length, before, 'nothing changed, so nothing was written');
+    // this is what keeps 02 §10 rule 2's carve-out alive past the first replay
+    assert.equal(after.elements.length, 0, 'only name_screen fills this in');
+  });
+
+  it('never promotes an edge whose action element the screen does not declare (issue #12, one level down)', () => {
+    // build N+1's new edge on an ALREADY-EXPLORED screen: verifying it would turn rule 2's warning
+    // into a hard error on the next load, with no human edit in between
+    const explored = structuredClone(ctx.db.getScreen('invoice_new')!);
+    explored.edges = [...explored.edges, { action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list', status: 'candidate' }];
+    ctx.db.putScreen(explored, { dirty: false });
+    assert.equal(explored.elements.some((e) => e.id === 'invoice.add.button'), false, 'undeclared here — that is the point');
+
+    const out = markVerified(ctx, { edges: [{ screen: 'invoice_new', action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list' }] }, '4413');
+    assert.equal(out.edges, 0);
+    const edge = ctx.db.getScreen('invoice_new')!.edges.find((e) => e.action.type === 'tap' && e.action.element === 'invoice.add.button');
+    assert.equal(edge!.status, 'candidate');
+    assert.equal(edge!.last_verified_build, undefined);
+    // a declared element on the same screen still verifies normally — the guard is narrow
+    assert.equal(markVerified(ctx, { edges: [{ screen: 'invoice_new', action: { type: 'tap', element: 'invoice.save.button' }, to: 'invoice_detail' }] }, '4413').edges, 1);
+  });
+
+  it('refuses an empty screen even when no edge on it names an element — the screen guard is broad on purpose (issue #12)', () => {
+    // Nothing on this seed is at risk today: `open_link` names no element, so rule 2 reports
+    // nothing and a guard keyed on “empty AND carrying an undeclared edge element” would promote
+    // it. `import-router` appends the app's new edges on every later build, and by then the screen
+    // is `verified`: rule 2 errors, the map stops loading, and `ctx.loadError` short-circuits every
+    // tool but `export`, so it cannot even be marked back to `candidate`. Emptiness alone is the
+    // test (02 §8); router-import.test.ts pins the full two-build sequence.
+    ctx.db.putScreen(seedScreen({ edges: [{ action: { type: 'open_link', url: 'appmap://invoice_list' }, to: 'invoice_list', status: 'candidate' }] }), { dirty: false });
+    const before = ctx.db.listDirty().length;
+    assert.deepEqual(markVerified(ctx, { screens: ['settings'] }, '4413'), { screens: [], elements: [], edges: 0 });
+    const after = ctx.db.getScreen('settings')!;
+    assert.equal(after.meta.status, 'candidate');
+    assert.equal(after.meta.last_verified_build, undefined, 'the build is not earned either — so 02 §8 decay never applies to it');
+    assert.equal(ctx.db.listDirty().length, before, 'nothing changed, so nothing was written');
+  });
 });
 
 describe('retireRecipesForScreen — 02 §8 / 04 §8 row 5', () => {

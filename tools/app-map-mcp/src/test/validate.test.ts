@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { parse } from 'yaml';
-import type { IdsRegistry, RecipeFile, ScreenFile, ValidationIssue } from '../types.ts';
+import type { ElementDef, IdsRegistry, RecipeFile, ScreenFile, ValidationIssue } from '../types.ts';
 import { isUnlearnedEdgeElement } from '../types.ts';
 import { canonicalYaml } from '../yaml/canonical.ts';
 import { loadMap } from '../yaml/load.ts';
@@ -329,12 +329,40 @@ describe('rule 2 — a router-export seed warns until exploration learns its ele
     gates: [],
     elements: [{ id: 'invoice.add.button', kind: 'button' }, { id: 'invoice.list.cell', kind: 'cell', dynamic: true }],
   });
-  const stub = (id: string): ScreenFile => ({ id, kind: 'screen', deep_link: `appmap://${id}`, signature: { marker: `screen.${id}` }, elements: [], edges: [], meta: { sources: ['manual'], status: 'candidate' } });
-  const crossRef = (screen: ScreenFile): ValidationIssue[] => crossReferenceIssues({
+  /** an element as an already-explored neighbour declares it (role/dynamic taken from the registry) */
+  const declaredAs = (id: string): ElementDef => {
+    const reg = idsWithSettings().elements.find((e) => e.id === id)!;
+    return {
+      id,
+      role: reg.kind as ElementDef['role'],
+      ...(reg.dynamic === true ? { dynamic: true } : {}),
+      status: 'verified',
+      locators: [{ strategy: 'a11y_id', value: id, weight: 1 }, { strategy: 'path', value: `${reg.kind}[0]`, weight: 0.25 }],
+    };
+  };
+  /**
+   * A neighbouring screen. `declares` are the element ids it records as PRESENT, which is the set
+   * rule 2's carve-out reads ("has any capture ever produced this id?"). It DEFAULTS TO NOTHING on
+   * purpose: which neighbour declares what decides the severity of half the cases below, so every
+   * test that depends on it says so at its own call site rather than inheriting it from here.
+   */
+  const stub = (id: string, declares: string[] = []): ScreenFile => ({
+    id, kind: 'screen', deep_link: `appmap://${id}`, signature: { marker: `screen.${id}` },
+    elements: declares.map(declaredAs), edges: [],
+    meta: declares.length > 0 ? { sources: ['exploration'], status: 'verified' } : { sources: ['manual'], status: 'candidate' },
+  });
+  /**
+   * `neighbours`: what the already-explored `invoice_list` next door declares (see `stub`).
+   * `build`: the build `manifest.yaml` names, which rule 2's third subject compares against a
+   * screen's `meta.last_verified_build`. Omitted, as the pilot's own manifest is not, it stays
+   * undefined and that subject never fires.
+   */
+  const crossRef = (screen: ScreenFile, opts: { neighbours?: string[]; build?: string } = {}): ValidationIssue[] => crossReferenceIssues({
     platform: 'ios',
     ids: idsWithSettings(),
-    screens: new Map([['ios/screens/settings.yaml', screen], ['ios/screens/invoice_list.yaml', stub('invoice_list')], ['ios/screens/invoice_detail.yaml', stub('invoice_detail')]]),
+    screens: new Map([['ios/screens/settings.yaml', screen], ['ios/screens/invoice_list.yaml', stub('invoice_list', opts.neighbours ?? [])], ['ios/screens/invoice_detail.yaml', stub('invoice_detail')]]),
     recipes: new Map(),
+    ...(opts.build !== undefined ? { build: opts.build } : {}),
   });
   const edgeElementIssues = (issues: ValidationIssue[]): ValidationIssue[] => issues.filter((i) => i.rule === 2 && i.location?.endsWith('/action/element') === true);
   /** the seed on disk in a pilot copy, registered in ids.yaml so the elements are the only gap */
@@ -367,10 +395,17 @@ describe('rule 2 — a router-export seed warns until exploration learns its ele
     }
   });
 
-  it('errors again for the other edge element once ONE element is declared (the carve-out needs elements to be empty)', () => {
-    const issues = edgeElementIssues(crossRef(seededScreen({
-      elements: [{ id: 'invoice.add.button', role: 'button', label: 'New Invoice', status: 'candidate', locators: [{ strategy: 'a11y_id', value: 'invoice.add.button', weight: 1 }, { strategy: 'path', value: 'button[0]', weight: 0.25 }] }],
-    })));
+  /** the seed once ONE element is known, so the SCREEN subject (`elements: []`) no longer applies */
+  const partlyLearned = (): ScreenFile => seededScreen({
+    elements: [{ id: 'invoice.add.button', role: 'button', label: 'New Invoice', status: 'candidate', locators: [{ strategy: 'a11y_id', value: 'invoice.add.button', weight: 1 }, { strategy: 'path', value: 'button[0]', weight: 0.25 }] }],
+  });
+
+  it('errors again for the other edge element once ONE element is declared, when a capture HAS produced it elsewhere', () => {
+    // Was "…once ONE element is declared" full stop, which is how the first #12 fix behaved: the
+    // screen subject was the only one, so losing it meant a hard error whatever the element was.
+    // It needs the neighbour to declare `invoice.list.cell` now — see the test below for the half
+    // of this case that became hole (b) and is deliberately no longer an error.
+    const issues = edgeElementIssues(crossRef(partlyLearned(), { neighbours: ['invoice.add.button', 'invoice.list.cell'] }));
     assert.equal(issues.length, 1, formatIssues(issues));
     assert.equal(issues[0]!.severity, 'error');
     assert.equal(issues[0]!.location, '/edges/1/action/element');
@@ -378,12 +413,117 @@ describe('rule 2 — a router-export seed warns until exploration learns its ele
     assert.equal(isUnlearnedEdgeElement(issues[0]!), false, 'an observed screen is past "not learned yet"');
   });
 
-  it('a screen past candidate with elements: [] still errors — verified and retired are both beyond "not learned yet"', () => {
+  it('…but WARNS there when no capture has produced it anywhere — one learned element is not exploration reaching this one (issue #12 hole b)', () => {
+    // The same screen and the same edge as above with ONE thing changed: nothing in the map
+    // declares `invoice.list.cell`. `name_screen` learns a screen's ids one capture at a time and
+    // `import-router` keeps appending the app's newer edges to it, so "this screen has SOME
+    // element" never meant "exploration reached THIS element". Erroring here is #12's cycle.
+    const issues = edgeElementIssues(crossRef(partlyLearned()));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'warning', formatIssues(issues));
+    assert.equal(issues[0]!.location, '/edges/1/action/element');
+    assert.ok(isUnlearnedEdgeElement(issues[0]!), formatIssues(issues));
+    assert.match(issues[0]!.message, /no capture has produced this id on any screen/, issues[0]!.message);
+  });
+
+  it('a screen past candidate with elements: [] errors for an element some capture HAS produced', () => {
+    // `verified` and `retired` are both past the point where the SCREEN subject explains anything;
+    // with both edge elements observed next door, neither of the other two subjects applies either.
     for (const status of ['verified', 'retired'] as const) {
-      const issues = edgeElementIssues(crossRef(seededScreen({ meta: { sources: ['router_export'], status } })));
+      const issues = edgeElementIssues(crossRef(seededScreen({ meta: { sources: ['router_export'], status } }), { neighbours: ['invoice.add.button', 'invoice.list.cell'] }));
       assert.equal(issues.length, 2, `${status}: ${formatIssues(issues)}`);
       for (const i of issues) assert.equal(i.severity, 'error', `${status}: ${formatIssues([i])}`);
     }
+  });
+
+  it('a screen past candidate with elements: [] still WARNS for an element no capture has produced (issue #12 hole b)', () => {
+    // Where the old blanket claim — "verified and retired are both beyond not-learned-yet" — stopped
+    // being true. The screen is past `candidate`, so the seed carve-out is off, but the ELEMENT is
+    // still unreached and that is the subject rule 2 answers to.
+    for (const status of ['verified', 'retired'] as const) {
+      const issues = edgeElementIssues(crossRef(seededScreen({ meta: { sources: ['router_export'], status } })));
+      assert.equal(issues.length, 2, `${status}: ${formatIssues(issues)}`);
+      for (const i of issues) assert.ok(isUnlearnedEdgeElement(i), `${status}: ${formatIssues([i])}`);
+    }
+  });
+
+  // ---- the carve-out's other two subjects: the element and the capture, not the screen ----
+  // (issue #12 holes (b) and (c) — a build N+1 `import-router` refresh of an EXPLORED screen)
+
+  /** an already-explored screen: `name_screen` learned `invoice.add.button` from a capture on 4412 */
+  const exploredScreen = (edges: ScreenFile['edges'], over: Partial<ScreenFile> = {}): ScreenFile => seededScreen({
+    elements: [{ id: 'invoice.add.button', role: 'button', label: 'New Invoice', status: 'verified', locators: [{ strategy: 'a11y_id', value: 'invoice.add.button', weight: 1 }, { strategy: 'path', value: 'button[0]', weight: 0.25 }] }],
+    edges,
+    meta: { sources: ['exploration', 'router_export'], status: 'verified', last_verified_build: '4412' },
+    ...over,
+  });
+  const tapCell = (status: 'candidate' | 'verified'): ScreenFile['edges'][number] => ({ action: { type: 'tap', element: 'invoice.list.cell' }, to: 'invoice_detail', status });
+
+  it('a new candidate edge on an ALREADY-EXPLORED screen warns when no capture has ever produced its element (issue #12 hole b)', () => {
+    // Build N+1: `mergeRouterScreen` appends the new build's edge and never touches `elements[]`
+    // or `meta.status`, so the screen is `verified` and non-empty — neither half of the original
+    // carve-out applies and rule 2 hard-errored, on every app's SECOND build. The capture is
+    // CURRENT here (4412 both sides), so the ELEMENT is the only subject that can be doing the work.
+    const explored = exploredScreen([
+      { action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list', status: 'verified' },
+      tapCell('candidate'),
+    ]);
+    // `invoice.list.cell` is registered in ids.yaml and declared on NO screen in this map
+    const issues = edgeElementIssues(crossRef(explored, { neighbours: ['invoice.add.button'], build: '4412' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'warning', formatIssues(issues));
+    assert.equal(issues[0]!.location, '/edges/1/action/element');
+    assert.ok(isUnlearnedEdgeElement(issues[0]!), formatIssues(issues));
+    assert.match(issues[0]!.message, /no capture has produced this id on any screen/, issues[0]!.message);
+  });
+
+  it('an edge element observed on ANOTHER screen is an ERROR on a CURRENT capture — that is a gap, not an unreached element', () => {
+    // same screen as above, but now `invoice_list` declares `invoice.list.cell` — a capture HAS
+    // produced it — and this screen's own capture is of the build the manifest names, so neither
+    // "no capture has produced it" nor "this capture is too old to have contained it" is available
+    const issues = edgeElementIssues(crossRef(exploredScreen([tapCell('candidate')]), { neighbours: ['invoice.add.button', 'invoice.list.cell'], build: '4412' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error', formatIssues(issues));
+    assert.equal(issues[0]!.message, 'edge element invoice.list.cell is not declared on this screen');
+    assert.equal(isUnlearnedEdgeElement(issues[0]!), false);
+  });
+
+  it('…and a WARNING once the manifest has moved on and this screen has not been recaptured (issue #12 hole c: shared chrome)', () => {
+    // The residual deadlock the element subject cannot reach. `import-router` on build 4413 appends
+    // an edge for a tab bar / back button that some OTHER screen already declares, so `observed` is
+    // true, onto a screen whose `elements[]` was captured on 4412 and which the merge does not
+    // recapture. The 4412 capture could not have contained a 4413 id whatever it is.
+    const issues = edgeElementIssues(crossRef(exploredScreen([tapCell('candidate')]), { neighbours: ['invoice.add.button', 'invoice.list.cell'], build: '4413' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'warning', formatIssues(issues));
+    assert.ok(isUnlearnedEdgeElement(issues[0]!), formatIssues(issues));
+    assert.match(issues[0]!.message, /the router added after this screen was last captured/, issues[0]!.message);
+  });
+
+  it('a stale capture only excuses a screen the ROUTER writes — a hand-authored one keeps the hard error', () => {
+    // `sources` without `router_export`: nothing appends edges to this file on its own, so an
+    // undeclared element is someone naming the wrong id and there is no cycle to break.
+    const handAuthored = exploredScreen([tapCell('candidate')], { meta: { sources: ['exploration', 'manual'], status: 'verified', last_verified_build: '4412' } });
+    const issues = edgeElementIssues(crossRef(handAuthored, { neighbours: ['invoice.add.button', 'invoice.list.cell'], build: '4413' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error', formatIssues(issues));
+    assert.equal(isUnlearnedEdgeElement(issues[0]!), false);
+  });
+
+  it('a VERIFIED edge whose element no capture has produced is still an ERROR — it claims the tap happened here', () => {
+    // and a stale capture does not excuse it either: `verified` says the tap was replayed HERE
+    const issues = edgeElementIssues(crossRef(exploredScreen([tapCell('verified')]), { neighbours: ['invoice.add.button'], build: '4413' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error', formatIssues(issues));
+    assert.equal(isUnlearnedEdgeElement(issues[0]!), false);
+  });
+
+  it('an edge element absent from ids.yaml is an ERROR even when no capture has produced it — a typo is not a gap', () => {
+    const explored = exploredScreen([{ action: { type: 'tap', element: 'settings.ghost.button' }, to: 'invoice_list', status: 'candidate' }]);
+    const issues = edgeElementIssues(crossRef(explored, { neighbours: ['invoice.add.button'], build: '4413' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error');
+    assert.equal(issues[0]!.message, 'edge element settings.ghost.button is not registered in ids.yaml');
   });
 
   it('an edge element absent from ids.yaml is still an ERROR on a seeded screen — a typo is not a gap (issue #12 criterion 4)', () => {

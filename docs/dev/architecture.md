@@ -526,9 +526,8 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     candidate is in the same "not learned yet" state and gets the same relaxation. `loadMap` throws
     `invalid_map` on errors only and carries the survivors on `LoadedMap.validationWarnings`, which
     `formatSummary` names and `app-map validate` counts, so the state is discoverable rather than
-    silently tolerated. Known limit: `nameScreen` only records elements the snapshot carried, so a
-    screen whose edge target was off-screen at naming time ends up non-empty but still missing that
-    target, and rule 2 errors again — correct per the rule, but worth a better message. Issue #12.
+    silently tolerated. Extended by decision 64, which adds the second and third unreached subjects
+    and closes the "known limit" this decision originally recorded. Issue #12.
 
 59. **`string_literal_id` matches a WHOLE registered id, never a feature prefix** (01 R8). The
     rule used to fire on any `ID_REGEX` literal sharing a first segment with a registered id, so
@@ -628,6 +627,63 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     otherwise pass while never matching — the harness compares `tools:` entries literally), and
     classifies as a `StepVerb`; and that 05 §5 still quotes the file's `tools:` line byte for byte,
     because fixing one file and forgetting the other is how both came to be wrong. Issues #9, #21.
+
+64. **A temporary gap has three subjects — the screen, the element and the capture — and a
+    lifecycle guard is what keeps any of them temporary.** Decision 58 keyed 02 §10 rule 2's
+    carve-out on the SCREEN (`candidate` + `elements: []`), which survived exactly one import.
+    Three holes: (a) `lifecycle.markVerified` flipped `candidate → verified` without consulting
+    `elements[]`, and every ok guided step, every headless success and `observe`'s lazy re-verify
+    call it — so one
+    replay through the seed removed the carve-out's own precondition and the map stopped loading
+    with no human edit, a worse failure than the one reported; (b) `router-import.mergeRouterScreen`
+    adds a new build's edges and touches neither `elements[]` nor `meta.status`, so on build N+1 a
+    newly registered element landed on an already-explored screen where the screen-shaped condition
+    could never apply — issue #12's cycle again, on every app's second build; (c) the same refresh
+    naming SHARED CHROME — a tab bar, a back button — that another screen already declares, so the
+    element-shaped condition below is false too and the hard error survived even (a) and (b) being
+    fixed.
+    `crossReferenceIssues` therefore warns when ANY subject is unreached: the screen (decision
+    58's condition, unchanged); the element — a `status: candidate` edge whose element
+    `observedElementIds` does not contain, i.e. no screen file anywhere records that id as present
+    (`observedElementIds` is hoisted above the screen loop and shared with decision 61's `kind:
+    list` sweep; it deliberately excludes edge `action.element`, or it would answer its own
+    question); or the capture — a `status: candidate` edge on a screen whose `sources` include
+    `router_export` and whose `meta.last_verified_build` is older than the build `manifest.yaml`
+    names. `elements[]` is the id set the last `name_screen` captured, at that build, and the
+    refresh recaptures nothing, so a capture that old could not have contained an id the app has
+    registered since — whether or not another screen declares it. All three, not one replacing
+    another: the element condition alone would re-open #12 on first-run setup, because a seed's
+    edges routinely name that same shared chrome while the screen has never been captured at all;
+    the screen condition alone survives one import; the capture condition alone would let a fresh,
+    current capture be contradicted for ever. An element recorded on another screen, on a screen
+    whose capture is of this build, is a real gap and stays an error; so does any undeclared element
+    on a screen the router does not write, where nothing appends edges on its own and there is no
+    cycle to break; a non-`candidate` edge asserts the tap already happened here and stays an error;
+    an element missing from `ids.yaml` is never relaxed at all. The capture condition self-heals:
+    `name_screen` stamps the current build, after which an element that really is absent errors
+    again. This also closes decision 58's known limit — an edge target off-screen at `nameScreen`
+    time is now a warning, since nothing has captured it.
+    Hole (a) is closed in `markVerified` itself rather than at its three call sites: it never
+    verifies a screen whose `elements` is empty (02 §8 verification is a clean observation
+    of the required ids, which such a screen has by definition never had — neither the status nor
+    `last_verified_build` is earned), and never verifies an edge whose `action.element` that screen
+    does not declare, one level down for the same reason. The screen guard is keyed on emptiness
+    ALONE, not on "empty AND carrying an undeclared edge element": a seed whose edges name no
+    element yet has nothing for rule 2 to relax today, but `import-router` appends the app's new
+    edges on every later build, and a screen promoted in the meantime is unrecoverable — rule 2
+    errors, `loadMap` throws `invalid_map`, `ctx.loadError` short-circuits every tool but `export`,
+    so nobody can `mark` it back. The narrower guard defers the deadlock instead of preventing it.
+    Accepted cost: a screen with no registered non-marker id at all (a splash, an interstitial —
+    `nameScreen` builds `elements[]` from the snapshot's registered ids minus markers) stays
+    `candidate` for ever and carries no `last_verified_build`, so 02 §8's decay is not applied to it
+    and `report`'s deep-link coverage does not count it.
+    KNOWN LIMIT, deliberate: on a screen NO capture has ever touched (the screen condition), an
+    element another screen declares is still only a warning, because on such a screen the map holds
+    no evidence at all about what is on it — and the state is indistinguishable from a first-run
+    router seed naming shared chrome, which is issue #12 itself. Telling the two apart would need
+    per-edge provenance in `screen.schema.json`, whose `edge` is `additionalProperties: false`. The
+    hard error is therefore scoped to screens a capture HAS produced, which is where the map has
+    something to contradict. Issue #12.
 
 ## 8. How to implement your module
 

@@ -7,9 +7,15 @@
  *  2. every element id, screen id, gate id exists in ids.yaml (gate dismiss controls count as
  *     registered via `gates[].dismiss`; screen markers via `screens[].id`); an edge
  *     `action.element` must also be DECLARED on its own screen — a WARNING instead of an error
- *     while that screen is `meta.status: candidate` with `elements: []` (a router-export seed
- *     exploration has not reached yet, 01 R6/03 §5, issue #12), an error everywhere else; an
- *     element missing from ids.yaml entirely stays an error on every screen; element ids in
+ *     while exploration has not reached it, an error once it has. Three subjects count as
+ *     unreached (issue #12): the SCREEN, `meta.status: candidate` with `elements: []` (an untouched
+ *     router-export seed, 01 R6/03 §5); the ELEMENT, a still-`candidate` edge whose element no
+ *     capture has produced on ANY screen (what a build N+1 `import-router` refresh appends to an
+ *     already-explored screen when the app registered a new id); or the CAPTURE, a still-`candidate`
+ *     edge on a router-written screen whose `elements[]` was captured on an older build than the
+ *     manifest names (the same refresh naming SHARED CHROME another screen already declares). An
+ *     element missing from ids.yaml entirely stays an error on every screen, and a non-`candidate`
+ *     edge is a claim that the tap happened here; element ids in
  *     screen files match `ID_REGEX` (2+ segments; `ELEMENT_ID_REGEX` applies to ids.yaml only);
  *     when ids.yaml carries `title`/`deep_link` for a screen they must agree with the screen
  *     file's — `title` exactly, `deep_link` on `routeKey` (query stripped: the registry records
@@ -48,8 +54,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, join, relative, sep } from 'node:path';
 import type { AppMapConfig, Platform } from './config.ts';
 import { PLATFORMS } from './config.ts';
-import type { Condition, ElementId, Expect, IdsElement, IdsRegistry, RecipeFile, ScreenFile, ValidateResult, ValidationIssue } from './types.ts';
-import { ID_REGEX, PREVIOUS_SCREEN, focusObservable, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
+import type { BuildNumber, Condition, ElementId, Expect, IdsElement, IdsRegistry, Manifest, RecipeFile, ScreenFile, UnlearnedEdgeElementReason, ValidateResult, ValidationIssue } from './types.ts';
+import { ID_REGEX, PREVIOUS_SCREEN, focusObservable, isNewerBuild, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
 import { AppMapError } from './errors.ts';
 import { allowlistFile, idsFile, kindForPath, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from './paths.ts';
 import type { YamlKind } from './paths.ts';
@@ -154,7 +160,7 @@ export function validateMap(config: AppMapConfig, opts: ValidateOptions = {}): V
       issues.push(issue(1, rel(mPath), `manifest.yaml is missing for platform ${platform}`));
       continue;
     }
-    const manifest = readChecked<{ platform: string }>(mPath, 'manifest');
+    const manifest = readChecked<Manifest>(mPath, 'manifest');
     if (manifest && manifest.platform !== platform) issues.push(issue(1, rel(mPath), `platform ${manifest.platform} must equal the directory name ${platform}`, '/platform'));
 
     const screens = new Map<string, ScreenFile>();
@@ -196,7 +202,9 @@ export function validateMap(config: AppMapConfig, opts: ValidateOptions = {}): V
     }
     if (ids) {
       const strings = stringsFile(config, platform);
-      const input: CrossRefInput = { platform, ids, screens, recipes };
+      // rule 2's stale-capture carve-out compares each screen against the build the manifest names
+      // (issue #12); a manifest that failed rule 1 leaves it undefined and the carve-out stays off
+      const input: CrossRefInput = { platform, ids, screens, recipes, build: manifest?.build.build_number };
       if (existsSync(strings)) input.staticStrings = new Set(readFileSync(strings, 'utf8').split('\n').filter((l) => l.length > 0));
       issues.push(...crossReferenceIssues(input));
     }
@@ -290,6 +298,13 @@ export interface CrossRefInput {
    * missing from it. Omit (not empty) when the file is absent — then nothing is warned.
    */
   staticStrings?: ReadonlySet<string>;
+  /**
+   * The build this platform's `manifest.yaml` names — what `import-router` stamps when it merges a
+   * new export (02 §8). Rule 2's third carve-out subject compares it with each screen's
+   * `meta.last_verified_build` to tell a stale capture from a contradiction (issue #12); omit it
+   * and that subject simply never fires, so callers that have no manifest lose nothing else.
+   */
+  build?: BuildNumber;
 }
 
 /**
@@ -300,7 +315,8 @@ export interface CrossRefInput {
  * SQLite cache adds nothing (its `hits` counter only counts elements a driver call TOUCHED, and
  * a container is never touched: you tap its cells). Edge `action.element` is excluded on purpose:
  * `import-router` seeds edges for elements exploration has never reached (01 R6, issue #12),
- * which is the absence of evidence rather than evidence.
+ * which is the absence of evidence rather than evidence — and rule 2's carve-out reads this set to
+ * decide exactly that, so counting edges here would make it answer its own question.
  */
 function observedElementIds(screens: Iterable<ScreenFile>): Set<ElementId> {
   const out = new Set<ElementId>();
@@ -357,6 +373,11 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
     });
   };
 
+  // Every element id SOME screen file records as present on a screen — the map's whole record of
+  // "a capture has produced this id". Hoisted above the screen loop because two rules need it: the
+  // rule 2 edge-element carve-out below (issue #12) and the `kind: list` sweep after it (issue #19).
+  const observed = observedElementIds(input.screens.values());
+
   for (const [file, doc] of input.screens) {
     const isGate = doc.kind === 'gate';
     // ---- rule 2: registration ----
@@ -397,13 +418,26 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
     }
 
     const declared = new Set(doc.elements.map((e) => e.id));
-    // 02 §10 rule 2 carve-out (issue #12): a screen the router export seeded carries the app's
-    // edges and nothing else — `elements: []` is by design until exploration learns them, and
-    // erroring makes the seed unloadable before exploration can start. The moment ONE element is
-    // known the screen HAS been observed, so a still-undeclared edge element is a real gap again;
-    // and a screen past `candidate` is past the point where "not learned yet" explains anything.
-    // Both conditions, not either. `meta` is schema-required, so no optional chaining.
-    const unexplored = doc.elements.length === 0 && doc.meta.status === 'candidate';
+    // 02 §10 rule 2 carve-out (issue #12), subject 1 of 3: the SCREEN is untouched. A screen the
+    // router export seeded carries the app's edges and nothing else — `elements: []` is by design
+    // until exploration learns them, and erroring makes the seed unloadable before exploration can
+    // start. The moment ONE element is known the screen HAS been observed; a screen past
+    // `candidate` is past the point where "not learned yet" explains anything. Both halves of THIS
+    // subject, not either. `meta` is schema-required, so no optional chaining.
+    const unexploredScreen = doc.elements.length === 0 && doc.meta.status === 'candidate';
+    // Subject 3 of 3: the screen's CAPTURE IS STALE. `elements[]` is the id set `name_screen`
+    // captured at `meta.last_verified_build`; `mergeRouterScreen` appends the NEXT build's edges to
+    // the same file and recaptures nothing. An edge naming an id that older capture could not have
+    // contained is a refresh outrunning exploration, not a contradiction — and this is the only
+    // shape the other two subjects both miss: SHARED CHROME (a tab bar, a back button) that another
+    // screen already declares, so `observed` is true, landing on an explored screen, so
+    // `unexploredScreen` is false. Build N+1 hard-errored there and `loadMap` threw `invalid_map`,
+    // which is issue #12's cycle again. Scoped to screens the router writes, so a hand-authored map
+    // keeps the hard error, and it self-heals: re-explore the screen and `name_screen` stamps this
+    // build, after which an element that really is absent errors again.
+    const staleCapture = doc.meta.last_verified_build !== undefined
+      && doc.meta.sources.includes('router_export')
+      && isNewerBuild(input.build, doc.meta.last_verified_build);
     doc.elements.forEach((el, ei) => {
       const loc = `/elements/${ei}`;
       if (!ID_REGEX.test(el.id)) issues.push(issue(2, file, `element id ${el.id} violates 01 R2 (${ID_REGEX.source})`, `${loc}/id`));
@@ -438,11 +472,32 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
       if ('element' in a && a.element !== undefined) {
         if (!registry.has(a.element)) issues.push(issue(2, file, `edge element ${a.element} is not registered in ids.yaml`, `${loc}/action/element`));
         else if (!declared.has(a.element)) {
-          // registered in ids.yaml but absent from this screen's `elements[]`: a warning only on an
-          // unexplored candidate (above), an error everywhere else. The "not registered in ids.yaml"
-          // branch above is NEVER relaxed — that is a typo, not a gap (issue #12 criterion 4).
-          issues.push(unexplored
-            ? issue(2, file, unlearnedEdgeElementMessage(a.element), `${loc}/action/element`, 'warning')
+          // Registered in ids.yaml but absent from this screen's `elements[]`. A WARNING while
+          // exploration has not reached it, an ERROR once it has. THREE subjects can be unreached
+          // and any one of them explains the gap (issue #12):
+          //   (1) the SCREEN — an untouched router seed (`unexploredScreen`, above);
+          //   (2) the ELEMENT — a still-`candidate` edge whose element NO capture has produced on
+          //       ANY screen (`observed`). That is what a build N+1 `import-router` refresh adds to
+          //       an ALREADY-EXPLORED screen when the app registered a brand-new id;
+          //   (3) the CAPTURE — a still-`candidate` edge on a router-written screen whose
+          //       `elements[]` predates the manifest's build (`staleCapture`, above). Same refresh,
+          //       but the id is shared chrome some other screen already declares, so (2) is false
+          //       and (1) cannot apply either.
+          // None subsumes another, so all three stand. (2) alone would re-open #12 on first-run
+          // setup, because a seed's edges routinely name that same shared chrome while the screen
+          // has never been captured at all; (1) alone is what shipped and only survived the first
+          // import; (3) alone would let a fresh, current capture be contradicted for ever.
+          // An edge past `candidate` gets none of them: a verified edge asserts the tap happened on
+          // THIS screen, so an undeclared element is a contradiction, not a gap. The "not
+          // registered in ids.yaml" branch above is NEVER relaxed — that is a typo, not a gap
+          // (issue #12 criterion 4).
+          const unlearned: UnlearnedEdgeElementReason | undefined = unexploredScreen ? 'screen'
+            : e.status !== 'candidate' ? undefined
+              : !observed.has(a.element) ? 'element'
+                : staleCapture ? 'refresh'
+                  : undefined;
+          issues.push(unlearned !== undefined
+            ? issue(2, file, unlearnedEdgeElementMessage(a.element, unlearned), `${loc}/action/element`, 'warning')
             : issue(2, file, `edge element ${a.element} is not declared on this screen`, `${loc}/action/element`));
         }
       }
@@ -474,7 +529,7 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
   // yet — and scoped to `kind: list`, the containers 04 §3.3's `select` addresses. The message
   // names the platform because ids.yaml is shared while this runs once per platform, and
   // `sortIssues`' dedupe would otherwise collapse a genuine per-platform difference.
-  const observed = observedElementIds(input.screens.values());
+  // (`observed` is computed once above the screen loop — the rule 2 edge carve-out needs it too.)
   ids.elements.forEach((e, i) => {
     if (e.kind !== 'list' || observed.has(e.id)) return;
     issues.push(issue(2, 'ids.yaml',

@@ -65,6 +65,23 @@ export type BuildNumber = string;
 /** RFC 3339 UTC timestamp, e.g. `2026-09-10T17:02:11Z` */
 export type Timestamp = string;
 
+/**
+ * Pure: is `candidate` a strictly NEWER build than `current`? Build numbers compare numerically
+ * only when both parse as integers (architecture decision 18) — an app that versions its builds
+ * some other way gets `false` and every caller falls back to its conservative branch. An undefined
+ * `current` is older than anything (`import-router` treats "never stamped" as refreshable); an
+ * undefined `candidate` is never newer. `identify.buildsSince` is the decay-flavoured variant: it
+ * answers HOW MANY builds, clamped at zero, for 02 §8 confidence.
+ */
+export function isNewerBuild(candidate: BuildNumber | undefined, current: BuildNumber | undefined): boolean {
+  if (candidate === undefined) return false;
+  if (current === undefined) return true;
+  const a = Number(candidate);
+  const b = Number(current);
+  if (!Number.isInteger(a) || !Number.isInteger(b)) return false;
+  return a > b;
+}
+
 // =============================================================================================
 // Closed vocabularies
 // =============================================================================================
@@ -1368,19 +1385,36 @@ export interface ValidationIssue {
 export interface ValidateResult { ok: boolean; issues: ValidationIssue[]; files_checked: number }
 
 /**
- * 02 §10 rule 2's candidate carve-out (issue #12). A screen seeded by `import-router` carries the
- * app's edges and `elements: []` — exploration is what learns the elements (01 R6 seeds, 03 §5
- * fills in). Erroring on an edge element that IS registered in `ids.yaml` but is not yet declared
- * on such a screen deadlocks first-run setup: the map will not load, so no observation can be
- * ingested, so `name_screen` can never populate `elements[]`. Producer and predicate live together
- * so the message text cannot drift from the matcher (the `compile.collapseWarning` /
- * `compile.isCollapseWarning` pattern); never match the text anywhere else.
+ * 02 §10 rule 2's "exploration has not reached this yet" carve-out (issue #12). An edge element
+ * that IS registered in `ids.yaml` but is not yet declared on its own screen is a WARNING while
+ * something the lifecycle is guaranteed to fill in is still missing — erroring instead deadlocks
+ * setup: the map will not load, so no observation can be ingested, so `name_screen` can never
+ * populate `elements[]`. Producer and predicate live together so the message text cannot drift
+ * from the matcher (the `compile.collapseWarning` / `compile.isCollapseWarning` pattern); never
+ * match the text anywhere else.
  */
 export const UNLEARNED_EDGE_ELEMENT = 'is not declared on this screen yet';
 
-/** The 02 §10 rule 2 WARNING message for an edge element on an unexplored candidate screen. */
-export function unlearnedEdgeElementMessage(element: ElementId): string {
-  return `edge element ${element} ${UNLEARNED_EDGE_ELEMENT} — the screen is a candidate with no elements; explore it and call name_screen (01 R6 seeds, 03 §5 learns)`;
+/**
+ * WHICH subject of 02 §10 rule 2 exploration has not reached (issue #12):
+ * `screen` — an untouched router seed (`meta.status: candidate` with `elements: []`, 01 R6);
+ * `element` — a still-`candidate` edge whose element no capture has produced on any screen, which
+ * is what a build N+1 router refresh adds to an already-explored screen when the app registered a
+ * brand-new id;
+ * `refresh` — a still-`candidate` edge on a router-written screen whose `elements[]` was captured
+ * on an EARLIER build than the one the manifest names, so that capture could not have contained
+ * the id whatever it is (shared chrome another screen already declares lands here).
+ */
+export type UnlearnedEdgeElementReason = 'screen' | 'element' | 'refresh';
+
+/** The 02 §10 rule 2 WARNING message for an edge element `reason` says is not learned here yet. */
+export function unlearnedEdgeElementMessage(element: ElementId, reason: UnlearnedEdgeElementReason = 'screen'): string {
+  const why = reason === 'screen'
+    ? 'the screen is a candidate with no elements'
+    : reason === 'element'
+      ? 'the edge is a candidate and no capture has produced this id on any screen'
+      : 'the edge is a candidate the router added after this screen was last captured';
+  return `edge element ${element} ${UNLEARNED_EDGE_ELEMENT} — ${why}; explore it and call name_screen (01 R6 seeds, 03 §5 learns)`;
 }
 
 /** Pure: is this the warning `unlearnedEdgeElementMessage` produces? (summary/report consumers) */

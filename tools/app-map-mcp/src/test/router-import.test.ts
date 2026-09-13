@@ -1,18 +1,22 @@
 /** [C3] router-import.ts — seed/refresh screens from the app's router export (01 R6, 02 §8, 06 R7). */
 import assert from 'node:assert/strict';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import type { RouterExport, ScreenFile } from '../types.ts';
+import { parse } from 'yaml';
+import type { IdsRegistry, RouterExport, ScreenFile } from '../types.ts';
+import { isUnlearnedEdgeElement } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { openContext } from '../context.ts';
 import type { AppMapContext } from '../context.ts';
 import { schemaDir } from '../paths.ts';
+import { canonicalYaml } from '../yaml/canonical.ts';
 import { validateAgainstSchema } from '../yaml/schemas.ts';
 import { importRouter, mergeRouterScreen, routerScreenToScreenFile } from '../router-import.ts';
+import { markVerified } from '../recipes/lifecycle.ts';
 import { recordHookPayload } from '../observe.ts';
 import { exportMap } from '../store/export.ts';
-import { validateMap } from '../validate.ts';
+import { formatIssues, validateMap } from '../validate.ts';
 import { loadHookFixture, loadRouterExportFixture, makeTempAppMapDir } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
@@ -85,6 +89,179 @@ describe('importRouter — seeding (01 R6, decision 40)', () => {
     } finally {
       reopened.close(); // `afterEach` closes `ctx` again — `close()` is idempotent
     }
+  });
+
+  it('and the carve-out SURVIVES the first successful replay — the seed is not verified by passing through it (issue #12)', () => {
+    // The half of #12 the first fix missed: `markVerified` flipped `candidate → verified` without
+    // consulting `elements[]`, and every ok guided step, every headless success and `observe`'s
+    // lazy re-verify call it. One replay through the seed therefore removed the very condition the
+    // carve-out is keyed on, rule 2 errored, `loadMap` threw `invalid_map`, and the map stopped
+    // loading with NO human edit in between — worse than the bug that was reported.
+    doc.screens.find((s) => s.id === 'settings')!.edges = [{ action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list' }];
+    importRouter(ctx, doc, spy);
+
+    markVerified(ctx, {
+      screens: ['settings'],
+      edges: [{ screen: 'settings', action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list' }],
+    }, '4412');
+
+    const after = screenOf('settings');
+    assert.equal(after.meta.status, 'candidate', '02 §8: a screen with no elements has never had a clean observation');
+    assert.equal(after.meta.last_verified_build, undefined);
+    assert.equal(after.edges[0]!.status, 'candidate', 'nor is an edge whose element the screen does not declare');
+
+    exportMap(ctx);
+    ctx.close();
+    const r = validateMap(t.config, { platforms: ['ios'] });
+    assert.deepEqual(r.issues.filter((i) => i.severity === 'error'), [], formatIssues(r.issues));
+    const reopened = openContext(t.config, { logSink: 'none', skipRetention: true, dbPath: ':memory:' });
+    try {
+      assert.equal(reopened.loadError, null, 'the map must still load after a replay passed through the seed');
+      assert.equal(reopened.map.validationWarnings.filter(isUnlearnedEdgeElement).length, 1);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it('the empty-screen guard is broad ON PURPOSE: a seed with no element-bearing edge today would deadlock on build 2 (issue #12)', () => {
+    // Why `markVerified` refuses an EMPTY screen rather than “empty AND carrying an undeclared edge
+    // element”. This seed's only edge is an `open_link`, which names no element, so rule 2 has
+    // nothing to relax on it and the narrower guard would happily verify it on the first replay.
+    // `import-router` then appends build 2's edge — and the element it names is one `invoice_list`
+    // already declares, so `observed` is true and the ELEMENT half of the carve-out cannot cover it
+    // either. A screen promoted back on build 1 is `verified` by then, so rule 2 errors, `loadMap`
+    // throws `invalid_map`, and `ctx.loadError` short-circuits every tool but `export` — nobody can
+    // even `mark` it back to `candidate`. The narrow guard defers the deadlock; the broad one is
+    // what makes build 2 loadable. 02 §8.
+    const settings = doc.screens.find((s) => s.id === 'settings')!;
+    settings.edges = [{ action: { type: 'open_link', url: 'appmap://invoice_list' }, to: 'invoice_list' }];
+    importRouter(ctx, doc, spy);
+    markVerified(ctx, { screens: ['settings'] }, '4412');
+    assert.equal(screenOf('settings').meta.status, 'candidate', 'empty is empty, whatever the edges look like today');
+    assert.equal(screenOf('settings').meta.last_verified_build, undefined);
+
+    // build 2 gives the seed an edge whose element an already-explored screen declares
+    doc.build.build_number = '4413';
+    settings.edges = [...settings.edges, { action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list' }];
+    assert.ok(importRouter(ctx, doc, spy).updated.includes('settings'));
+    exportMap(ctx);
+    ctx.close();
+
+    const r = validateMap(t.config, { platforms: ['ios'] });
+    assert.deepEqual(r.issues.filter((i) => i.severity === 'error'), [], formatIssues(r.issues));
+    const warned = r.issues.filter((i) => i.file === 'ios/screens/settings.yaml' && isUnlearnedEdgeElement(i));
+    assert.equal(warned.length, 1, formatIssues(r.issues));
+    const reopened = openContext(t.config, { logSink: 'none', skipRetention: true, dbPath: ':memory:' });
+    try {
+      assert.equal(reopened.loadError, null, 'a replay that passed through the seed on build 1 must not make build 2 unloadable');
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it('build 2: a NEW edge merged onto an ALREADY-EXPLORED screen warns, and the map still loads (issue #12)', () => {
+    // `mergeRouterScreen` adds the new build's edges and never touches `elements[]` or
+    // `meta.status`, so on build N+1 a newly registered element lands on a `verified`, non-empty
+    // screen — neither half of the screen-shaped carve-out applies. Rule 2 hard-errored there, so
+    // EVERY app's second build stopped loading. 01 R1/R8: `gen-ids` registers the element,
+    // `import-router` registers screens only, so the id is in ids.yaml and on no screen at all.
+    const idsPath = join(t.dir, 'ids.yaml');
+    const ids = parse(readFileSync(idsPath, 'utf8')) as IdsRegistry;
+    ids.elements.push({ id: 'invoice.export.button', kind: 'button' });
+    ids.elements.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    writeFileSync(idsPath, canonicalYaml('ids', ids));
+    ctx.close();
+    ctx = openContext(t.config, { logSink: 'none', skipRetention: true });
+
+    const before = screenOf('invoice_list');
+    assert.equal(before.meta.status, 'verified', 'the fixture screen is explored — that is the point');
+    assert.ok(before.elements.length > 0);
+
+    doc.build.build_number = '4413';
+    const exported = doc.screens.find((s) => s.id === 'invoice_list')!;
+    exported.edges = [...(exported.edges ?? []), { action: { type: 'tap', element: 'invoice.export.button' }, to: 'invoice_detail' }];
+    const result = importRouter(ctx, doc, spy);
+    assert.ok(result.updated.includes('invoice_list'));
+
+    const merged = screenOf('invoice_list');
+    assert.equal(merged.meta.status, 'verified', 'the merge leaves the status alone…');
+    assert.equal(merged.elements.length, before.elements.length, '…and never adds an element');
+    exportMap(ctx);
+    ctx.close();
+
+    const r = validateMap(t.config, { platforms: ['ios'] });
+    assert.deepEqual(r.issues.filter((i) => i.severity === 'error'), [], formatIssues(r.issues));
+    const warned = r.issues.filter((i) => i.file === 'ios/screens/invoice_list.yaml' && isUnlearnedEdgeElement(i));
+    assert.equal(warned.length, 1, formatIssues(r.issues));
+    assert.match(warned[0]!.message, /invoice\.export\.button/, warned[0]!.message);
+
+    const reopened = openContext(t.config, { logSink: 'none', skipRetention: true, dbPath: ':memory:' });
+    try {
+      assert.equal(reopened.loadError, null, "build 2 must not stop the app's map from loading (issue #12)");
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it('build 2: a NEW edge for SHARED CHROME merged onto an ALREADY-EXPLORED screen warns too (issue #12 hole c)', () => {
+    // The half of the build N+1 refresh the element subject cannot reach, and the one that still
+    // deadlocked after the first repair round. `nav.settings.tab` is a tab bar the pilot's
+    // `invoice_list` already declares, so `observedElementIds` contains it and "no capture has
+    // produced this id" is FALSE — while `invoice_detail`, where the export now puts the edge, is
+    // `verified` and non-empty so the screen subject cannot apply either. Rule 2 hard-errored,
+    // `loadMap` threw `invalid_map`, and `ctx.loadError` short-circuits every tool but `export`
+    // (tools.ts), so recovery meant hand-editing the YAML: #12's cycle with a different element
+    // class. What makes it a gap and not a contradiction is the BUILD — `invoice_detail`'s
+    // `elements[]` was captured on 4412 and the merge recaptures nothing, so a 4413 edge names an
+    // id that capture could not have contained.
+    const before = screenOf('invoice_detail');
+    assert.equal(before.meta.status, 'verified');
+    assert.equal(before.meta.last_verified_build, '4412', 'the capture is of build 4412 — that is the point');
+    assert.ok(ctx.map.screens.get('invoice_list')!.elements.some((e) => e.id === 'nav.settings.tab'), 'another screen HAS captured this id');
+
+    doc.build.build_number = '4413';
+    const exported = doc.screens.find((s) => s.id === 'invoice_detail')!;
+    exported.edges = [...(exported.edges ?? []), { action: { type: 'tap', element: 'nav.settings.tab' }, to: 'invoice_list' }];
+    assert.ok(importRouter(ctx, doc, spy).updated.includes('invoice_detail'));
+
+    const merged = screenOf('invoice_detail');
+    assert.equal(merged.meta.status, 'verified', 'the merge leaves the status alone…');
+    assert.equal(merged.meta.last_verified_build, '4412', '…and does not recapture the screen');
+    exportMap(ctx);
+    ctx.close();
+
+    const r = validateMap(t.config, { platforms: ['ios'] });
+    assert.deepEqual(r.issues.filter((i) => i.severity === 'error'), [], formatIssues(r.issues));
+    const warned = r.issues.filter((i) => i.file === 'ios/screens/invoice_detail.yaml' && isUnlearnedEdgeElement(i));
+    assert.equal(warned.length, 1, formatIssues(r.issues));
+    assert.match(warned[0]!.message, /nav\.settings\.tab/, warned[0]!.message);
+
+    const reopened = openContext(t.config, { logSink: 'none', skipRetention: true, dbPath: ':memory:' });
+    try {
+      assert.equal(reopened.loadError, null, "build 2 must not stop the app's map from loading (issue #12)");
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it('…and the same edge IS an error once the screen has been recaptured on that build (the warning self-heals)', () => {
+    // The stale-capture subject is not a permanent amnesty: `name_screen` stamps `last_verified_build`,
+    // and once the capture is of the build the manifest names, an id it did not contain is a real
+    // contradiction again. Simulated here by moving the screen's capture forward to 4413.
+    doc.build.build_number = '4413';
+    const exported = doc.screens.find((s) => s.id === 'invoice_detail')!;
+    exported.edges = [...(exported.edges ?? []), { action: { type: 'tap', element: 'nav.settings.tab' }, to: 'invoice_list' }];
+    importRouter(ctx, doc, spy);
+    const recaptured = structuredClone(screenOf('invoice_detail'));
+    recaptured.meta.last_verified_build = '4413';
+    ctx.db.putScreen(recaptured, { dirty: true, reason: 'verify' });
+    exportMap(ctx);
+    ctx.close();
+
+    const r = validateMap(t.config, { platforms: ['ios'] });
+    const errs = r.issues.filter((i) => i.severity === 'error');
+    assert.equal(errs.length, 1, formatIssues(r.issues));
+    assert.match(errs[0]!.message, /nav\.settings\.tab is not declared on this screen$/, errs[0]!.message);
   });
 
   it('appends the unregistered screen to ids.yaml and reports it (06 R7 carries both changes)', () => {

@@ -20,7 +20,7 @@
  * | transition                     | condition                                                                    |
  * |--------------------------------|------------------------------------------------------------------------------|
  * | — → candidate                  | `observe.nameScreen` (and `router-import`)                                   |
- * | candidate → verified           | ONE clean observation: marker + every `required_id` + a matching structural hash (`markVerified`, 08 §5 row 5) |
+ * | candidate → verified           | ONE clean observation: marker + every `required_id` + a matching structural hash (`markVerified`, 08 §5 row 5) — NEVER while `elements[]` is empty (issue #12) |
  * | verified → candidate           | human `markScreen(candidate)` only — the only way back out, and what makes a `name_screen` re-learn possible |
  * | any → retired                  | dropped from the router export, or human `markScreen(retired)`; both cascade through `retireRecipesForScreen` |
  *
@@ -727,6 +727,7 @@ function checkedDraft(ctx: AppMapContext, draft: RecipeFile | string, recipeId: 
     ids: ctx.map.ids,
     screens,
     recipes: new Map([[`${ctx.map.platform}/recipes/${recipeId}.yaml`, doc]]),
+    build: ctx.map.manifest.build.build_number,
   }).filter((i) => i.severity === 'error' && i.file.endsWith(`/recipes/${recipeId}.yaml`));
   if (issues.length > 0) {
     throw new AppMapError(ERROR_CODES.INVALID_MAP, `mark: draft fails 02 §10 cross-reference rules: ${issues.map((i) => `rule ${i.rule} ${i.message}`).join('; ')}`, 'every referenced id must exist in ids.yaml and every screen must exist');
@@ -923,6 +924,30 @@ function sameAction(a: EdgeAction, b: EdgeAction): boolean {
  * `guided.reportStep` (each ok step / done), `headless.runHeadless` (success) and
  * `observe.ingestObservation` (marker + all required_ids + hash match = lazy re-verify).
  * Returns what actually changed (unchanged rows are not dirtied, so exports stay quiet).
+ *
+ * Two things it refuses to verify, both because the map has no evidence for the claim and both
+ * because making the claim silently withdraws 02 §10 rule 2's carve-out and stops the map loading
+ * (issue #12 — the guard lives HERE so all three callers get it from one change):
+ *   - a screen whose `elements[]` is empty. 02 §8 verification is one CLEAN observation of the
+ *     screen's required ids; a router seed (01 R6) has by definition never had one, and passing
+ *     through it on a replay is not one either. `name_screen` — which is what fills `elements[]` —
+ *     is the transition out of `candidate` for such a screen. Emptiness ALONE is the test, and the
+ *     narrower "…and it carries an undeclared edge element" only defers the deadlock: a seed whose
+ *     edges name no element yet (`open_link`, `dismiss_gate`, a bare `swipe`) has nothing for rule 2
+ *     to relax today, but `import-router` appends the app's new edges on every later build, and a
+ *     screen promoted in the meantime is then unrecoverable — rule 2 errors, `loadMap` throws
+ *     `invalid_map`, and `ctx.loadError` short-circuits every tool but `export`, so nobody can even
+ *     `mark` it back to `candidate` (router-import.test.ts pins exactly this sequence).
+ *   - an edge whose `action.element` the screen does not declare. A `verified` edge asserts the tap
+ *     happened on THIS screen; while rule 2 is only WARNING that the element is unlearned there,
+ *     promoting the edge converts that warning into a hard error on the very next load.
+ *
+ * Accepted cost of the first guard: a screen that genuinely has no REGISTERED non-marker id —
+ * `nameScreen` builds `elements[]` from `idsPresent(snapshot)` minus markers, so a splash or
+ * interstitial gets `elements: []` from a real capture — stays `candidate` for ever and never
+ * carries `meta.last_verified_build`. `identify`/`get_screen` then skip the 02 §8 decay for it
+ * (both already treat a missing build as "no decay") and `report`'s deep-link coverage does not
+ * count it. The second guard skips `edge.last_verified_build` the same way, which nothing reads.
  */
 export function markVerified(ctx: AppMapContext, entities: VerifiedEntities, build: BuildNumber = ctx.build): { screens: ScreenId[]; elements: ElementId[]; edges: number; recipe?: RecipeId } {
   const out: { screens: ScreenId[]; elements: ElementId[]; edges: number; recipe?: RecipeId } = { screens: [], elements: [], edges: 0 };
@@ -942,6 +967,8 @@ export function markVerified(ctx: AppMapContext, entities: VerifiedEntities, bui
   for (const id of entities.screens ?? []) {
     const entry = load(id);
     if (entry === undefined) continue;
+    // a screen with nothing learned on it was never verified — not its status, not its build
+    if (entry.screen.elements.length === 0) continue;
     const meta = entry.screen.meta;
     // a retired screen is never revived by a replay (02 §8)
     if (meta.status === 'candidate') { meta.status = 'verified'; entry.changed = true; out.screens.push(id); }
@@ -968,6 +995,9 @@ export function markVerified(ctx: AppMapContext, entities: VerifiedEntities, bui
     const entry = load(screen);
     const edge = entry?.screen.edges.find((e) => e.to === to && sameAction(e.action, action));
     if (entry === undefined || edge === undefined) continue;
+    // an edge whose element this screen does not declare is one rule 2 is still only warning about
+    const edgeEl = edgeElement(edge.action);
+    if (edgeEl !== undefined && !entry.screen.elements.some((e) => e.id === edgeEl)) continue;
     let changed = false;
     if (edge.status === 'candidate') { edge.status = 'verified'; changed = true; }
     if (edge.status !== 'retired' && edge.last_verified_build !== build) { edge.last_verified_build = build; changed = true; }

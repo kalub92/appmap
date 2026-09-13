@@ -205,6 +205,7 @@ SQLite (`cache.sqlite`, WAL mode) holds the loaded map plus volatile counters: p
 - `last_verified_build` is the build number of the last successful verification. On a new build, confidence decays: `confidence = base × 0.9^(builds_since_verified)`, floor 0.2. Decay is computed, not stored.
 - A renamed id is a migration: `app-map migrate-id <old> <new>` rewrites every reference across screens, recipes, and `ids.yaml` in one commit.
 - A screen removed from the router export is marked `status: retired` (not deleted) for one release, then deleted; recipes depending on it become `retired`.
+- A screen with `elements: []` is **never** verified, whatever a replay reports: verification is a clean observation of the screen's required ids, and a router-export seed (01 R6) has by definition never had one — `name_screen`, which is what fills `elements[]`, is the way out of `candidate` for such a screen. Nor is an edge whose `action.element` its screen does not declare: a `verified` edge asserts the tap happened there, while §10 rule 2 is still only warning that the element has not been learned there. Promoting either would silently withdraw that carve-out and stop the map loading with no human edit in between. Emptiness **alone** is the test, even for a seed whose edges name no element yet: `import-router` appends the app's new edges on every later build, and a screen promoted in the meantime is unrecoverable — the map does not load, so every tool but `export` is short-circuited and nobody can `mark` it back to `candidate`. The narrower rule defers that deadlock rather than preventing it. The accepted cost: a screen that genuinely has no registered non-marker id (a splash, an interstitial) stays `candidate` and carries no `last_verified_build`, so the decay above is not applied to it and `report`'s deep-link coverage does not count it.
 - A screen's `verified` is **earned by observation** (08 §5 row 5: marker + every `required_id` + a matching structural hash, on one observation) and **withdrawn only by a human**: `mark {screen_id, status: candidate}` / `app-map mark-screen <id> candidate`. The demote deletes `last_verified_build` — the confidence decay above must not report a verification that has been taken back — and records `meta.reviewed_by`. `verified` cannot be marked by hand without `force` plus a `reviewer`: a hand-signed verification is exactly the self-certification the demote exists to undo. Marking a screen `retired` by hand cascades to its recipes like a router-export removal, and KEEPS `last_verified_build`, which is what `import-router --purge-retired` reads to mean "retired for one release".
 - `name_screen` with `force` re-learns a screen that is no longer `candidate` (the signature is rebuilt from the current observation), drops it back to `candidate`, and records `meta.relearned_from: <the overridden status>` so the override is visible in the PR diff. A human `mark` with a `reviewer` clears the marker — the same contract `provenance.machine_recompile` has for recipes (§6).
 - A demote is not a lock: the next clean observation re-verifies the screen. Demote, then re-learn.
@@ -226,14 +227,43 @@ on the loaded map (`summary` names them), but never block either.
 1. Every file validates against its JSON Schema.
 2. Every element id, screen id, gate id exists in `ids.yaml`, and every edge `action.element` is
    also declared in its own screen's `elements[]`. The second half is a **warning, not an error**
-   while that screen is `meta.status: candidate` with `elements: []` — that is a router-export seed
-   (01 R6) whose elements exploration has not learned yet (03 §5), and erroring would make the seed
-   unloadable before exploration can start: the map would not load, so no observation could be
-   ingested, so `name_screen` could never populate `elements[]`. It is an error again as soon as the
-   screen declares any element or leaves `candidate`. An element missing from `ids.yaml` altogether
-   is always an error — that is a typo, not a gap. Also a **warning** for an `expect.focused` on a
-   platform whose driver reports no focus: Argent's iOS snapshot carries no focus flag, so the
-   assertion can never be satisfied and every replay of the step falls back (04 §10).
+   while exploration has not reached it. Three subjects can be unreached, and **any one** makes it
+   a warning:
+   - the **screen** — `meta.status: candidate` with `elements: []`, a router-export seed (01 R6)
+     whose elements exploration has not learned yet (03 §5). Erroring would make the seed unloadable
+     before exploration can start: the map would not load, so no observation could be ingested, so
+     `name_screen` could never populate `elements[]`.
+   - the **element** — a `status: candidate` edge whose element **no screen file records as present
+     anywhere in the map** (no `elements[]`, `signature.required_ids`, `dynamic_regions` or variant
+     `required_ids` entry), i.e. no capture has ever produced that id. This is what a build N+1
+     `import-router` refresh appends to an already-explored screen, where the first condition cannot
+     apply — `mergeRouterScreen` adds the new build's edges and touches neither `elements[]` nor
+     `meta.status`.
+   - the **capture** — a `status: candidate` edge on a screen whose `sources` include
+     `router_export` and whose `meta.last_verified_build` is **older than the build
+     `manifest.yaml` names**. `elements[]` is the id set the last `name_screen` captured, at that
+     build; the refresh above appends the next build's edges to the same file and recaptures
+     nothing, so the capture could not have contained an id the app registered since. This is the
+     same refresh as the element condition, for the case where the new edge names **shared chrome**
+     — a tab bar, a back button — that another screen already declares, so "no capture has produced
+     it" is false. It self-heals: re-explore the screen and `name_screen` stamps the current build,
+     after which an element that really is absent is an error again.
+
+   None of the three subsumes another. The element condition alone would not cover first-run setup,
+   because a seed's edges routinely name that same shared chrome while the screen has never been
+   captured at all. The screen condition alone only survives the first import. The capture condition
+   alone would let a fresh, current capture be contradicted for ever. An element recorded on another
+   screen, on a screen whose capture is of this build, is a real gap rather than an unreached one
+   and stays an error; so does a non-`candidate` edge, which asserts the tap already happened on
+   this screen; and so does any undeclared element on a screen the router does not write, where
+   nothing appends edges on its own and there is no cycle to break. An element missing from
+   `ids.yaml` altogether is always an error — that is a typo, not a gap. §8 keeps the conditions
+   honest: `markVerified` never promotes a screen whose `elements` is empty, nor an edge whose
+   element that screen does not declare.
+
+   Also a **warning** for an `expect.focused` on a platform whose driver reports no focus: Argent's
+   iOS snapshot carries no focus flag, so the assertion can never be satisfied and every replay of
+   the step falls back (04 §10).
 3. Every edge `to`, every recipe `entry.fallback_path` entry, every `expect.screen` references an existing screen.
 4. Every committed element has ≥2 locators and an `a11y_id` locator unless `role_label` is the only possible strategy (OS gates).
 5. No `text` strategy stands alone.

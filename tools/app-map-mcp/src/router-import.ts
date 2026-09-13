@@ -35,6 +35,7 @@
  */
 import type { AppMapContext } from './context.ts';
 import type { BuildInfo, Edge, IdsRegistry, ImportRouterResult, Manifest, RecipeFile, RecipeId, RouterExport, RouterExportScreen, ScreenFile, ScreenId, ScreenSource } from './types.ts';
+import { isNewerBuild } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { schemaDir, screenFile } from './paths.ts';
 import { PLATFORMS } from './config.ts';
@@ -96,16 +97,6 @@ function stripPurgedTargets(screen: ScreenFile, purged: ReadonlySet<ScreenId>): 
   });
   const changed = kept.length !== edges.length || rewritten.some((e, i) => e !== kept[i]);
   return changed ? { ...screen, edges: rewritten } : undefined;
-}
-
-/** build numbers compare numerically only when both parse as integers (architecture decision 18) */
-function isNewerBuild(candidate: string | undefined, current: string | undefined): boolean {
-  if (candidate === undefined) return false;
-  if (current === undefined) return true;
-  const a = Number(candidate);
-  const b = Number(current);
-  if (!Number.isInteger(a) || !Number.isInteger(b)) return false;
-  return a > b;
 }
 
 function withSource(sources: readonly ScreenSource[] | undefined, source: ScreenSource): { sources: ScreenSource[]; changed: boolean } {

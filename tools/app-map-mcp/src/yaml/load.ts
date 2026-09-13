@@ -303,7 +303,10 @@ export function loadMap(config: AppMapConfig, opts: LoadMapOptions = {}): Loaded
   let validationWarnings: ValidationIssue[] = [];
   if (opts.validate !== false) {
     // rules 2–6 and 8 (rule 1 already ran per file above; rule 7 belongs to `export --check`)
-    const found = crossReferenceIssues({ platform, ids, screens: screenByRel, recipes: recipeByRel });
+    // `build` is the manifest's, not `opts.build`/`config.build`: rule 2's stale-capture carve-out
+    // asks what build the MAP was written for (what `import-router` stamps), and taking a caller's
+    // running-app override here would let a map load that `app-map validate` then rejects.
+    const found = crossReferenceIssues({ platform, ids, screens: screenByRel, recipes: recipeByRel, build: manifest.build.build_number });
     const issues = found.filter((i) => i.severity === 'error');
     if (issues.length) {
       throw new AppMapError(ERROR_CODES.INVALID_MAP, `app-map has ${issues.length} validation error${issues.length === 1 ? '' : 's'} (02 §10):\n${formatIssues(issues)}`, 'run `app-map validate` and fix every listed issue before starting the server');
