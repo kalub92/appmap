@@ -5,12 +5,12 @@ import type { ElementDef, LoadedMap, Tree, TreeNode } from '../types.ts';
 import { DEFAULT_LOCATOR_WEIGHTS, DEGRADED_THRESHOLD } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { loadMap } from '../yaml/load.ts';
-import { findByA11yId, pathOf, walk } from '../tree.ts';
+import { findByA11yId, normalizeTree, pathOf, screenRoot, walk } from '../tree.ts';
 import { estimateTokens } from '../token.ts';
 import {
   DISAMBIGUATION_FACTOR, FIND_ELEMENT_ALTERNATIVES_MAX, MISS_CANDIDATES_MAX, disambiguate, findElement, findElementDef, queryLocator, resolve, targetFor,
 } from '../resolve.ts';
-import { PILOT_SCREEN_TREES, cloneTree, loadFixtureTree, makeTempAppMapDir } from './helpers.ts';
+import { PILOT_SCREEN_TREES, cloneTree, doubledMarkerXcuiFixture, loadFixtureTree, makeTempAppMapDir } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
 let t: TempAppMapDir;
@@ -380,5 +380,26 @@ describe('resolve — the tree is never mutated', () => {
     assert.equal(JSON.stringify(tree), before);
     const c = cloneTree(tree);
     assert.equal(JSON.stringify(c), before);
+  });
+});
+
+describe('resolve — a nested capture whose screen marker is doubled (follow-up to #15 and #10)', () => {
+  it('scopes to the marker CONTAINER, so every invoice_list element still resolves', () => {
+    // `appMapScreen(_:)` stamps `screen.invoice_list` on the container AND on the 1 pt overlay
+    // inside it; nesting survives every capture but the flat Argent one, and resolve scopes to
+    // `screenRoot` — the childless overlay would leave it a subtree with zero children.
+    const tree = normalizeTree(doubledMarkerXcuiFixture(), { platform: 'ios' });
+    assert.ok(screenRoot(tree).children.length > 0, 'the screen root must not be the 1 pt overlay');
+    const add = map.screens.get('invoice_list')!.elements.find((e) => e.id === 'invoice.add.button')!;
+    const r = resolve(map, add, tree);
+    assert.equal(r.status, 'hit');
+    if (r.status !== 'hit') return;
+    assert.equal(r.strategy, 'a11y_id');
+    assert.equal(r.node.a11y_id, 'invoice.add.button');
+    assert.equal(r.node.label, 'New Invoice', 'a real element, not the unlabeled marker');
+    assert.deepEqual(r.target, { by: 'id', id: 'invoice.add.button' });
+    for (const el of map.screens.get('invoice_list')!.elements) {
+      assert.equal(resolve(map, el, tree).status, 'hit', el.id);
+    }
   });
 });

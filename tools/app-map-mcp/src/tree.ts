@@ -16,11 +16,13 @@
  *    children[]}` possibly wrapped as `{root, screen:{width,height}, build_number?, bundle_id?,
  *    udid?}` (fixtures/raw/xcuitest-snapshot.invoice_list.json — best-effort). A reader that DOES
  *    list containers sees an `appMapScreen` root twice — the container and the 1 pt marker
- *    element inside it both carry `screen.<id>` (issue #15) — so `structuralHash` would count the
- *    pair twice and differ from a hand-written fixture. `fromArgentScreen` is unaffected (the
- *    flat capture only ever emits the leaf) and no nested-capture app exists yet, so this is left
- *    alone rather than special-cased. The wrapper's
- *    `build_number` → `Tree.build` and `bundle_id` → `Tree.app_id` (03 §3 `APP_MAP_BUILD=auto`,
+ *    element inside it both carry `screen.<id>` (issue #15) — and the nesting SURVIVES here,
+ *    unlike the flat rebuild. `deepestMarker` therefore skips a marker that repeats a marker
+ *    ancestor's id, so `screenRoot`/`pathOf`/`resolve` get the container and not the childless
+ *    1 pt leaf (follow-up to #15 and #10). `structuralHash` still counts the pair twice and so
+ *    differs from a hand-written fixture; that is a hash-only difference and is left alone.
+ *    `fromArgentScreen` is unaffected either way (it discards the marker's own frame). The
+ *    wrapper's `build_number` → `Tree.build` and `bundle_id` → `Tree.app_id` (03 §3 `APP_MAP_BUILD=auto`,
  *    03 §13; observe.ts calls `ctx.setBuild`); `udid` is dropped (07 §2.2 device identifiers).
  *    The flat Argent capture carries neither, so `APP_MAP_BUILD=auto` falls back to config there;
  *  - `maestro`: `maestro hierarchy` JSON `{elements:[{attributes:{resource-id,text,
@@ -932,21 +934,46 @@ export function findMarkerNodes(tree: AnyTree): { nodes: TreeNode[]; count: numb
  *     hierarchy, so every marker sits at the same depth and `y` is the only cue there is;
  *  3. then document order, last wins — a driver appends the screen it has just pushed.
  * `undefined` when the tree carries no marker at all.
+ *
+ * A marker whose id repeats a marker ANCESTOR's id is SKIPPED, because it is that screen's own
+ * twin and not a deeper screen (follow-up to #15): `appMapScreen(_:)` and the UIKit
+ * `AppMapScreenMarkerView` both stamp `screen.<id>` on the `children: .contain` container AND on
+ * the 1 pt overlay nested inside it, so on any capture that preserves nesting (`xcuitest`,
+ * `maestro` — `drift.ts` runs `maestro hierarchy` on BOTH platforms) rule 1 would otherwise
+ * return the childless 1 pt leaf and `resolve` would search a subtree with zero children. Only a
+ * DIFFERENT id below an ancestor marker is a genuinely deeper screen (a push, a modal), so
+ * issue #10's ordering is untouched. The twin's own subtree is still traversed — a real push
+ * nested under it still wins. Two same-id markers that are SIBLINGS (neither an ancestor of the
+ * other) are not twins by this rule and both stay candidates; rules 2-3 pick one, which is the
+ * pre-existing behaviour and harmless, both naming the same screen. The deliberate cost is a
+ * screen pushed on top of ITSELF (invoice_detail → invoice_detail): the outer container wins, so
+ * `resolve` searches a superset of the screen rather than the childless leaf it searches today.
  */
 export function deepestMarker(tree: AnyTree): TreeNode | undefined {
   let best: TreeNode | undefined;
   let bestDepth = -1;
   let bestY = -1;
-  walk(tree, (n, _parent, depth) => {
-    if (!isMarker(n.a11y_id)) return undefined;
-    const y = typeof n.bbox_norm?.y === 'number' ? n.bbox_norm.y : 0;
-    if (depth > bestDepth || (depth === bestDepth && y >= bestY)) {
-      best = n;
-      bestDepth = depth;
-      bestY = y;
+  // pre-order, children left-to-right — `walk`'s order, which rule 3 ("last wins") depends on —
+  // carrying the marker ids seen on the path from the root so a twin can be recognised
+  const stack: Array<{ node: TreeNode; depth: number; markerAncestors: ReadonlySet<string> }> = [
+    { node: rootOf(tree), depth: 0, markerAncestors: new Set<string>() },
+  ];
+  while (stack.length > 0) {
+    const { node, depth, markerAncestors } = stack.pop()!;
+    let below = markerAncestors;
+    const id = node.a11y_id;
+    if (isMarker(id) && !markerAncestors.has(id)) {
+      const y = typeof node.bbox_norm?.y === 'number' ? node.bbox_norm.y : 0;
+      if (depth > bestDepth || (depth === bestDepth && y >= bestY)) {
+        best = node;
+        bestDepth = depth;
+        bestY = y;
+      }
+      below = new Set(markerAncestors).add(id);
     }
-    return undefined;
-  });
+    const kids = Array.isArray(node.children) ? node.children : [];
+    for (let i = kids.length - 1; i >= 0; i--) stack.push({ node: kids[i]!, depth: depth + 1, markerAncestors: below });
+  }
   return best;
 }
 

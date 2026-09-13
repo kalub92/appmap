@@ -14,7 +14,10 @@ import {
   nodesWithRole, normalizeTree, parentOf, pathOf, rolePath, screenRoot, siblingIndex, walk,
 } from '../tree.ts';
 import type { Role, ScreenFile, Tree, TreeNode } from '../types.ts';
-import { PILOT_APP_MAP_DIR, PILOT_SCREEN_TREES, cloneTree, loadFixtureTree, loadHookFixture, readJsonFixture } from './helpers.ts';
+import {
+  PILOT_APP_MAP_DIR, PILOT_SCREEN_TREES, cloneTree, doubledMarkerMaestroFixture, doubledMarkerXcuiFixture,
+  loadFixtureTree, loadHookFixture, readJsonFixture,
+} from './helpers.ts';
 
 const xcuiRaw = (): unknown => readJsonFixture('raw/xcuitest-snapshot.invoice_list.json');
 const maestroRaw = (): unknown => readJsonFixture('raw/maestro-hierarchy.invoice_list.json');
@@ -423,7 +426,7 @@ describe('fromArgentScreen — real @swmansion/argent@0.25.0 output (03 §5, iss
   });
 });
 
-describe('deepestMarker / screenRoot (01 R3, issue #10)', () => {
+describe('deepestMarker / screenRoot (01 R3, issues #10 and #15)', () => {
   const marked = (id: string, y: number, children: TreeNode[] = []): TreeNode =>
     ({ role: 'container', a11y_id: id, bbox_norm: { x: 0, y, w: 1, h: 1 - y }, children });
   const tree = (children: TreeNode[]): Tree =>
@@ -449,6 +452,58 @@ describe('deepestMarker / screenRoot (01 R3, issue #10)', () => {
     const noIds = loadFixtureTree('invoice_list.no_ids');
     assert.equal(deepestMarker(noIds), undefined, 'no marker at all');
     assert.equal(screenRoot(noIds), noIds.root);
+  });
+
+  /** every `a11y_id` under `n`, deduped — "is the whole screen still reachable from here" */
+  const idsUnder = (n: TreeNode): string[] =>
+    [...new Set(allNodes(n).map((x) => x.a11y_id).filter((x): x is string => x !== undefined))].sort();
+
+  it('skips the doubled marker on a nested xcuitest capture: screenRoot is the CONTAINER, not the 1pt overlay (issue #15)', () => {
+    const plain = normalizeTree(xcuiRaw(), { platform: 'ios' });
+    const doubled = normalizeTree(doubledMarkerXcuiFixture(), { platform: 'ios' });
+    assert.equal(findMarkerNodes(doubled).count, 2, 'the capture really does carry the container AND its twin');
+
+    const sr = screenRoot(doubled);
+    assert.equal(sr, findByA11yId(doubled, 'screen.invoice_list')[0], 'the outermost marker — the container — wins');
+    assert.ok(sr.children.length > 0, 'the childless 1pt overlay would leave resolve nothing to search');
+    assert.deepEqual(sr.bbox_norm, screenRoot(plain).bbox_norm, 'the full-screen container frame, not 1pt');
+    assert.deepEqual(idsUnder(sr), idsUnder(screenRoot(plain)), 'every element stays reachable from the screen root');
+    assert.equal(pathOf(doubled, findByA11yId(doubled, 'invoice.add.button')[0]!), 'navigationBar/button[1]');
+  });
+
+  it('skips the doubled marker on a nested maestro capture too (drift.ts runs `maestro hierarchy` on both platforms)', () => {
+    const plain = normalizeTree(maestroRaw(), { platform: 'android' });
+    const doubled = normalizeTree(doubledMarkerMaestroFixture(), { platform: 'android' });
+    assert.equal(findMarkerNodes(doubled).count, 2);
+
+    const sr = screenRoot(doubled);
+    assert.equal(sr, findByA11yId(doubled, 'screen.invoice_list')[0]);
+    assert.ok(sr.children.length > 0);
+    assert.deepEqual(sr.bbox_norm, screenRoot(plain).bbox_norm);
+    assert.deepEqual(idsUnder(sr), idsUnder(screenRoot(plain)));
+    assert.equal(pathOf(doubled, findByA11yId(doubled, 'invoice.add.button')[0]!), pathOf(plain, findByA11yId(plain, 'invoice.add.button')[0]!));
+  });
+
+  it('a genuine push still picks the DEEPER screen when both markers are doubled (issue #10 is not regressed)', () => {
+    const leaf: TreeNode = { role: 'button', a11y_id: 'invoice.detail.send.button', bbox_norm: { x: 0, y: 0.5, w: 1, h: 0.1 }, children: [] };
+    // the 1pt overlay `appMapScreen(_:)` puts inside its own container, as the LAST child
+    const twin = (id: string): TreeNode => ({ role: 'container', a11y_id: id, bbox_norm: { x: 0, y: 0, w: 0.0026, h: 0.0012 }, children: [] });
+    const detail = marked('screen.invoice_detail', 0.1, [leaf, twin('screen.invoice_detail')]);
+    const pushed = tree([marked('screen.invoice_list', 0.5, [detail, twin('screen.invoice_list')])]);
+    assert.equal(deepestMarker(pushed), detail, 'a DIFFERENT id below a marker is a real push and still wins');
+    assert.equal(screenRoot(pushed), detail);
+    assert.equal(pathOf(pushed, leaf), 'button');
+  });
+
+  it('same-id markers that are SIBLINGS are not twins: y and document order still decide', () => {
+    const siblings = tree([marked('screen.invoice_list', 0.2), marked('screen.invoice_list', 0.4)]);
+    assert.equal(deepestMarker(siblings), siblings.root.children[1], 'the greater y wins, exactly as before — both name the same screen');
+  });
+
+  it('the flat Argent path is untouched: the pushed capture still normalizes to invoice_detail', () => {
+    const flat = normalizeTree(argentRaw('invoice_detail'), { platform: 'ios' });
+    assert.equal(deepestMarker(flat)!.a11y_id, 'screen.invoice_detail');
+    assert.ok(screenRoot(flat).children.length > 0);
   });
 });
 
