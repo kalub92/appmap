@@ -442,6 +442,33 @@ describe('markRecipe — 04 §3.8 / 07 §7', () => {
     assert.equal(ctx.db.getRecipe('file_invoices'), undefined);
   });
 
+  it('a YAML draft whose string field parsed as a number is refused with the quoting hint (02 §10 rule 1, issue #20)', () => {
+    const yaml = [
+      'id: file_invoices', 'version: 1', 'platform: ios', 'description: 1.0',
+      'matches:', '  - filter invoices', 'params: []',
+      'entry:', '  deep_link: appmap://invoice_list', '  fallback_path:', '    - invoice_list',
+      'steps:', '  - id: s1', '    action: tap', '    element: invoice.filter.button', '    expect:', '      screen: invoice_list',
+      'verify:', '  screen: invoice_list', 'status: candidate',
+      'provenance:', '  compiled_from: sess_x', '  compiled_by: app-map-mcp@0.1.0', '',
+    ].join('\n');
+    assert.throws(
+      () => markRecipe(ctx, { recipe_id: 'file_invoices', status: 'candidate', recipe: yaml }),
+      // the spelling the author typed, not String(1.0) === "1" — `mark` reads the draft with its
+      // YAML kind so it teaches the same fix the load path does
+      (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.INVALID_MAP
+        && e.message === 'mark: draft fails recipe.schema.json: /description must be string — quote it in YAML ("1.0"), or 1.0 parses as a number',
+    );
+    assert.equal(ctx.db.getRecipe('file_invoices'), undefined, 'nothing is written');
+  });
+
+  it('a draft handed over as an object keeps the plain wording — JSON has no YAML spelling to quote (issue #20)', () => {
+    assert.throws(
+      () => markRecipe(ctx, { recipe_id: 'file_invoices', status: 'candidate', recipe: draft({ description: 1 as unknown as string }) }),
+      (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.INVALID_MAP
+        && e.message === 'mark: draft fails recipe.schema.json: /description must be string {"type":"string"}',
+    );
+  });
+
   it('an unknown status is bad_input', () => {
     assert.throws(() => markRecipe(ctx, { recipe_id: 'create_invoice', status: 'blessed' as RecipeStatus }), isCode(ERROR_CODES.BAD_INPUT));
   });

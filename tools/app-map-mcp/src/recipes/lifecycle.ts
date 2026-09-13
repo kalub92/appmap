@@ -149,7 +149,7 @@
  * against the map and only the status transition happens.
  *
  * Layer: session (imports context, types, config, store/db, store/export.unifiedDiff,
- * yaml/canonical, events).
+ * yaml/canonical, yaml/schemas, validate, events).
  */
 import type { AppMapContext } from '../context.ts';
 import type { RecipeStats } from '../store/db.ts';
@@ -160,8 +160,9 @@ import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { schemaDir } from '../paths.ts';
 import { crossReferenceIssues } from '../validate.ts';
 import { unifiedDiff } from '../store/export.ts';
-import { canonicalYaml, parseYamlText } from '../yaml/canonical.ts';
-import { validateAgainstSchema } from '../yaml/schemas.ts';
+import type { ParsedYaml } from '../yaml/canonical.ts';
+import { canonicalYaml, parseYamlDoc } from '../yaml/canonical.ts';
+import { formatSchemaIssue, validateAgainstSchema } from '../yaml/schemas.ts';
 import { compileRecipe, isNormalisationWarning } from './compile.ts';
 
 /** 08 §5 thresholds. */
@@ -698,7 +699,14 @@ function reportRecompileRefusal(
 
 /** Parse + schema-validate + cross-reference a draft handed to `mark` (04 §3.8, 07 §4). */
 function checkedDraft(ctx: AppMapContext, draft: RecipeFile | string, recipeId: RecipeId): RecipeFile {
-  const doc = typeof draft === 'string' ? parseYamlText<RecipeFile>(draft, `${recipeId}.yaml`) : draft;
+  // A YAML draft is parsed with its kind and keeps what the author literally typed for every
+  // scalar YAML resolved to a number or boolean, so `description: 1.0` fails with the quoting
+  // hint here too and not only on the load path (issue #20). A draft handed over as an object
+  // arrived through JSON and never had a YAML spelling, so `yaml` stays undefined and the issue
+  // keeps Ajv's plain wording — telling a JSON caller to "quote it in YAML" is advice for a file
+  // they did not write.
+  const yaml: ParsedYaml<RecipeFile> | undefined = typeof draft === 'string' ? parseYamlDoc<RecipeFile>(draft, `${recipeId}.yaml`, 'recipe') : undefined;
+  const doc = yaml !== undefined ? yaml.doc : draft;
   if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) {
     throw new AppMapError(ERROR_CODES.BAD_INPUT, 'mark: `recipe` is not a recipe document', 'pass the compiled draft (RecipeFile or its canonical YAML text)');
   }
@@ -707,7 +715,8 @@ function checkedDraft(ctx: AppMapContext, draft: RecipeFile | string, recipeId: 
   }
   const schemaIssues = validateAgainstSchema(schemaDir(ctx.config), 'recipe', doc);
   if (schemaIssues.length > 0) {
-    throw new AppMapError(ERROR_CODES.INVALID_MAP, `mark: draft fails recipe.schema.json: ${schemaIssues.map((i) => `${i.path} ${i.message}`).join('; ')}`, 'fix the draft and call mark again (04 §3.8)');
+    const detail = schemaIssues.map((i) => formatSchemaIssue(i, yaml?.doc, yaml?.scalarSources)).join('; ');
+    throw new AppMapError(ERROR_CODES.INVALID_MAP, `mark: draft fails recipe.schema.json: ${detail}`, 'fix the draft and call mark again (04 §3.8)');
   }
   // rules 2–6/8 against the loaded map (07 §4: a draft is user-authored content)
   const screens = new Map<string, ScreenFile>();

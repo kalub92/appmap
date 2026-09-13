@@ -6,6 +6,10 @@
  * Ajv options: `{ allErrors: true, strict: true, strictTypes: false, strictTuples: false,
  * allowUnionTypes: true }` (the schemas use `if/then` without `type`, which strictTypes rejects).
  *
+ * Issue reporting adds one thing Ajv does not: a `must be string` over a value YAML resolved to a
+ * number or boolean is reported with the fix appended — `quote it in YAML ("1.0"), or 1.0 parses
+ * as a number` (`schemaIssueHint`, issue #20).
+ *
  * Layer: yaml (imports types/paths/errors only).
  */
 import { readFileSync } from 'node:fs';
@@ -101,21 +105,67 @@ export function validateAgainstSchema(schemaDir: string, kind: SchemaKind, doc: 
   return getValidator(schemaDir, kind)(doc);
 }
 
-/** One line per issue: `<path> <message> <params>` — shared by assertValid and validate rule 1. */
-export function formatSchemaIssue(i: SchemaIssue): string {
-  const params = i.params ? ` ${JSON.stringify(i.params)}` : '';
-  return `${i.path} ${i.message}${params}`;
+/** Resolve a JSON pointer (`/build/version`; `/` and `''` are the root) inside `doc`. */
+function valueAtPointer(doc: unknown, pointer: string): unknown {
+  if (pointer === '' || pointer === '/') return doc;
+  let cursor: unknown = doc;
+  for (const raw of pointer.split('/').slice(1)) {
+    const key = raw.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (Array.isArray(cursor)) cursor = cursor[Number(key)];
+    else if (typeof cursor === 'object' && cursor !== null) cursor = (cursor as Record<string, unknown>)[key];
+    else return undefined;
+  }
+  return cursor;
+}
+
+/**
+ * The "quote it" suffix for a `must be string` issue on a value YAML resolved to a number or
+ * boolean, `''` for every other issue (issue #20). A scalar the author meant as text —
+ * `version: 1.0`, `git_sha: 0000000`, `flag: true` — reads back as a number or a boolean, and
+ * Ajv's bare "must be string" never says so; it lands during first-run setup, where
+ * `map failed to load` blocks every other command, so the message has to teach the fix.
+ *
+ * `scalarSources` (from `parseYamlDoc`) supplies the spelling the author used, because
+ * `String(1.0)` is `"1"` and `String(0000000)` is `"0"` — echoing those back would teach the
+ * wrong quoting.
+ */
+export function schemaIssueHint(issue: SchemaIssue, doc: unknown, scalarSources?: ReadonlyMap<string, string>): string {
+  if (issue.keyword !== 'type' || issue.params?.['type'] !== 'string') return '';
+  const value = valueAtPointer(doc, issue.path);
+  if (typeof value !== 'number' && typeof value !== 'boolean') return '';
+  // toIssue normalises the root to '/', but scalarSources (and Ajv's instancePath) spell it ''
+  const authored = scalarSources?.get(issue.path === '/' ? '' : issue.path) ?? String(value);
+  return ` — quote it in YAML ("${authored}"), or ${authored} parses as a ${typeof value}`;
+}
+
+/** The part of an issue after its path: `<message><hint>` or `<message> <params>`. */
+export function schemaIssueDetail(i: SchemaIssue, doc?: unknown, scalarSources?: ReadonlyMap<string, string>): string {
+  const hint = doc === undefined ? '' : schemaIssueHint(i, doc, scalarSources);
+  // the hint already names the expected type in plain words, so the raw `{"type":"string"}` blob
+  // after it would only be noise
+  const params = hint === '' && i.params ? ` ${JSON.stringify(i.params)}` : '';
+  return `${i.message}${hint}${params}`;
+}
+
+/**
+ * One line per issue: `<path> <message> <params>` — shared by assertValid and validate rule 1.
+ * Pass the document (and, when it came from `parseYamlDoc`, its `scalarSources`) to get the
+ * issue #20 quoting hint on a `must be string` over a YAML number or boolean.
+ */
+export function formatSchemaIssue(i: SchemaIssue, doc?: unknown, scalarSources?: ReadonlyMap<string, string>): string {
+  return `${i.path} ${schemaIssueDetail(i, doc, scalarSources)}`;
 }
 
 /**
  * Throw `AppMapError(invalid_map)` listing every issue (`file` is used in the message only) when
- * `doc` is invalid; otherwise narrow `doc` to `T`.
+ * `doc` is invalid; otherwise narrow `doc` to `T`. `scalarSources` comes from `parseYamlDoc` and
+ * only affects the wording of the issue #20 quoting hint.
  */
-export function assertValid<T>(schemaDir: string, kind: SchemaKind, doc: unknown, file?: string): asserts doc is T {
+export function assertValid<T>(schemaDir: string, kind: SchemaKind, doc: unknown, file?: string, scalarSources?: ReadonlyMap<string, string>): asserts doc is T {
   const issues = validateAgainstSchema(schemaDir, kind, doc);
   if (issues.length === 0) return;
   const where = file ?? `<${kind}>`;
-  const lines = issues.map((i) => `  ${where}:${formatSchemaIssue(i)}`);
+  const lines = issues.map((i) => `  ${where}:${formatSchemaIssue(i, doc, scalarSources)}`);
   throw new AppMapError(ERROR_CODES.INVALID_MAP, `${where} does not validate against ${kind}.schema.json (${issues.length} issue${issues.length === 1 ? '' : 's'}):\n${lines.join('\n')}`, 'run `app-map validate` for the full report (02 §10 rule 1)');
 }
 

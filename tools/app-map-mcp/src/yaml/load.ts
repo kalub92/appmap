@@ -8,6 +8,10 @@
  * WARNINGS never block the load; they ride on `LoadedMap.validationWarnings` so `formatSummary`
  * can surface them (02 §10 rule 2's candidate carve-out, issue #12).
  *
+ * Every reader parses with its YAML kind, so the manifest `build` scalars are read back as the
+ * text the author wrote (`version: 1.0` stays `"1.0"`, `git_sha: 0000000` stays `"0000000"`,
+ * 02 §3) and any remaining `must be string` schema error says how to quote it (issue #20).
+ *
  * Layer: yaml (imports types/config/paths/errors + yaml/schemas + validate).
  */
 import { createHash } from 'node:crypto';
@@ -18,9 +22,11 @@ import type { AppMapConfig, Platform } from '../config.ts';
 import type { BuildNumber, IdsElement, IdsGate, IdsRegistry, IdsScreen, LoadedFile, LoadedMap, Manifest, McpAllowlist, RecipeFile, ScreenFile, ElementRef, ValidationIssue } from '../types.ts';
 import { now, routeKey } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
+import type { YamlKind } from '../paths.ts';
 import { allowlistFile, idsFile, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from '../paths.ts';
 import { assertValid } from './schemas.ts';
-import { parseYamlText } from './canonical.ts';
+import type { ParsedYaml } from './canonical.ts';
+import { parseYamlDoc } from './canonical.ts';
 import { crossReferenceIssues, formatIssues } from '../validate.ts';
 
 /**
@@ -28,12 +34,18 @@ import { crossReferenceIssues, formatIssues } from '../validate.ts';
  * pilot-sized screen file, which is the whole 03 §4 load budget at 300 screens; a reload after
  * one edit, or `validate` parsing a file for rule 1 and again for rule 7, must not pay it twice.
  * Entries are returned as `structuredClone`s (~0.06 ms) so callers can mutate freely.
+ *
+ * The key folds in `kind` because the parse is kind-dependent (`AUTHORED_STRING_SCALARS`,
+ * issue #20): a byte-identical file read with no kind must not poison the coerced entry.
  */
-const parseMemo = new Map<string, unknown>();
+const parseMemo = new Map<string, ParsedYaml<unknown>>();
 const PARSE_MEMO_MAX = 4096;
 
-/** `yaml.parse` of a file; throws `AppMapError(invalid_map)` with file + line on parse errors. */
-export function parseYamlFile<T = unknown>(path: string): T {
+/**
+ * `parseYamlFile` plus the authored spellings of the scalars YAML resolved to numbers or booleans
+ * (issue #20); passing `kind` also enables the documented-string coercion for that kind.
+ */
+export function parseYamlFileDoc<T = unknown>(path: string, kind?: YamlKind): ParsedYaml<T> {
   let bytes: Buffer;
   try {
     bytes = readFileSync(path);
@@ -42,20 +54,25 @@ export function parseYamlFile<T = unknown>(path: string): T {
     if (code === 'ENOENT') throw new AppMapError(ERROR_CODES.NOT_FOUND, `${path} does not exist`, 'check APP_MAP_DIR / APP_MAP_PLATFORM (03 §3)', { cause: e });
     throw new AppMapError(ERROR_CODES.STORAGE, `${path} cannot be read: ${(e as Error).message}`, 'check file permissions', { cause: e });
   }
-  const sha = blobSha(bytes);
-  const hit = parseMemo.get(sha);
-  if (hit !== undefined) return structuredClone(hit) as T;
-  const doc = parseYamlText<T>(bytes.toString('utf8'), path);
+  const key = `${blobSha(bytes)}\0${kind ?? ''}`;
+  const hit = parseMemo.get(key);
+  if (hit !== undefined) return structuredClone(hit) as ParsedYaml<T>;
+  const parsed = parseYamlDoc<T>(bytes.toString('utf8'), path, kind);
   if (parseMemo.size >= PARSE_MEMO_MAX) parseMemo.clear();
-  parseMemo.set(sha, doc);
-  return structuredClone(doc);
+  parseMemo.set(key, parsed);
+  return structuredClone(parsed);
+}
+
+/** `yaml.parse` of a file; throws `AppMapError(invalid_map)` with file + line on parse errors. */
+export function parseYamlFile<T = unknown>(path: string, kind?: YamlKind): T {
+  return parseYamlFileDoc<T>(path, kind).doc;
 }
 
 /** `app-map/ids.yaml`, schema-validated. */
 export function readIds(config: Pick<AppMapConfig, 'dir'>): IdsRegistry {
   const file = idsFile(config);
-  const doc = parseYamlFile(file);
-  assertValid<IdsRegistry>(schemaDir(config), 'ids', doc, relPath(config, file));
+  const { doc, scalarSources } = parseYamlFileDoc(file, 'ids');
+  assertValid<IdsRegistry>(schemaDir(config), 'ids', doc, relPath(config, file), scalarSources);
   return doc;
 }
 
@@ -63,9 +80,9 @@ export function readIds(config: Pick<AppMapConfig, 'dir'>): IdsRegistry {
 export function readManifest(config: Pick<AppMapConfig, 'dir' | 'platform'>, platform?: Platform): Manifest {
   const p = platform ?? config.platform;
   const file = manifestFile(config, p);
-  const doc = parseYamlFile(file);
+  const { doc, scalarSources } = parseYamlFileDoc(file, 'manifest');
   const rel = relPath(config, file);
-  assertValid<Manifest>(schemaDir(config), 'manifest', doc, rel);
+  assertValid<Manifest>(schemaDir(config), 'manifest', doc, rel, scalarSources);
   if (doc.platform !== p) {
     throw new AppMapError(ERROR_CODES.INVALID_MAP, `${rel}: platform ${doc.platform} must equal the directory name ${p}`, 'each platform directory carries its own manifest (02 §3)');
   }
@@ -85,9 +102,9 @@ export function readScreenFiles(config: Pick<AppMapConfig, 'dir' | 'platform'>, 
   const p = platform ?? config.platform;
   const sd = schemaDir(config);
   return yamlFilesIn(screensDir(config, p)).map((path) => {
-    const doc = parseYamlFile(path);
+    const { doc, scalarSources } = parseYamlFileDoc(path, 'screen');
     const rel = relPath(config, path);
-    assertValid<ScreenFile>(sd, 'screen', doc, rel);
+    assertValid<ScreenFile>(sd, 'screen', doc, rel, scalarSources);
     assertFileNameIsId(rel, path, doc.id);
     return { path, screen: doc };
   });
@@ -98,9 +115,9 @@ export function readRecipeFiles(config: Pick<AppMapConfig, 'dir' | 'platform'>, 
   const p = platform ?? config.platform;
   const sd = schemaDir(config);
   return yamlFilesIn(recipesDir(config, p)).map((path) => {
-    const doc = parseYamlFile(path);
+    const { doc, scalarSources } = parseYamlFileDoc(path, 'recipe');
     const rel = relPath(config, path);
-    assertValid<RecipeFile>(sd, 'recipe', doc, rel);
+    assertValid<RecipeFile>(sd, 'recipe', doc, rel, scalarSources);
     assertFileNameIsId(rel, path, doc.id);
     if (doc.platform !== p) {
       throw new AppMapError(ERROR_CODES.INVALID_MAP, `${rel}: platform ${doc.platform} must equal the platform directory ${p}`, 'move the recipe under app-map/<platform>/recipes/ or fix `platform` (02 §6)');
@@ -120,8 +137,8 @@ function assertFileNameIsId(rel: string, path: string, id: string): void {
 /** `app-map/policy/mcp-allowlist.yaml` (07 §6). */
 export function readAllowlist(config: Pick<AppMapConfig, 'dir'>): McpAllowlist {
   const file = allowlistFile(config);
-  const doc = parseYamlFile(file);
-  assertValid<McpAllowlist>(schemaDir(config), 'mcp-allowlist', doc, relPath(config, file));
+  const { doc, scalarSources } = parseYamlFileDoc(file, 'mcp-allowlist');
+  assertValid<McpAllowlist>(schemaDir(config), 'mcp-allowlist', doc, relPath(config, file), scalarSources);
   return doc;
 }
 

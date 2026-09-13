@@ -13,9 +13,9 @@ import { kindForPath, schemaDir } from '../paths.ts';
 import type { YamlKind } from '../paths.ts';
 import type { IdsRegistry, RecipeFile, ScreenFile } from '../types.ts';
 import { isUnlearnedEdgeElement } from '../types.ts';
-import { KEY_ORDER, canonicalYaml, canonicalize, isCanonical, parseYamlText } from '../yaml/canonical.ts';
+import { AUTHORED_STRING_SCALARS, KEY_ORDER, QUOTED_STRING_KEYS, canonicalYaml, canonicalize, isCanonical, parseYamlDoc, parseYamlText } from '../yaml/canonical.ts';
 import { gitBlobHash, gitTreeHash, indexMap, loadMap, parseYamlFile, readAllowlist, readIds, readManifest, readRecipeFiles, readScreenFiles, readStaticStrings } from '../yaml/load.ts';
-import { assertValid, loadSchemas, validateAgainstSchema, validateEventLine } from '../yaml/schemas.ts';
+import { assertValid, formatSchemaIssue, loadSchemas, validateAgainstSchema, validateEventLine } from '../yaml/schemas.ts';
 import { PILOT_APP_MAP_DIR, makeTempAppMapDir, readFixture } from './helpers.ts';
 
 function* walkYaml(dir: string): Generator<string> {
@@ -142,6 +142,42 @@ describe('canonical serializer (02 §2.3)', () => {
     assert.throws(() => parseYamlText('a: 1\na: 2\n', 'dup.yaml'), (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.INVALID_MAP && /dup\.yaml/.test(e.message));
     assert.deepEqual(parseYamlText('a: "4412"\nb: 2026.9.1\n', 'ok.yaml'), { a: '4412', b: '2026.9.1' });
   });
+
+  // issue #20: `version: 1.0` and `git_sha: 0000000` are how humans write those values, and both
+  // read back as numbers. The canonical form double-quotes all three build scalars so the quoted
+  // spelling is the one `export --check` expects and the committed manifest teaches the habit.
+  it('double-quotes the manifest build scalars so 1.0 and 0000000 round-trip (issue #20)', () => {
+    const manifest = { schema_version: 1, app_id: 'com.example.app', platform: 'ios', deep_link_scheme: 'appmap', build: { version: '1.0', build_number: '1', git_sha: '0000000' }, generated_at: '2026-09-12T00:00:00Z', generator: 'app-map-mcp@0.1.0' };
+    const text = canonicalYaml('manifest', manifest);
+    assert.match(text, /^  version: "1\.0"$/m);
+    assert.match(text, /^  build_number: "1"$/m);
+    assert.match(text, /^  git_sha: "0000000"$/m);
+    assert.ok(isCanonical('manifest', text));
+    // the unquoted spelling is NOT canonical, so it surfaces as a rule 7 re-quoting diff instead
+    // of the map refusing to load
+    assert.ok(!isCanonical('manifest', text.replace('"1.0"', '1.0')));
+    // values that need no quotes are quoted too, so a copy-pasted manifest teaches the habit
+    assert.match(canonicalYaml('manifest', { ...manifest, build: { version: '2026.9.1', build_number: '4412', git_sha: 'a1b2c3d' } }), /^  git_sha: "a1b2c3d"$/m);
+    // the table is keyed by CanonicalType 'build', not by key name: recipe.version is an integer
+    assert.match(canonicalYaml('recipe', { id: 'r', version: 1, platform: 'ios', matches: ['x'], params: [], steps: [] }), /^version: 1$/m);
+  });
+
+  it('the parse-side and serialize-side string tables name the same build scalars (issue #20)', () => {
+    // the two halves of the fix must never drift: what is restored on the way in is what is
+    // re-quoted on the way out
+    assert.deepEqual(AUTHORED_STRING_SCALARS.manifest, [...(QUOTED_STRING_KEYS.build ?? [])].map((k) => `/build/${k}`));
+  });
+
+  it('parseYamlDoc keeps the text the author wrote for numeric scalars (issue #20)', () => {
+    const { doc, scalarSources } = parseYamlDoc('build:\n  version: 1.0\n  git_sha: 0000000\n  flag: true\n  name: a1b2c3d\n  empty:\n', 'm.yaml');
+    // parsing already threw the spelling away: 1.0 is 1 and 0000000 is 0
+    assert.deepEqual(doc, { build: { version: 1, git_sha: 0, flag: true, name: 'a1b2c3d', empty: null } });
+    assert.deepEqual([...scalarSources], [['/build/version', '1.0'], ['/build/git_sha', '0000000'], ['/build/flag', 'true']]);
+    // `empty:` lost no spelling; recording it as '' would turn "must be string" into an opaque
+    // pattern error, which is the trap String(value) falls into
+    assert.equal(scalarSources.has('/build/empty'), false);
+    assert.equal(scalarSources.has('/build/name'), false, 'strings kept their spelling');
+  });
 });
 
 describe('JSON schemas (02 §10.1)', () => {
@@ -186,6 +222,30 @@ describe('JSON schemas (02 §10.1)', () => {
     for (const line of readFixture('events/sample.events.jsonl').split('\n').filter((l) => l.trim())) assert.deepEqual(validateEventLine(sd, line), [], line);
     assert.equal(validateEventLine(sd, '{not json')[0]?.keyword, 'parse');
     assert.ok(validateEventLine(sd, '{"ts":"2026-09-10T00:00:00Z","kind":"bogus"}').length > 0);
+  });
+
+  // issue #20: Ajv's bare "must be string" never mentions quoting, and it lands during first-run
+  // setup where `map failed to load` blocks every other command.
+  it('a "must be string" issue on a numeric YAML value says to quote it (issue #20)', () => {
+    const numeric = parseYamlDoc('schema_version: 1\nscreens:\n  - id: login\n    title: 1.0\n    deep_link: appmap://login\ngates: []\nelements: []\n', 'ids.yaml');
+    const issue = validateAgainstSchema(sd, 'ids', numeric.doc).find((i) => i.path === '/screens/0/title');
+    assert.ok(issue, 'expected a type issue on the title');
+    // the literal string, so the wording cannot regress and so 1.0 is never echoed back as "1"
+    assert.equal(formatSchemaIssue(issue, numeric.doc, numeric.scalarSources), '/screens/0/title must be string — quote it in YAML ("1.0"), or 1.0 parses as a number');
+    assert.equal(formatSchemaIssue(issue), '/screens/0/title must be string {"type":"string"}', 'unchanged without the document');
+    assert.throws(() => assertValid(sd, 'ids', numeric.doc, 'ids.yaml', numeric.scalarSources), (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.INVALID_MAP && e.message.includes('quote it in YAML ("1.0")'));
+
+    // the hint is general: any string-typed field, any YAML scalar that read back as a boolean
+    const bool = parseYamlDoc('schema_version: 1\nscreens:\n  - id: login\n    title: true\ngates: []\nelements: []\n', 'ids.yaml');
+    const boolIssue = validateAgainstSchema(sd, 'ids', bool.doc).find((i) => i.path === '/screens/0/title');
+    assert.ok(boolIssue);
+    assert.equal(formatSchemaIssue(boolIssue, bool.doc, bool.scalarSources), '/screens/0/title must be string — quote it in YAML ("true"), or true parses as a boolean');
+
+    // and it stays out of the way of every other kind of issue
+    const extra = { schema_version: 1, screens: [], gates: [], elements: [], bogus: 1 };
+    const extraIssue = validateAgainstSchema(sd, 'ids', extra).find((i) => i.keyword === 'additionalProperties');
+    assert.ok(extraIssue);
+    assert.equal(formatSchemaIssue(extraIssue, extra), '/ must NOT have additional properties {"additionalProperty":"bogus"}');
   });
 
   it('throws invalid_map for a missing schema directory', () => {
@@ -357,5 +417,39 @@ describe('loader and index (03 §4)', () => {
   it('IdsRegistry read from the pilot has every gate dismiss registered only under gates[]', () => {
     const ids = parse(readFileSync(join(PILOT_APP_MAP_DIR, 'ids.yaml'), 'utf8')) as IdsRegistry;
     for (const g of ids.gates) assert.ok(!ids.elements.some((e) => e.id === g.dismiss), g.dismiss);
+  });
+
+  // issue #20: the repro from the report — a 1.0 app whose git sha is the placeholder
+  // instrumentation/README.md documents. Following the docs must not produce an invalid manifest.
+  it('readManifest reads version 1.0 / git_sha 0000000 as the authored strings (issue #20)', () => {
+    const t = makeTempAppMapDir();
+    try {
+      const p = join(t.dir, 'ios/manifest.yaml');
+      writeFileSync(p, readFileSync(p, 'utf8').replace(/^build:\n(?:  .*\n)+/m, 'build:\n  version: 1.0\n  build_number: 1\n  git_sha: 0000000\n'));
+      // String(value) would give '1' and '0' here — '0' then fails ^[0-9a-f]{7,40}$ with a
+      // *different* confusing error, which is why the authored text is what gets restored
+      assert.deepEqual(readManifest(t.config).build, { version: '1.0', build_number: '1', git_sha: '0000000' });
+      assert.doesNotThrow(() => loadMap(t.config));
+      assert.equal(loadMap(t.config).manifest.build.git_sha, '0000000');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('both pilot manifests load, validate and stay canonical with quoted build scalars (issue #20)', () => {
+    const t = makeTempAppMapDir();
+    try {
+      for (const platform of ['ios', 'android'] as const) {
+        assert.deepEqual(readManifest(t.config, platform).build, { version: '2026.9.1', build_number: '4412', git_sha: 'a1b2c3d' });
+        const text = readFileSync(join(PILOT_APP_MAP_DIR, platform, 'manifest.yaml'), 'utf8');
+        assert.match(text, /^  version: "2026\.9\.1"$/m, platform);
+        assert.match(text, /^  build_number: "4412"$/m, platform);
+        assert.match(text, /^  git_sha: "a1b2c3d"$/m, platform);
+        assert.ok(isCanonical('manifest', text), `${platform}/manifest.yaml is not canonical`);
+        assert.deepEqual(validateAgainstSchema(schemaDir({ dir: PILOT_APP_MAP_DIR }), 'manifest', parse(text)), []);
+      }
+    } finally {
+      t.cleanup();
+    }
   });
 });

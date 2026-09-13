@@ -186,7 +186,9 @@ function renderConflicts(text: string, conflicts: Conflict[]): string {
 /** Pure: merge three YAML texts of the same kind. `merged` is canonical when `conflicts` is empty. */
 export function mergeYamlDocuments(kind: YamlKind, base: string, ours: string, theirs: string): MergeResult {
   const parseSide = (text: string, name: string): Obj | undefined => {
-    const doc: unknown = text.trim() === '' ? undefined : parseYamlText(text, name);
+    // parsed WITH the kind so a three-way merge of a manifest coerces exactly like the loader and
+    // the merged output stays canonical (issue #20)
+    const doc: unknown = text.trim() === '' ? undefined : parseYamlText(text, name, kind);
     if (doc === undefined || doc === null) return undefined; // an empty side = the file did not exist (add/add)
     if (!isObj(doc)) throw new AppMapError(ERROR_CODES.BAD_INPUT, `${name} is not a YAML mapping`, 'app-map files are mappings (02 §2)');
     return doc;

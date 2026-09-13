@@ -30,16 +30,18 @@
       "properties": {
         "version": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "app version as a string (02 §3) — quote it in YAML: an unquoted 1.0 parses as a number"
         },
         "build_number": {
           "type": "string",
           "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
-          "description": "build number as a string (02 §8)"
+          "description": "build number as a string (02 §8) — quote it in YAML: an unquoted 4412 parses as a number"
         },
         "git_sha": {
           "type": "string",
-          "pattern": "^[0-9a-f]{7,40}$"
+          "pattern": "^[0-9a-f]{7,40}$",
+          "description": "commit sha as a string (02 §3) — quote it in YAML: an unquoted 0000000 parses as the number 0"
         }
       },
       "required": [

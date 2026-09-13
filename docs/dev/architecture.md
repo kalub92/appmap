@@ -193,7 +193,10 @@ tests compare). The rules:
 4. **Text**: `yaml@2.9.0 stringify(ordered, { indent: 2, lineWidth: 0, minContentWidth: 0,
    singleQuote: false, nullStr: 'null' })`; block style everywhere (the flow-style `{…}` in the
    spec examples is illustrative); default quoting (plain unless required — `"4412"`,
-   `"{amount}"`, `"true"`, `"@swmansion/argent"` get double quotes); numbers as JS numbers (`1`,
+   `"{amount}"`, `"true"`, `"@swmansion/argent"` get double quotes), plus a forced-quote list
+   (`QUOTED_STRING_KEYS`): `build.version`, `build.build_number` and `build.git_sha` are always
+   double-quoted (issue #20), so `version: "1.0"` and `git_sha: "0000000"` survive a load/export
+   round trip and the committed manifest teaches the habit; numbers as JS numbers (`1`,
    `0.6`); LF; exactly one trailing newline; no comments, no `---`.
 5. `manifest.generated_at` is the only timestamp and changes only when the manifest changes.
 

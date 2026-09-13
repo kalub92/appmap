@@ -143,7 +143,12 @@ The JSON matches 01 R6 (`schema_version`, `app_id`, `platform`, `build{version,b
 seeds screens with `source: router_export`. `git_sha` must be 7–40 hex: `router-export.sh` passes the checkout's
 sha (`SIMCTL_CHILD_APP_MAP_GIT_SHA` on iOS, `--es git_sha` on Android); for other launches set the Info.plist key
 `AppMapGitSHA` on iOS and `AppMapRouterRegistry.gitSha = BuildConfig.GIT_SHA` on Android, otherwise the
-placeholder `0000000` is written and a warning logged.
+placeholder `"0000000"` is written and a warning logged. It is a *string* of seven hex digits everywhere it
+appears: in `manifest.yaml` write `git_sha: "0000000"` with the quotes, or YAML reads it as the number `0`.
+The map still loads without them — the value is read back as the text you wrote — but `app-map export --check`
+reports the file as non-canonical until the quotes are there; an unquoted `version: 1.0` behaves the same way
+(issue #20). Add the quotes by hand: `app-map export` rewrites only the files the map itself changed, so it
+leaves a merely non-canonical manifest alone.
 
 ## 5. Wire the deep link through the real router (01 R5)
 

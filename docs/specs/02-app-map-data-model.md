@@ -10,7 +10,7 @@ Define exactly what is stored, where, in what shape, and how it survives a share
 
 1. One file per entity: `screens/<screen_id>.yaml` (screen + its elements + outgoing edges), `recipes/<recipe_id>.yaml`. Two developers exploring different screens never touch the same file.
 2. **Durable fields only in git.** Structure, locators, status, provenance, `last_verified_build`. Counters, timings, and per-session state live in `app-map/.local/cache.sqlite` (git-ignored). `app-map export` writes durable fields deterministically.
-3. Deterministic serialization: fixed key order per schema, lists sorted by `id`, block style, 2-space indent, LF, no trailing timestamps except `manifest.generated_at`. `app-map export` twice in a row produces no diff.
+3. Deterministic serialization: fixed key order per schema, lists sorted by `id`, block style, 2-space indent, LF, no trailing timestamps except `manifest.generated_at`; string-typed scalars whose natural values read as numbers (`build.version`, `build.build_number`, `build.git_sha`) are always double-quoted. `app-map export` twice in a row produces no diff.
 4. Structure only (07 §2). A YAML file never contains a screenshot path, a field value, cell text, or a user identifier.
 5. Every file validates against `app-map/schema/<type>.schema.json`.
 
@@ -23,9 +23,9 @@ app_id: com.example.app
 platform: ios                      # ios | android
 deep_link_scheme: appmap
 build:                             # last build the map was exported against
-  version: "2026.9.1"
+  version: "2026.9.1"              # quote all three: unquoted, 1.0 is a float and 0000000 is the integer 0
   build_number: "4412"
-  git_sha: a1b2c3d
+  git_sha: "a1b2c3d"
 generated_at: 2026-09-10T00:00:00Z
 generator: app-map-mcp@0.1.0
 ```

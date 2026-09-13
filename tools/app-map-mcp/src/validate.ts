@@ -28,7 +28,10 @@
  *  5. no `text` strategy stands alone
  *  6. `intent_critical` agrees between ids.yaml and every screen element / recipe step that
  *     touches the element (absent = false)
- *  7. serialization is canonical (yaml/canonical.ts `isCanonical`)
+ *  7. serialization is canonical (yaml/canonical.ts `isCanonical`) — this is where an unquoted
+ *     `version: 1.0` / `git_sha: 0000000` in a manifest lands now that rule 1 reads them as the
+ *     authored strings: `export --check` reports one re-quoting diff and the next write of the
+ *     manifest fixes it, instead of `map failed to load` blocking every other command (issue #20)
  *  8. forbidden content sweep over `elements[].label`, `title`, every `text`/`text_present`/
  *     `match.text` and `description`: email, phone, 13–19 digit runs, currency, IBAN-like,
  *     SSN-like (`scrub.ts` PII_PATTERNS); `{param}` slots are exempt. Also a WARNING when a
@@ -51,8 +54,8 @@ import { AppMapError } from './errors.ts';
 import { allowlistFile, idsFile, kindForPath, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from './paths.ts';
 import type { YamlKind } from './paths.ts';
 import { PII_PATTERNS } from './scrub.ts';
-import { isCanonical, parseYamlText } from './yaml/canonical.ts';
-import { validateAgainstSchema } from './yaml/schemas.ts';
+import { isCanonical, parseYamlDoc } from './yaml/canonical.ts';
+import { schemaIssueDetail, validateAgainstSchema } from './yaml/schemas.ts';
 
 export interface ValidateOptions {
   /** default: every platform directory that has a manifest */
@@ -99,8 +102,11 @@ export function validateMap(config: AppMapConfig, opts: ValidateOptions = {}): V
       return undefined;
     }
     let doc: unknown;
+    let scalarSources: ReadonlyMap<string, string>;
     try {
-      doc = parseYamlText(text, file);
+      // parsed WITH the kind, so rule 1 accepts exactly what `loadMap` accepts: a manifest whose
+      // `version: 1.0` / `git_sha: 0000000` is read back as the authored string (issue #20)
+      ({ doc, scalarSources } = parseYamlDoc(text, file, kind));
     } catch (e) {
       issues.push(issue(1, file, AppMapError.is(e) ? e.message : String(e)));
       return undefined;
@@ -113,7 +119,7 @@ export function validateMap(config: AppMapConfig, opts: ValidateOptions = {}): V
       return undefined;
     }
     if (schemaIssues.length) {
-      for (const si of schemaIssues) issues.push(issue(1, file, `${si.message}${si.params ? ' ' + JSON.stringify(si.params) : ''}`, si.path));
+      for (const si of schemaIssues) issues.push(issue(1, file, schemaIssueDetail(si, doc, scalarSources), si.path));
       return undefined;
     }
     return doc as T;

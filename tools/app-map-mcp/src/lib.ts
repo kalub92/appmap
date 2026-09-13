@@ -21,11 +21,11 @@ export { LOG_ROTATE_BYTES, createLogger, createMemoryLogger, rotateIfNeeded, san
 export type { LogFields, Logger, LoggerOptions } from './log.ts';
 
 // ---- yaml / tree ------------------------------------------------------------------------------
-export { CHILD_TYPES, ID_SORTED_LISTS, KEY_ORDER, SORTED_STRING_SETS, YAML_STRINGIFY_OPTIONS, canonicalYaml, canonicalize, isCanonical } from './yaml/canonical.ts';
-export type { CanonicalType } from './yaml/canonical.ts';
-export { assertValid, getValidator, loadSchemas, validateAgainstSchema, validateEventLine } from './yaml/schemas.ts';
+export { AUTHORED_STRING_SCALARS, CHILD_TYPES, ID_SORTED_LISTS, KEY_ORDER, QUOTED_STRING_KEYS, SORTED_STRING_SETS, YAML_STRINGIFY_OPTIONS, canonicalYaml, canonicalize, isCanonical, parseYamlDoc } from './yaml/canonical.ts';
+export type { CanonicalType, ParsedYaml } from './yaml/canonical.ts';
+export { assertValid, getValidator, loadSchemas, schemaIssueDetail, schemaIssueHint, validateAgainstSchema, validateEventLine } from './yaml/schemas.ts';
 export type { SchemaIssue, SchemaValidator } from './yaml/schemas.ts';
-export { gitBlobHash, gitTreeHash, indexMap, loadMap, parseYamlFile, readAllowlist, readIds, readManifest, readRecipeFiles, readScreenFiles, readStaticStrings } from './yaml/load.ts';
+export { gitBlobHash, gitTreeHash, indexMap, loadMap, parseYamlFile, parseYamlFileDoc, readAllowlist, readIds, readManifest, readRecipeFiles, readScreenFiles, readStaticStrings } from './yaml/load.ts';
 export type { IndexMapInput, LoadMapOptions } from './yaml/load.ts';
 export { crossReferenceIssues, forbiddenContentIssues, formatIssues, nonCanonicalFiles, safeRegexIssue, validateMap } from './validate.ts';
 export type { CrossRefInput, ValidateOptions } from './validate.ts';

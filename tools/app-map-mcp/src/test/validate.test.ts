@@ -497,6 +497,23 @@ describe('rule 7 — canonical serialization', () => {
       t.cleanup();
     }
   });
+
+  // issue #20: `version: 1.0` / `git_sha: 0000000` used to be a rule 1 schema error, which meant
+  // `map failed to load` blocked every other command during first-run setup. Rule 1 now reads the
+  // authored strings, so the file is merely non-canonical — a re-quoting diff, not a hard stop.
+  it('an unquoted build scalar is a rule 7 diff, not a rule 1 schema error (issue #20)', () => {
+    const t = makeTempAppMapDir();
+    try {
+      const p = join(t.dir, 'ios/manifest.yaml');
+      writeFileSync(p, readFileSync(p, 'utf8').replace(/^build:\n(?:  .*\n)+/m, 'build:\n  version: 1.0\n  build_number: 1\n  git_sha: 0000000\n'));
+      const r = validateMap(t.config);
+      assert.deepEqual(errors(r.issues, 1).filter((i) => i.file === 'ios/manifest.yaml'), [], formatIssues(r.issues));
+      assert.deepEqual(errors(r.issues, 7).map((i) => i.file), ['ios/manifest.yaml']);
+      assert.ok(nonCanonicalFiles(t.config).includes('ios/manifest.yaml'));
+    } finally {
+      t.cleanup();
+    }
+  });
 });
 
 describe('rule 8 — forbidden content sweep (07 §2.3.4 backstop)', () => {
