@@ -14,9 +14,9 @@
  * | run_recipe           | {recipe_id, params, mode, session?}              | guided.startGuidedRun | headless.runHeadless              |
  * | report_step          | {run_id, step_id, ok, note?, snapshot?}          | guided.reportStep                                         |
  * | record_observation   | {tool, input, snapshot, ok, session?}            | observe.recordObservation                                 |
- * | name_screen          | {screen_id, title?, deep_link?, session?}        | observe.nameScreen (explore mode)                         |
+ * | name_screen          | {screen_id, title?, deep_link?, force?, session?}| observe.nameScreen (explore mode); `force` re-learns a non-candidate screen (02 §8, issue #16) |
  * | compile_recipe       | {session, task, recipe_id, params[], values?}    | observe.declareTask when the session has none; compile.compileRecipe → draft YAML; on `ok` `observe.finishTask(ctx, session, {ok: true, mode_end})` (04 §3.1) |
- * | mark_recipe          | {recipe_id, status, recipe?, reviewer?}          | lifecycle.markRecipe(ctx, MarkRecipeInput) — `recipe` is the reviewed draft (RecipeFile or YAML text), required for `candidate` (04 §3.8); `reviewer` required for `ci_gate` (07 §7) |
+ * | mark                 | {recipe_id \| screen_id, status, recipe?, reviewer?, force?} | lifecycle.markRecipe or lifecycle.markScreen — EXACTLY ONE id key says which (02 §6 / 02 §8). Recipe: `recipe` is the reviewed draft (RecipeFile or YAML text), required for `candidate` (04 §3.8); `reviewer` required for `ci_gate` (07 §7). Screen: the only way back out of `verified` (issue #16) |
  * | export               | {}                                               | store/export.exportMap (never `force`; that is the CLI's); names any `machine_recompiles` (04 §8) |
  *
  * Every handler: `try { … } catch (e) { return toolError(e) }` — never throws (03 §11); every
@@ -62,9 +62,9 @@ import type { ErrorJson } from './errors.ts';
 import { AppMapError, ERROR_CODES, toErrorJson } from './errors.ts';
 import { recipeFile, screenFile } from './paths.ts';
 import type {
-  DriverInput, LoadedMap, RecipeFile, RecipeParam, RecipeParams, RecipeStatus, RunMode, ScreenId, SessionId,
+  DriverInput, LoadedMap, RecipeFile, RecipeParam, RecipeParams, RecipeStatus, RunMode, ScreenId, ScreenStatus, SessionId,
 } from './types.ts';
-import { RECIPE_STATUSES, RUN_MODES, probeConditions, roleHintsFor } from './types.ts';
+import { RECIPE_STATUSES, RUN_MODES, SCREEN_STATUSES, probeConditions, roleHintsFor } from './types.ts';
 import { capTokens } from './token.ts';
 import { indexMap } from './yaml/load.ts';
 import { decayConfidence, buildsSince, identify } from './identify.ts';
@@ -78,7 +78,7 @@ import { normalizeTree } from './tree.ts';
 import { declareTask, finishTask, lastObservation, nameScreen, recordObservation } from './observe.ts';
 import { matchRecipe } from './recipes/match.ts';
 import { compileRecipe } from './recipes/compile.ts';
-import { markRecipe } from './recipes/lifecycle.ts';
+import { markRecipe, markScreen } from './recipes/lifecycle.ts';
 import type { BuildInfoProbe } from './recipes/guided.ts';
 import { reportStep, startGuidedRun } from './recipes/guided.ts';
 import type { ExecFn, HierarchyProvider } from './recipes/headless.ts';
@@ -93,7 +93,7 @@ export const SERVER_VERSION = '0.1.0';
 /** The complete tool surface (03 §8); the test asserts `TOOL_NAMES.length <= 13`. */
 export const TOOL_NAMES = [
   'summary', 'identify_screen', 'get_screen', 'find_element', 'plan_path', 'match_recipe', 'run_recipe', 'report_step',
-  'record_observation', 'name_screen', 'compile_recipe', 'mark_recipe', 'export',
+  'record_observation', 'name_screen', 'compile_recipe', 'mark', 'export',
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
@@ -205,7 +205,7 @@ function requireMap(ctx: AppMapContext): LoadedMap {
 
 /**
  * The map as this session knows it: the cache first, so a screen named by `name_screen` or a
- * recipe written by `mark_recipe` is visible to the read tools before `export` runs. `indexMap`
+ * recipe written by `mark` is visible to the read tools before `export` runs. `indexMap`
  * is pure (guided.ts does the same).
  */
 function sessionMap(ctx: AppMapContext): LoadedMap {
@@ -402,7 +402,7 @@ function toolRecordObservation(ctx: AppMapContext, args: { tool?: unknown; input
   return toolJson({ ...result }, cap(ctx));
 }
 
-function toolNameScreen(ctx: AppMapContext, args: { screen_id?: unknown; title?: unknown; deep_link?: unknown; session?: unknown }): ToolResult {
+function toolNameScreen(ctx: AppMapContext, args: { screen_id?: unknown; title?: unknown; deep_link?: unknown; force?: unknown; session?: unknown }): ToolResult {
   requireMap(ctx);
   const screenId = requireString(args.screen_id, 'screen_id', 'name_screen', 'a screen id registered in ids.yaml screens[] (01 R1)');
   const session = optionalString(args.session, 'session', 'name_screen');
@@ -410,6 +410,7 @@ function toolNameScreen(ctx: AppMapContext, args: { screen_id?: unknown; title?:
     screen_id: screenId,
     ...(typeof args.title === 'string' && args.title !== '' ? { title: args.title } : {}),
     ...(typeof args.deep_link === 'string' && args.deep_link !== '' ? { deep_link: args.deep_link } : {}),
+    ...(args.force === true ? { force: true } : {}),
     ...(session !== undefined ? { session } : {}),
   });
   // the whole ScreenFile would blow the cap; the ids are what the LLM needs (03 §8)
@@ -421,6 +422,8 @@ function toolNameScreen(ctx: AppMapContext, args: { screen_id?: unknown; title?:
     ...(result.screen.title !== undefined ? { title: result.screen.title } : {}),
     ...(result.screen.deep_link !== undefined ? { deep_link: result.screen.deep_link } : {}),
     status: result.screen.meta.status,
+    // issue #16: a forced re-learn is not an ordinary naming — say so in the tool output too
+    ...(result.relearned_from !== undefined ? { relearned_from: result.relearned_from } : {}),
   }, cap(ctx));
 }
 
@@ -458,23 +461,53 @@ function toolCompileRecipe(ctx: AppMapContext, args: { session?: unknown; task?:
   return toolJson({
     ok: true, recipe_id: result.recipe.id, version: result.recipe.version, status: result.recipe.status,
     yaml: result.yaml, warnings: result.warnings, collapsed_observations: result.collapsed_observations,
-    next: `review the draft, then call mark_recipe {recipe_id: "${result.recipe.id}", status: "candidate", recipe: <the yaml>}`,
+    next: `review the draft, then call mark {recipe_id: "${result.recipe.id}", status: "candidate", recipe: <the yaml>}`,
   }, cap(ctx));
 }
 
-function toolMarkRecipe(ctx: AppMapContext, args: { recipe_id?: unknown; status?: unknown; recipe?: unknown; reviewer?: unknown; force?: unknown }): ToolResult {
+/**
+ * `mark` (03 §8) — one tool for both human status decisions, discriminated by WHICH id key is
+ * present rather than by a `kind` enum: every other tool in this surface names its entity that
+ * way (`screen_id`, `recipe_id`, `element_id`), it is impossible to pass the wrong kind, and the
+ * argument objects existing callers already send are unchanged. Exactly one of the two, because
+ * "mark both at once" has no meaning and a silent precedence rule would hide a typo.
+ */
+function toolMark(ctx: AppMapContext, args: { recipe_id?: unknown; screen_id?: unknown; status?: unknown; recipe?: unknown; reviewer?: unknown; force?: unknown }): ToolResult {
   requireMap(ctx);
-  const recipeId = requireString(args.recipe_id, 'recipe_id', 'mark_recipe', 'e.g. {recipe_id: "create_invoice", status: "candidate", recipe: <draft yaml>}');
-  const status = requireString(args.status, 'status', 'mark_recipe', `one of ${RECIPE_STATUSES.join('|')} (02 §6)`);
+  const hasRecipe = args.recipe_id !== undefined && args.recipe_id !== null;
+  const hasScreen = args.screen_id !== undefined && args.screen_id !== null;
+  if (hasRecipe === hasScreen) {
+    throw new AppMapError(
+      ERROR_CODES.BAD_INPUT,
+      'mark needs exactly one of `recipe_id` or `screen_id`',
+      'e.g. {recipe_id: "create_invoice", status: "candidate"} (02 §6) or {screen_id: "person_detail", status: "candidate"} (02 §8)',
+    );
+  }
+
+  if (hasScreen) {
+    const screenId = requireString(args.screen_id, 'screen_id', 'mark', 'e.g. {screen_id: "person_detail", status: "candidate"}');
+    const screenStatus = requireString(args.status, 'status', 'mark', `one of ${SCREEN_STATUSES.join('|')} (02 §8)`);
+    if (!(SCREEN_STATUSES as readonly string[]).includes(screenStatus)) {
+      throw new AppMapError(ERROR_CODES.BAD_INPUT, `mark: status ${screenStatus} is not one of ${SCREEN_STATUSES.join('|')}`, 'see 02 §8');
+    }
+    return toolJson({ ...markScreen(ctx, {
+      screen_id: screenId, status: screenStatus as ScreenStatus,
+      ...(typeof args.reviewer === 'string' && args.reviewer !== '' ? { reviewer: args.reviewer } : {}),
+      ...(args.force === true ? { force: true } : {}),
+    }) }, cap(ctx));
+  }
+
+  const recipeId = requireString(args.recipe_id, 'recipe_id', 'mark', 'e.g. {recipe_id: "create_invoice", status: "candidate", recipe: <draft yaml>}');
+  const status = requireString(args.status, 'status', 'mark', `one of ${RECIPE_STATUSES.join('|')} (02 §6)`);
   if (!(RECIPE_STATUSES as readonly string[]).includes(status)) {
-    throw new AppMapError(ERROR_CODES.BAD_INPUT, `mark_recipe: status ${status} is not one of ${RECIPE_STATUSES.join('|')}`, 'see 02 §6');
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, `mark: status ${status} is not one of ${RECIPE_STATUSES.join('|')}`, 'see 02 §6');
   }
   let draft: RecipeFile | string | undefined;
   if (args.recipe !== undefined && args.recipe !== null) {
     if (typeof args.recipe === 'string') draft = args.recipe;
     else if (typeof args.recipe === 'object' && !Array.isArray(args.recipe)) draft = args.recipe as RecipeFile;
     else {
-      throw new AppMapError(ERROR_CODES.BAD_INPUT, 'mark_recipe: `recipe` must be the draft as YAML text or an object', 'pass the `yaml` compile_recipe returned (04 §3.8)');
+      throw new AppMapError(ERROR_CODES.BAD_INPUT, 'mark: `recipe` must be the draft as YAML text or an object', 'pass the `yaml` compile_recipe returned (04 §3.8)');
     }
   }
   const result = markRecipe(ctx, {
@@ -630,9 +663,10 @@ export function createServer(ctx: AppMapContext, opts: ServerOptions = {}): McpS
       screen_id: z.unknown().optional().describe('id registered in ids.yaml screens[]'),
       title: z.unknown().optional(),
       deep_link: z.unknown().optional().describe('appmap://<id>, or none'),
+      force: z.unknown().optional().describe('re-learn a screen that is no longer candidate (02 §8); records meta.relearned_from'),
       ...sessionArg,
     },
-  }, guarded('name_screen', (args: { screen_id?: unknown; title?: unknown; deep_link?: unknown; session?: unknown }) => toolNameScreen(ctx, args)));
+  }, guarded('name_screen', (args: { screen_id?: unknown; title?: unknown; deep_link?: unknown; force?: unknown; session?: unknown }) => toolNameScreen(ctx, args)));
 
   server.registerTool('compile_recipe', {
     title: 'Compile recipe',
@@ -649,17 +683,18 @@ export function createServer(ctx: AppMapContext, opts: ServerOptions = {}): McpS
     },
   }, guarded('compile_recipe', (args: { session?: unknown; task?: unknown; recipe_id?: unknown; params?: unknown; values?: unknown; revision_of?: unknown; from_seq?: unknown; to_seq?: unknown }) => toolCompileRecipe(ctx, args)));
 
-  server.registerTool('mark_recipe', {
-    title: 'Mark recipe',
-    description: 'Promote or demote a recipe (candidate | verified | ci_gate | retired).',
+  server.registerTool('mark', {
+    title: 'Mark',
+    description: 'Promote or demote one recipe or one screen (human review).',
     inputSchema: {
-      recipe_id: z.unknown().optional(),
-      status: z.unknown().optional().describe('candidate | verified | ci_gate | retired'),
+      recipe_id: z.unknown().optional().describe('a recipe id; pass this or screen_id, never both'),
+      screen_id: z.unknown().optional().describe('a screen id; the only way back out of verified (02 §8)'),
+      status: z.unknown().optional().describe('recipe: candidate | verified | ci_gate | retired · screen: candidate | verified | retired'),
       recipe: z.unknown().optional().describe('the reviewed draft (YAML text or object); required for a new candidate'),
-      reviewer: z.unknown().optional().describe('required for ci_gate (07 §7)'),
+      reviewer: z.unknown().optional().describe('required for ci_gate, and for a forced screen verified (07 §7)'),
       force: z.unknown().optional(),
     },
-  }, guarded('mark_recipe', (args: { recipe_id?: unknown; status?: unknown; recipe?: unknown; reviewer?: unknown; force?: unknown }) => toolMarkRecipe(ctx, args)));
+  }, guarded('mark', (args: { recipe_id?: unknown; screen_id?: unknown; status?: unknown; recipe?: unknown; reviewer?: unknown; force?: unknown }) => toolMark(ctx, args)));
 
   server.registerTool('export', {
     title: 'Export',

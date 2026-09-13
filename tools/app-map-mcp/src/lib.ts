@@ -57,7 +57,7 @@ export { MATCH_CONFIDENCE, eligibleRecipes, inferParams, matchRecipe, paramsNeed
 export * as compile from './recipes/compile.ts';
 export { ARGENT_VERBS, DRIVER_VERBS, UNIVERSAL_VERBS, bareToolName, classifyVerb, isStepVerb, normalizeVerb } from './recipes/verbs.ts';
 export type { DriverVerbTable, StepVerb, VerbKind } from './recipes/verbs.ts';
-export { THRESHOLDS, conditionKey, decideTransition, deepLinkCovers, eligibleForCiGate, markRecipe, markVerified, recompileCovers, recompileCoversEntry, recordRunOutcome, retireRecipesForScreen, screensReferenced, shouldRecompile, stepIdentity } from './recipes/lifecycle.ts';
+export { THRESHOLDS, conditionKey, decideTransition, deepLinkCovers, eligibleForCiGate, markRecipe, markScreen, markVerified, recompileCovers, recompileCoversEntry, recordRunOutcome, retireRecipesForScreen, screensReferenced, shouldRecompile, stepIdentity } from './recipes/lifecycle.ts';
 export type { LifecycleDecision, RecompileOutcome, RecompileRefusal, VerifiedEntities } from './recipes/lifecycle.ts';
 export { COMPATIBLE_ROLES, applyHeal, bboxProximity, heal, healedElement, jaroWinkler, lcsLength, proposeHeal, rejectHeal, scoreCandidates, toPendingHeal } from './heal.ts';
 export type { HealProposal } from './heal.ts';

@@ -19,7 +19,8 @@
  * | lint-ids [--platform ios,android] [--src dir…]              | CI                 | lint-ids.lintIds                                  |
  * | policy-check                                                | CI                 | policy-check.policyCheck                          |
  * | intent-critical-diff <base-ref> [--markdown]                | CI (bot comment)   | policy-check.intentCriticalDiff; exit 1 when `downgraded` is non-empty (07 §7 two approvals) |
- * | mark R STATUS [--reviewer NAME] [--recipe-file path] [--force] | dev            | lifecycle.markRecipe (CLI twin of the tool)      |
+ * | mark R STATUS [--reviewer NAME] [--recipe-file path] [--force] | dev            | lifecycle.markRecipe — the recipe half of the `mark` tool |
+ * | mark-screen S STATUS [--reviewer NAME] [--force]            | dev                | lifecycle.markScreen — the screen half (02 §8); the only way back out of `verified` (issue #16) |
  * | merge-driver %O %A %B [%P]                                  | git                | merge-driver.runMergeDriver                       |
  * | migrate-id OLD NEW [--dry-run]                              | dev                | migrate-id.migrateId                              |
  *
@@ -39,9 +40,9 @@ import { openContext } from './context.ts';
 import { AppMapError, ERROR_CODES, toErrorJson } from './errors.ts';
 import { cacheFile, PACKAGE_ROOT } from './paths.ts';
 import type {
-  HookPayload, RecipeParam, RecipeParams, RecipeStatus, RouterExport, SessionStartHookOutput,
+  HookPayload, RecipeParam, RecipeParams, RecipeStatus, RouterExport, ScreenStatus, SessionStartHookOutput,
 } from './types.ts';
-import { PARAM_TYPES, RECIPE_STATUSES } from './types.ts';
+import { PARAM_TYPES, RECIPE_STATUSES, SCREEN_STATUSES } from './types.ts';
 import { formatIssues, validateMap } from './validate.ts';
 import { exportMap } from './store/export.ts';
 import { formatRunStep, formatSessionStartContext } from './format.ts';
@@ -49,7 +50,7 @@ import { recordHookPayload } from './observe.ts';
 import { parseRequestLine, postToIngestSocket } from './ingest-socket.ts';
 import { importRouter } from './router-import.ts';
 import { compileRecipe } from './recipes/compile.ts';
-import { markRecipe } from './recipes/lifecycle.ts';
+import { markRecipe, markScreen } from './recipes/lifecycle.ts';
 import { maestroExport } from './recipes/maestro.ts';
 import { runAllHeadless, runHeadless } from './recipes/headless.ts';
 import { startGuidedRun } from './recipes/guided.ts';
@@ -72,7 +73,7 @@ export interface CliIo {
 
 export const COMMANDS = [
   'validate', 'export', 'record', 'summary', 'import-router', 'compile', 'run', 'maestro-export', 'drift', 'report',
-  'gen-configs', 'lint-ids', 'policy-check', 'intent-critical-diff', 'mark', 'merge-driver', 'migrate-id', 'help',
+  'gen-configs', 'lint-ids', 'policy-check', 'intent-critical-diff', 'mark', 'mark-screen', 'merge-driver', 'migrate-id', 'help',
 ] as const;
 export type Command = (typeof COMMANDS)[number];
 
@@ -232,6 +233,7 @@ async function dispatch(args: ParsedArgs, io: CliIo): Promise<number> {
     case 'policy-check': return cmdPolicyCheck(args, io);
     case 'intent-critical-diff': return cmdIntentCriticalDiff(args, io);
     case 'mark': return cmdMark(args, io);
+    case 'mark-screen': return cmdMarkScreen(args, io);
     case 'merge-driver': return cmdMergeDriver(args, io);
     case 'migrate-id': return cmdMigrateId(args, io);
     default: throw new UsageError(`unhandled command: ${args.command}`);
@@ -754,6 +756,32 @@ function cmdMark(args: ParsedArgs, io: CliIo): number {
   });
 }
 
+/**
+ * `mark-screen S STATUS [--reviewer NAME] [--force]` — the screen half of the `mark` tool
+ * (02 §8, issue #16). Separate from `mark` because that command's positional grammar is
+ * `mark RECIPE STATUS` and overloading the first positional would make `mark foo candidate`
+ * mean different things depending on what happens to exist.
+ */
+function cmdMarkScreen(args: ParsedArgs, io: CliIo): number {
+  const screenId = args.positional[0];
+  const status = args.positional[1];
+  if (screenId === undefined || status === undefined) throw new UsageError('mark-screen needs a screen id and a status');
+  if (!(SCREEN_STATUSES as readonly string[]).includes(status)) throw new UsageError(`status ${status} is not one of ${SCREEN_STATUSES.join('|')}`);
+  const reviewer = str(args, 'reviewer');
+  const config = configFor(args, io);
+  return withContext(config, {}, (ctx) => {
+    const result = markScreen(ctx, {
+      screen_id: screenId,
+      status: status as ScreenStatus,
+      ...(reviewer !== undefined ? { reviewer } : {}),
+      ...(bool(args, 'force') ? { force: true } : {}),
+    });
+    const cascade = result.retired_recipes.length > 0 ? ` (retired ${result.retired_recipes.join(', ')})` : '';
+    emit(io, args, result, `${result.screen_id}: ${result.from} → ${result.to}${cascade}`);
+    return 0;
+  });
+}
+
 function cmdMergeDriver(args: ParsedArgs, io: CliIo): number {
   const [base, ours, theirs, real] = args.positional;
   if (base === undefined || ours === undefined || theirs === undefined) {
@@ -789,6 +817,7 @@ commands:
   policy-check [REPO_ROOT]
   intent-critical-diff <base-ref> [--markdown]
   mark R STATUS [--reviewer NAME] [--recipe-file path] [--force]
+  mark-screen S STATUS [--reviewer NAME] [--force]   demote / retire a screen (02 §8)
   merge-driver %O %A %B [%P]
   migrate-id OLD NEW [--dry-run]
 global (before or after the command): --dir, --platform, --build, --json, --quiet

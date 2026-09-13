@@ -454,7 +454,7 @@ describe('name_screen (03 §5 explore mode)', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// compile_recipe → mark_recipe → export (04 §3.1, 04 §3.8, 03 §4)
+// compile_recipe → mark → export (04 §3.1, 04 §3.8, 03 §4)
 // ---------------------------------------------------------------------------------------------
 
 describe('compile_recipe (04 §3)', () => {
@@ -488,23 +488,50 @@ describe('compile_recipe (04 §3)', () => {
   });
 });
 
-describe('mark_recipe (04 §3.8, 07 §7)', () => {
+describe('mark (04 §3.8, 07 §7, 02 §8)', () => {
   it('refuses candidate without the reviewed draft (decision 35)', async () => {
-    const error = assertToolError(await call('mark_recipe', { recipe_id: 'brand_new', status: 'candidate' }), ERROR_CODES.BAD_INPUT);
+    const error = assertToolError(await call('mark', { recipe_id: 'brand_new', status: 'candidate' }), ERROR_CODES.BAD_INPUT);
     assert.match(error.error, /no draft was supplied/);
   });
 
-  it('refuses ci_gate without a reviewer (07 §7)', async () => {
-    assertToolError(await call('mark_recipe', { recipe_id: 'create_invoice', status: 'ci_gate' }), ERROR_CODES.BAD_INPUT);
+  it('needs exactly one of recipe_id or screen_id (02 §6 / 02 §8)', async () => {
+    const none = assertToolError(await call('mark', { status: 'candidate' }), ERROR_CODES.BAD_INPUT);
+    assert.match(none.error, /recipe_id/);
+    assert.match(none.error, /screen_id/);
+    assertToolError(await call('mark', { recipe_id: 'create_invoice', screen_id: 'invoice_list', status: 'candidate' }), ERROR_CODES.BAD_INPUT);
   });
 
-  it('refuses a status outside the enum and a missing recipe_id', async () => {
-    assertToolError(await call('mark_recipe', { recipe_id: 'create_invoice', status: 'blessed' }), ERROR_CODES.BAD_INPUT);
-    assertToolError(await call('mark_recipe', { status: 'verified' }), ERROR_CODES.BAD_INPUT);
+  // issue #16: the screen half — the only way back out of `verified`
+  it('demotes a verified screen through screen_id and export writes it (02 §8, issue #16)', async () => {
+    const marked = ok(await call('mark', { screen_id: 'invoice_list', status: 'candidate', reviewer: 'dana' }));
+    assert.deepEqual({ from: marked.from, to: marked.to, written: marked.written }, { from: 'verified', to: 'candidate', written: true });
+    assert.equal(ctx.db.getScreen('invoice_list')!.meta.reviewed_by, 'dana');
+    assert.equal(ctx.db.getScreen('invoice_list')!.meta.last_verified_build, undefined);
+
+    const exported = ok(await call('export'));
+    assert.ok((exported.written as string[]).includes('ios/screens/invoice_list.yaml'), JSON.stringify(exported.written));
+    const yaml = readFileSync(screenFile(t.config, 'invoice_list'), 'utf8');
+    assert.match(yaml, /^ {2}status: candidate$/m);
+    assert.match(yaml, /^ {2}reviewed_by: dana$/m);
+    assert.doesNotMatch(yaml, /^ {2}last_verified_build:/m);
+  });
+
+  it('refuses a screen status outside 02 §8 and an unknown screen', async () => {
+    assertToolError(await call('mark', { screen_id: 'invoice_list', status: 'ci_gate' }), ERROR_CODES.BAD_INPUT);
+    assertToolError(await call('mark', { screen_id: 'nope', status: 'candidate' }), ERROR_CODES.NOT_FOUND);
+  });
+
+  it('refuses ci_gate without a reviewer (07 §7)', async () => {
+    assertToolError(await call('mark', { recipe_id: 'create_invoice', status: 'ci_gate' }), ERROR_CODES.BAD_INPUT);
+  });
+
+  it('refuses a status outside the enum, and a call carrying no id key at all', async () => {
+    assertToolError(await call('mark', { recipe_id: 'create_invoice', status: 'blessed' }), ERROR_CODES.BAD_INPUT);
+    assertToolError(await call('mark', { status: 'verified' }), ERROR_CODES.BAD_INPUT);
   });
 
   it('demotes an existing recipe and export writes it back canonically (03 §4)', async () => {
-    const marked = ok(await call('mark_recipe', { recipe_id: 'create_invoice', status: 'candidate' }));
+    const marked = ok(await call('mark', { recipe_id: 'create_invoice', status: 'candidate' }));
     assert.equal(marked.from, 'verified');
     assert.equal(marked.to, 'candidate');
     assert.equal(marked.written, true);
@@ -522,7 +549,7 @@ describe('mark_recipe (04 §3.8, 07 §7)', () => {
   });
 
   it('refuses to overwrite a YAML file that changed on disk since load — the tool never forces (03 §4)', async () => {
-    ok(await call('mark_recipe', { recipe_id: 'create_invoice', status: 'candidate' }));
+    ok(await call('mark', { recipe_id: 'create_invoice', status: 'candidate' }));
     const path = recipeFile(t.config, 'create_invoice');
     const onDisk = `${readFileSync(path, 'utf8')}# edited in another window\n`;
     writeFileSync(path, onDisk);
@@ -541,7 +568,7 @@ describe('mark_recipe (04 §3.8, 07 §7)', () => {
   });
 
   it('names a machine recompile, and says nothing for an ordinary write (04 §8, issue #13)', async () => {
-    ok(await call('mark_recipe', { recipe_id: 'create_invoice', status: 'candidate' }));
+    ok(await call('mark', { recipe_id: 'create_invoice', status: 'candidate' }));
     const human = ok(await call('export'));
     assert.deepEqual(human.written, ['ios/recipes/create_invoice.yaml']);
     assert.equal(human.machine_recompiles, undefined, 'a human mark is not a machine recompile');
@@ -604,7 +631,7 @@ describe('03 §11 error contract', () => {
     ['record_observation', {}],
     ['name_screen', {}],
     ['compile_recipe', {}],
-    ['mark_recipe', {}],
+    ['mark', {}],
   ];
 
   it('answers every malformed call with {error, hint, code} and keeps serving', async () => {
@@ -633,7 +660,7 @@ describe('03 §11 error contract', () => {
       ['run_recipe', { recipe_id: 'create_invoice', params: 'notanobject' }, /params/],
       ['compile_recipe', { session: 's', task: 't', recipe_id: 'r', params: 'x' }, /params/],
       ['record_observation', { tool: 42 }, /tool/],
-      ['mark_recipe', { recipe_id: 'create_invoice', status: 7 }, /status/],
+      ['mark', { recipe_id: 'create_invoice', status: 7 }, /status/],
       ['match_recipe', { instruction: { a: 1 } }, /instruction/],
     ];
     for (const [name, args, expected] of cases) {

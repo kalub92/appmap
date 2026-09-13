@@ -90,7 +90,7 @@ table, not the numbers.
 
 | signal | action | enforced in |
 |---|---|---|
-| recipe replay success ≥ 95% across ≥ 3 builds | eligible for `ci_gate` (human promotes via `mark_recipe`) | `src/recipes/lifecycle.ts` (04 §8 `verified → ci_gate` guard) |
+| recipe replay success ≥ 95% across ≥ 3 builds | eligible for `ci_gate` (human promotes via `mark`) | `src/recipes/lifecycle.ts` (04 §8 `verified → ci_gate` guard) |
 | `candidate → verified` | ≥ 3 successful replays across ≥ 2 sessions, no unresolved heals | `src/recipes/lifecycle.ts` |
 | recipe fallback rate > 20% on a build | force recompile from the latest successful trajectory | `src/recipes/lifecycle.ts` |
 | recipe failure > 50% of last 10 runs, over a window of ≥ 3 runs (or ≥ 2 heals pending review) | auto-recompile; the `version` moves only if the recompiled structure differs (04 §8) | `src/recipes/lifecycle.ts` (`THRESHOLDS.recompile_min_runs`, `failureRateExceeded`) |

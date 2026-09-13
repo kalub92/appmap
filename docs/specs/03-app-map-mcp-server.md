@@ -92,9 +92,9 @@ Tool names appear to the harness as `mcp__app-map__<name>`. All outputs are comp
 | `run_recipe` | `{recipe_id, params, mode: guided \| headless}` | guided: `{run_id, step}`; headless: run report | 04 §5–6 |
 | `report_step` | `{run_id, step_id, ok, note?}` | next step, `done`, or `fallback: {step, reason}` | verifies against last observation |
 | `record_observation` | `{tool, input, snapshot, ok}` | `{screen_before, screen_after}` | fallback when hooks are unavailable; costs tokens |
-| `name_screen` | `{screen_id, title?, deep_link?}` | candidate screen created from last observation | explore mode only |
+| `name_screen` | `{screen_id, title?, deep_link?, force?}` | candidate screen created from last observation | explore mode only; `force` re-learns a screen that is no longer `candidate` and records `meta.relearned_from` (02 §8) |
 | `compile_recipe` | `{session, task, recipe_id, params[]}` | draft recipe YAML for review | 04 §3 |
-| `mark_recipe` | `{recipe_id, status}` | | human-in-the-loop promote/demote |
+| `mark` | `{recipe_id \| screen_id, status}` | | human-in-the-loop promote/demote; exactly one id key says which kind. A screen demote is the only way back out of `verified` (02 §8) |
 | `export` | `{}` | list of files written | same as CLI `export` |
 
 `get_screen` output format (fixed, parse-stable):
@@ -135,6 +135,8 @@ Resources exist for harnesses that prefer reading over tool calls; tools remain 
 | `app-map gen-configs` | CI, dev | `.mcp.json` → Cursor/Codex configs (05 §2) |
 | `app-map lint-ids` | CI | 01 R8 |
 | `app-map migrate-id OLD NEW` | dev | 02 §8 |
+| `app-map mark R STATUS [--reviewer NAME] [--recipe-file path] [--force]` | dev | 04 §3.8 — the recipe half of the `mark` tool |
+| `app-map mark-screen S STATUS [--reviewer NAME] [--force]` | dev | 02 §8 — the screen half; the only way back out of `verified` |
 | `app-map merge-driver %O %A %B` | git | 02 §9 |
 
 ## 11. Non-functional requirements

@@ -174,7 +174,7 @@ last_verified_build: "4412"
 
 Step actions: `tap`, `type`, `select`, `swipe`, `open_link`, `wait_for`, `dismiss_gate`. `expect` conditions: `screen`, `focused`, `visible`, `not_visible`, `text_present` (static copy only). Every step with an `expect` is a verification point; steps without one inherit "screen unchanged".
 
-`provenance.machine_recompile: true` means this version's *steps* were rebuilt by the automatic recompile (04 §8), not authored or approved by a human. It sits directly above `reviewed_by` because that is what it qualifies: the signature is historical, carried over from the version the reviewer actually read. `mark_recipe(ci_gate, reviewer)` deletes the key (07 §7).
+`provenance.machine_recompile: true` means this version's *steps* were rebuilt by the automatic recompile (04 §8), not authored or approved by a human. It sits directly above `reviewed_by` because that is what it qualifies: the signature is historical, carried over from the version the reviewer actually read. `mark(ci_gate, reviewer)` deletes the key (07 §7).
 
 Status lifecycle (04 §8): `candidate` on compile → `verified` after ≥3 successful replays across ≥2 sessions → `ci_gate` after ≥95% replay success across ≥3 builds → `retired` when a screen it depends on is removed.
 
@@ -203,7 +203,11 @@ SQLite (`cache.sqlite`, WAL mode) holds the loaded map plus volatile counters: p
 - `last_verified_build` is the build number of the last successful verification. On a new build, confidence decays: `confidence = base × 0.9^(builds_since_verified)`, floor 0.2. Decay is computed, not stored.
 - A renamed id is a migration: `app-map migrate-id <old> <new>` rewrites every reference across screens, recipes, and `ids.yaml` in one commit.
 - A screen removed from the router export is marked `status: retired` (not deleted) for one release, then deleted; recipes depending on it become `retired`.
+- A screen's `verified` is **earned by observation** (08 §5 row 5: marker + every `required_id` + a matching structural hash, on one observation) and **withdrawn only by a human**: `mark {screen_id, status: candidate}` / `app-map mark-screen <id> candidate`. The demote deletes `last_verified_build` — the confidence decay above must not report a verification that has been taken back — and records `meta.reviewed_by`. `verified` cannot be marked by hand without `force` plus a `reviewer`: a hand-signed verification is exactly the self-certification the demote exists to undo. Marking a screen `retired` by hand cascades to its recipes like a router-export removal, and KEEPS `last_verified_build`, which is what `import-router --purge-retired` reads to mean "retired for one release".
+- `name_screen` with `force` re-learns a screen that is no longer `candidate` (the signature is rebuilt from the current observation), drops it back to `candidate`, and records `meta.relearned_from: <the overridden status>` so the override is visible in the PR diff. A human `mark` with a `reviewer` clears the marker — the same contract `provenance.machine_recompile` has for recipes (§6).
+- A demote is not a lock: the next clean observation re-verifies the screen. Demote, then re-learn.
 - `schema_version` bumps require a migration script under `tools/app-map-mcp/migrations/`.
+- The schemas are part of the MAP, not of the package: `validate` compiles `<APP_MAP_DIR>/schema/*.schema.json`, the copy the consuming repo vendored. So an **additive** optional field (`meta.reviewed_by`, `meta.relearned_from`, `provenance.machine_recompile`) needs no `schema_version` bump — every existing file stays valid — but a consumer still has to re-copy `app-map/schema/` when it upgrades the package, because `meta` and `provenance` are `additionalProperties: false` and the first file a newer package writes then fails rule 1 (`must NOT have additional properties`), which cascades: a screen file that fails to load takes its recipes' `expect.screen` down with it (rule 3). A bump plus a migration is for the other kind of change — one that makes an EXISTING file invalid.
 
 ## 9. Merge rules
 

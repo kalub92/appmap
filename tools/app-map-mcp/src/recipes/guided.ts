@@ -706,7 +706,7 @@ function missingParams(recipe: RecipeFile, params: RecipeParams): string[] {
     .map((p) => p.name);
 }
 
-/** the recipe as the session knows it (cache first: `mark_recipe` and lifecycle land there) */
+/** the recipe as the session knows it (cache first: `mark` and lifecycle land there) */
 function recipeOf(ctx: AppMapContext, id: string): RecipeFile | undefined {
   return ctx.db.getRecipe(id) ?? ctx.map.recipes.get(id);
 }

@@ -8,7 +8,7 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import type { RecipeStats } from '../store/db.ts';
 import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
-import type { ElementDef, RecipeFile, RecipeStatus, RunRecord, ScreenFile } from '../types.ts';
+import type { ElementDef, RecipeFile, RecipeStatus, RunRecord, ScreenFile, ScreenStatus } from '../types.ts';
 import { now } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { loadConfig } from '../config.ts';
@@ -17,8 +17,8 @@ import { schemaDir, serverLog } from '../paths.ts';
 import { validateAgainstSchema, validateEventLine } from '../yaml/schemas.ts';
 import {
   THRESHOLDS, conditionKey, decideTransition, deepLinkCovers, eligibleForCiGate, markRecipe,
-  markVerified, recompileCovers, recompileCoversEntry, recordRunOutcome, retireRecipesForScreen,
-  screensReferenced, shouldRecompile, stepIdentity,
+  markScreen, markVerified, recompileCovers, recompileCoversEntry, recordRunOutcome,
+  retireRecipesForScreen, screensReferenced, shouldRecompile, stepIdentity,
 } from '../recipes/lifecycle.ts';
 import { isCollapseWarning } from '../recipes/compile.ts';
 import { canonicalYaml } from '../yaml/canonical.ts';
@@ -490,6 +490,72 @@ describe('markRecipe — 04 §3.8 / 07 §7', () => {
     const prose = draft({ ...structural, version: 2, description: 'Filter the invoices list' });
     markRecipe(ctx, { recipe_id: 'file_invoices', status: 'candidate', recipe: prose });
     assert.equal(ctx.db.getRecipe('file_invoices')?.version, 2, 'no structural change → no version bump');
+  });
+});
+
+describe('markScreen — 02 §8 / issue #16 (the way back out of verified)', () => {
+  it('demotes a verified screen, records the reviewer and withdraws the verification', () => {
+    assert.equal(ctx.map.screens.get('invoice_list')!.meta.status, 'verified', 'the fixture starts verified');
+    const r = markScreen(ctx, { screen_id: 'invoice_list', status: 'candidate', reviewer: 'dana' });
+    assert.deepEqual(r, { screen_id: 'invoice_list', from: 'verified', to: 'candidate', written: true, retired_recipes: [] });
+
+    const meta = ctx.db.getScreen('invoice_list')!.meta;
+    assert.equal(meta.status, 'candidate');
+    assert.equal(meta.reviewed_by, 'dana', '07 §7: the human who took the verification back is recorded');
+    assert.equal(meta.last_verified_build, undefined, '02 §8: the build stamp goes with the verification');
+    assert.ok(ctx.db.listDirty().some((d) => d.kind === 'screen' && d.key === 'invoice_list' && d.reason === 'mark_screen:candidate'));
+  });
+
+  it('an unknown status, an empty id and an unknown screen are refused (02 §8 enum)', () => {
+    assert.throws(
+      () => markScreen(ctx, { screen_id: 'invoice_list', status: 'blessed' as ScreenStatus }),
+      (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT && /candidate\|verified\|retired/.test(e.message),
+    );
+    assert.throws(() => markScreen(ctx, { screen_id: '', status: 'candidate' }), isCode(ERROR_CODES.BAD_INPUT));
+    assert.throws(() => markScreen(ctx, { screen_id: 'nope', status: 'candidate' }), isCode(ERROR_CODES.NOT_FOUND));
+    assert.equal(ctx.db.getScreen('invoice_list')!.meta.status, 'verified', 'nothing was written');
+  });
+
+  it('verified cannot be hand-signed without force, and forcing it needs a reviewer (07 §7)', () => {
+    assert.throws(
+      () => markScreen(ctx, { screen_id: 'invoice_list', status: 'verified' }),
+      (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT && /clean observation/.test(e.hint),
+    );
+    assert.throws(
+      () => markScreen(ctx, { screen_id: 'invoice_list', status: 'verified', force: true }),
+      (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT && /reviewer/.test(e.message),
+    );
+    const r = markScreen(ctx, { screen_id: 'invoice_list', status: 'verified', force: true, reviewer: 'dana' });
+    assert.equal(r.to, 'verified');
+    assert.equal(ctx.db.getScreen('invoice_list')!.meta.last_verified_build, ctx.build);
+    assert.equal(ctx.db.getScreen('invoice_list')!.meta.reviewed_by, 'dana');
+  });
+
+  it('retiring a screen by hand cascades to its recipes and KEEPS last_verified_build (02 §8)', () => {
+    const r = markScreen(ctx, { screen_id: 'client_picker', status: 'retired' });
+    assert.deepEqual(r.retired_recipes, ['create_invoice']);
+    assert.equal(ctx.db.getRecipe('create_invoice')!.status, 'retired');
+    // `import-router --purge-retired` deletes a retired screen only once a NEWER build arrives;
+    // `isNewerBuild(b, undefined)` is true, so clearing the stamp here would delete it at once
+    assert.equal(ctx.db.getScreen('client_picker')!.meta.last_verified_build, '4412');
+  });
+
+  it('gates are markable too — they are screens with kind: gate (02 §4.2)', () => {
+    const r = markScreen(ctx, { screen_id: 'gate.push_permission', status: 'candidate' });
+    assert.deepEqual({ from: r.from, to: r.to, written: r.written }, { from: 'verified', to: 'candidate', written: true });
+    const gate = ctx.db.getScreen('gate.push_permission')!;
+    assert.equal(gate.kind, 'gate', 'the gate is loaded from ctx.map.gates, not ctx.map.screens');
+    assert.equal(gate.meta.status, 'candidate');
+  });
+
+  it('a reviewer signature clears the forced-re-learn marker (the issue #13 precedent)', () => {
+    const screen: ScreenFile = structuredClone(ctx.map.screens.get('invoice_list')!);
+    screen.meta = { ...screen.meta, status: 'candidate', relearned_from: 'verified' };
+    ctx.db.putScreen(screen, { dirty: false });
+    markScreen(ctx, { screen_id: 'invoice_list', status: 'candidate', reviewer: 'dana' });
+    const meta = ctx.db.getScreen('invoice_list')!.meta;
+    assert.equal(meta.relearned_from, undefined, 'the human has now signed this data');
+    assert.equal(meta.reviewed_by, 'dana');
   });
 });
 

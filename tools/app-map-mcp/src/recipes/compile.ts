@@ -3,7 +3,7 @@
  *
  * `compileRecipe(ctx, input)` produces a DRAFT (`status: candidate`) from the session's
  * trajectory (observe.readTrajectory / db.listObservations) and returns it for LLM review.
- * Nothing is written until `mark_recipe(candidate)` (lifecycle.markRecipe) — 04 §3.8.
+ * Nothing is written until `mark(candidate)` (lifecycle.markRecipe) — 04 §3.8.
  *
  *  1. slice: observations from the task's `task_seq` (or `input.from_seq`) to `input.to_seq`,
  *     else the session's `task_end_seq` (set by `observe.finishTask`: compile_recipe/Stop hook/
@@ -273,7 +273,7 @@ export function translateSteps(map: LoadedMap, observations: readonly Observatio
     if (kind === 'type') {
       // Argent's `keyboard --key return` presses a named key and types nothing; 02 §6 has no step
       // for that (recipe.schema.json requires `type.text` minLength 1), so it is a drop, not a
-      // step the draft would fail `mark_recipe` with.
+      // step the draft would fail `mark` with.
       const text = typeof obs.input.text === 'string' ? obs.input.text : '';
       if (text === '') {
         const key = typeof obs.input.key === 'string' ? ` (key: ${obs.input.key})` : '';
@@ -516,7 +516,7 @@ export function markIntentCritical(map: LoadedMap, steps: readonly RecipeStep[])
  * They are derived from the recipe ID — map structure, never task data — because the task text
  * routinely names a client or an amount and `description`/`matches` are structure-only fields
  * (02 §10.8, 07 §2): seeding them from `input.task` made the compiler's own draft fail
- * `validate` rule 8, so `mark_recipe` rejected it. The schema requires a non-empty description
+ * `validate` rule 8, so `mark` rejected it. The schema requires a non-empty description
  * and at least one match, so the placeholder is the humanised id rather than an empty value.
  */
 export function placeholderDescription(recipeId: string): string {
@@ -637,7 +637,7 @@ export function compileRecipe(ctx: AppMapContext, input: CompileRecipeInput): Co
   // 7. intent_critical (04 §3.7)
   const finalSteps = renumber(markIntentCritical(ctx.map, post.steps));
 
-  // 8. emit (04 §3.8) — a DRAFT: nothing is written until mark_recipe(candidate)
+  // 8. emit (04 §3.8) — a DRAFT: nothing is written until mark(candidate)
   const lastScreen = collapsed.observations[collapsed.observations.length - 1]!.screen_after;
   if (previous?.verify === undefined && lastScreen === UNKNOWN_SCREEN) {
     return fail(ctx, input, version, 'unknown_screen', 'the final screen of the trajectory could not be identified, so `verify` cannot be written');
@@ -651,7 +651,7 @@ export function compileRecipe(ctx: AppMapContext, input: CompileRecipeInput): Co
     version,
     platform: ctx.map.platform,
     description,
-    // the LLM replaces this with real patterns before mark_recipe (04 §3.8)
+    // the LLM replaces this with real patterns before mark (04 §3.8)
     matches: previous?.matches ?? placeholderMatches(input.recipe_id),
     params,
     ...(loggedIn ? { preconditions: [{ auth: 'logged_in' as const }] } : {}),
@@ -665,7 +665,7 @@ export function compileRecipe(ctx: AppMapContext, input: CompileRecipeInput): Co
       ...(input.revision_of !== undefined ? { revision_of: input.revision_of } : {}),
     },
   };
-  if (previous === undefined) warnings.push('`description` and `matches` are placeholders derived from the recipe id — write real ones (structure only, never task data), and add `verify.visible` assertions, before mark_recipe (04 §3.8, 02 §10.8)');
+  if (previous === undefined) warnings.push('`description` and `matches` are placeholders derived from the recipe id — write real ones (structure only, never task data), and add `verify.visible` assertions, before mark(candidate) (04 §3.8, 02 §10.8)');
   if (collapsed.removed.length > 0) warnings.push(collapseWarning(collapsed.removed));
 
   const yaml = canonicalYaml('recipe', recipe);

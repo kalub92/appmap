@@ -314,7 +314,7 @@ describe('app-map CI commands', () => {
   });
 });
 
-describe('app-map import-router / mark / migrate-id / merge-driver (03 §10)', () => {
+describe('app-map import-router / mark / mark-screen / migrate-id / merge-driver (03 §10)', () => {
   it('import-router --dry-run reports without writing; a real run writes canonical YAML', () => {
     withTemp((t) => {
       const routerFile = join(PACKAGE_ROOT, 'fixtures', 'router-export.ios.json');
@@ -352,7 +352,7 @@ describe('app-map import-router / mark / migrate-id / merge-driver (03 §10)', (
     });
   });
 
-  it('mark is the CLI twin of mark_recipe (07 §7: ci_gate needs a reviewer)', () => {
+  it('mark is the CLI twin of the mark tool\'s recipe half (07 §7: ci_gate needs a reviewer)', () => {
     withTemp((t) => {
       const missing = runCli(['mark', 'create_invoice', 'ci_gate'], { dir: t.dir });
       assert.equal(missing.code, 1, missing.stdout + missing.stderr);
@@ -360,6 +360,35 @@ describe('app-map import-router / mark / migrate-id / merge-driver (03 §10)', (
       const ok = runCli(['mark', 'create_invoice', 'ci_gate', '--reviewer', 'dana', '--force'], { dir: t.dir });
       assert.equal(ok.code, 0, ok.stdout + ok.stderr);
       assert.match(ok.stdout, /create_invoice: verified → ci_gate/);
+    });
+  });
+
+  // issue #16: the CLI half of the demote. `name_screen` has no CLI twin, so this is the command
+  // the reworded `already verified` hint points a human at.
+  it('mark-screen demotes a verified screen and export writes the override (02 §8, issue #16)', () => {
+    withTemp((t) => {
+      const marked = runCli(['mark-screen', 'invoice_list', 'candidate', '--reviewer', 'dana', '--json'], { dir: t.dir });
+      assert.equal(marked.code, 0, marked.stdout + marked.stderr);
+      const json = JSON.parse(marked.stdout) as { screen_id: string; from: string; to: string; retired_recipes: string[] };
+      assert.deepEqual({ from: json.from, to: json.to }, { from: 'verified', to: 'candidate' });
+      assert.deepEqual(json.retired_recipes, []);
+
+      assert.equal(runCli(['export'], { dir: t.dir }).code, 0);
+      const yaml = readFileSync(join(t.dir, 'ios', 'screens', 'invoice_list.yaml'), 'utf8');
+      assert.match(yaml, /^ {2}status: candidate$/m);
+      assert.match(yaml, /^ {2}reviewed_by: dana$/m, '07 §7: who took the verification back');
+      assert.doesNotMatch(yaml, /^ {2}last_verified_build:/m, '02 §8: the stamp goes with the verification');
+      // the new meta keys must be canonical AND schema-valid, or every later export/validate breaks
+      assert.equal(runCli(['export', '--check'], { dir: t.dir }).code, 0, 'what mark-screen wrote is canonical');
+      assert.equal(runCli(['validate'], { dir: t.dir }).code, 0, 'screen.schema.json accepts reviewed_by');
+    });
+  });
+
+  it('mark-screen retires a screen and cascades to its recipes (02 §8)', () => {
+    withTemp((t) => {
+      const r = runCli(['mark-screen', 'client_picker', 'retired'], { dir: t.dir });
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /client_picker: verified → retired \(retired create_invoice\)/);
     });
   });
 
@@ -498,6 +527,8 @@ describe('exit codes (03 §10: 0 ok · 1 failure · 2 usage)', () => {
       assert.equal(runCli(['migrate-id', 'only.one.id'], { dir: t.dir }).code, 2);
       assert.equal(runCli(['mark', 'create_invoice'], { dir: t.dir }).code, 2);
       assert.equal(runCli(['mark', 'create_invoice', 'nonsense'], { dir: t.dir }).code, 2);
+      assert.equal(runCli(['mark-screen', 'invoice_list'], { dir: t.dir }).code, 2);
+      assert.equal(runCli(['mark-screen', 'invoice_list', 'blessed'], { dir: t.dir }).code, 2, '02 §8 has no such status');
       assert.equal(runCli(['intent-critical-diff'], { dir: t.dir }).code, 2);
     });
   });
@@ -505,7 +536,7 @@ describe('exit codes (03 §10: 0 ok · 1 failure · 2 usage)', () => {
   it('help exits 0 and lists every command', () => {
     const r = runCli(['help']);
     assert.equal(r.code, 0);
-    for (const cmd of ['validate', 'export', 'record', 'summary', 'import-router', 'compile', 'run', 'maestro-export', 'drift', 'report', 'gen-configs', 'lint-ids', 'policy-check', 'intent-critical-diff', 'mark', 'merge-driver', 'migrate-id']) {
+    for (const cmd of ['validate', 'export', 'record', 'summary', 'import-router', 'compile', 'run', 'maestro-export', 'drift', 'report', 'gen-configs', 'lint-ids', 'policy-check', 'intent-critical-diff', 'mark', 'mark-screen', 'merge-driver', 'migrate-id']) {
       assert.ok(r.stdout.includes(cmd), `usage must mention ${cmd}`);
     }
     assert.equal(runCli([]).code, 0);
@@ -584,11 +615,15 @@ describe('parseArgs — the 03 §10 flag grammar', () => {
     assert.deepEqual(l.flags.src, ['ios/App', 'ios/Feature']);
   });
 
-  it('mark / merge-driver / migrate-id positionals', () => {
+  it('mark / mark-screen / merge-driver / migrate-id positionals', () => {
     const mk = parseArgs(['mark', 'create_invoice', 'ci_gate', '--reviewer', 'dana', '--recipe-file', 'r.yaml', '--force']);
     assert.deepEqual(mk.positional, ['create_invoice', 'ci_gate']);
     assert.equal(mk.flags.reviewer, 'dana');
     assert.equal(mk.flags.force, true);
+    const ms = parseArgs(['mark-screen', 'person_detail', 'candidate', '--reviewer', 'dana']);
+    assert.equal(ms.command, 'mark-screen');
+    assert.deepEqual(ms.positional, ['person_detail', 'candidate']);
+    assert.equal(ms.flags.reviewer, 'dana');
     assert.deepEqual(parseArgs(['merge-driver', 'O', 'A', 'B', 'P']).positional, ['O', 'A', 'B', 'P']);
     const mi = parseArgs(['migrate-id', 'a.b.c', 'a.b.d', '--dry-run']);
     assert.deepEqual(mi.positional, ['a.b.c', 'a.b.d']);
@@ -691,7 +726,7 @@ describe('app-map compile (04 §3, 03 §10)', () => {
       assert.match(r.stdout, /^id: create_invoice$/m, 'canonical key order starts at `id`');
       assert.match(r.stdout, /^status: candidate$/m, '04 §3.8: a draft is never verified');
       assert.match(r.stdout, /compiled_from: sess_2026-09-10_0007/, 'provenance names the session');
-      // 04 §3.8: nothing is written until mark_recipe
+      // 04 §3.8: nothing is written until mark(candidate)
       assert.equal(runCli(['export', '--check'], { dir: t.dir }).code, 0);
       assert.equal(readFileSync(join(t.dir, 'ios', 'recipes', 'create_invoice.yaml'), 'utf8'), committed);
     });

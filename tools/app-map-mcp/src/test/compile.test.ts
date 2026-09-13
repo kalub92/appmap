@@ -114,7 +114,7 @@ describe('compileRecipe — 04 §9: the pilot session compiles to create_invoice
     assert.equal(recipe.matches[0]!.includes('Acme'), false);
     assert.ok(recipe.matches[0]!.length <= 200, '07 §4: ≤200 chars');
     assert.deepEqual(forbiddenContentIssues('draft.yaml', recipe), [], 'the compiler\'s own draft passes rule 8');
-    assert.ok(r.warnings.some((w) => w.includes('mark_recipe')));
+    assert.ok(r.warnings.some((w) => w.includes('mark(candidate)')));
   });
 
   it('a task full of data still yields a data-free draft that validates (02 §10.8, 07 §2)', () => {
@@ -139,7 +139,7 @@ describe('compileRecipe — 04 §9: the pilot session compiles to create_invoice
     assert.equal(r.yaml.endsWith('\n'), true);
   });
 
-  it('writes nothing — only `mark_recipe(candidate)` does (04 §3.8)', () => {
+  it('writes nothing — only `mark(candidate)` does (04 §3.8)', () => {
     insert(trajectory());
     const before = ctx.db.getRecipe('create_invoice');
     const r = compile({ values: { amount: 50, client: 'Acme Corp' } });

@@ -379,7 +379,7 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 34. **ids.yaml `title`/`deep_link` must agree with the screen file** (validate rule 2): `title`
     exactly, `deep_link` on `routeKey` (the registry records the route; the screen file may add
     `?fixture=…`, 01 R5 — `invoice_detail` does). `indexMap` serves the screen file's values.
-35. **`mark_recipe` carries the draft**: `{recipe_id, status, recipe?, reviewer?}`
+35. **`mark` carries the draft**: `{recipe_id, status, recipe?, reviewer?}`
     (`MarkRecipeInput`). The server keeps no per-session draft; `candidate` for an unknown
     recipe requires `recipe` (RecipeFile or YAML text, re-validated), `ci_gate` requires
     `reviewer` (07 §7). The CLI twin is `app-map mark`.
@@ -458,7 +458,7 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 54. **The pilot deliberately ships no `ci_gate` recipe.** `app-map/ios/recipes/create_invoice.yaml`
     is `status: verified`. 07 §7 makes promotion a human act that needs a reviewer who is not the
     author **and** a green R5 run against the build — neither is possible without the real app, and
-    `mark_recipe --force` would fake both. The consequence is that 06 R4's blocking rule
+    `mark --force` would fake both. The consequence is that 06 R4's blocking rule
     (`summary.blocking` only on a broken screen a `ci_gate` recipe references) and 06 R5
     (`maestro-export --status ci_gate` → "(no recipes matched)", exit 0) are inert on the committed
     map; `src/test/drift.test.ts` promotes the recipe in a temp map to exercise 06 §5. Promoting it
@@ -710,7 +710,7 @@ Fill: `server.ts`, `ingest-socket.ts`, `index.ts`.
 Tests: `server.test.ts` — in-memory MCP client (SDK `InMemoryTransport`) lists exactly the 13
 tools and 3 resource templates; `summary` ≤600 tokens; `get_screen` block with `conf` from the
 last observation and, for a screen never observed, the decayed value; `match_recipe` with
-`"delete a client"` (no_match) still declares the task on the session; `mark_recipe
+`"delete a client"` (no_match) still declares the task on the session; `mark
 {status:'candidate'}` without `recipe` → `bad_input`; every tool returns `{error, hint, code}`
 with `isError` instead of throwing (feed a bad `screen_id`); resources return the YAML verbatim;
 `startServer` with a fake exec whose `maestro --version` fails still serves tools and logs a

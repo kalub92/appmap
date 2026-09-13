@@ -762,6 +762,20 @@
             "retired"
           ]
         },
+        "relearned_from": {
+          "type": "string",
+          "enum": [
+            "candidate",
+            "verified",
+            "retired"
+          ],
+          "description": "the status a name_screen force-re-learn overrode (02 §8); cleared when a human marks the screen"
+        },
+        "reviewed_by": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the human who last marked this screen by hand (07 §7)"
+        },
         "last_verified_build": {
           "type": "string",
           "pattern": "^[0-9A-Za-z][0-9A-Za-z.\\-]*$",

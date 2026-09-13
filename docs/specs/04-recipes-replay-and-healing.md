@@ -23,7 +23,7 @@ Turn one successful exploration into a recipe that replays without the LLM, keep
 5. **Entry optimization**: if the first screen where a step is taken has a deep link, replace the leading navigation steps with `entry.deep_link` and keep the navigation as `fallback_path`.
 6. **Postconditions**: each step's `expect` is `screen: <screen_after>` when the screen changed, else `focused`/`visible` inferred from the next observation.
 7. **Mark** any step touching an `intent_critical` element.
-8. Emit YAML with `status: candidate` and provenance; return it for LLM review. The LLM adds `matches`, `description`, checks params, and calls `mark_recipe(candidate)` to write it. Nothing is written without that call.
+8. Emit YAML with `status: candidate` and provenance; return it for LLM review. The LLM adds `matches`, `description`, checks params, and calls `mark(candidate)` to write it. Nothing is written without that call.
 
 A recipe that cannot be compiled (loops that never converge, unparameterized values, missing postconditions) fails loudly with the reason; the trajectory stays for a human to inspect.
 
@@ -130,9 +130,9 @@ Rejected → `fallback` to the LLM with the top-3 candidates listed. An `intent_
 
 | transition | condition |
 |---|---|
-| — → `candidate` | `mark_recipe(candidate)` after compile review |
+| — → `candidate` | `mark(candidate)` after compile review |
 | `candidate` → `verified` | ≥3 successful replays (guided or headless) across ≥2 sessions, no unresolved heals |
-| `verified` → `ci_gate` | ≥95% replay success across ≥3 builds; human `mark_recipe(ci_gate)`; CODEOWNERS review (07 §7) |
+| `verified` → `ci_gate` | ≥95% replay success across ≥3 builds; human `mark(ci_gate)`; CODEOWNERS review (07 §7) |
 | any → `candidate` (recompile) | failure rate over the last 10 runs > 50%, or ≥2 heals pending review; the compiler produces a new `version` from the latest successful trajectory |
 | any → `retired` | a referenced screen is retired |
 
@@ -170,7 +170,7 @@ recipes towards the subset that always passes.
 `ci_gate` recipe that is recompiled keeps its historical reviewer but must be promoted again by a
 human. Because that signature outlives the steps it was given for, an accepted rebuild also sets
 `provenance.machine_recompile: true` (02 §6) — deleted again when a human signs the recipe with
-`mark_recipe(ci_gate, reviewer)`. `APP_MAP_RECOMPILE=off` (03 §3) skips the rebuild entirely:
+`mark(ci_gate, reviewer)`. `APP_MAP_RECOMPILE=off` (03 §3) skips the rebuild entirely:
 replay is then strictly read-only against the map. `export` labels a file written from a machine
 recompile distinctly from one merely canonicalised.
 

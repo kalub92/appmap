@@ -53,6 +53,16 @@ describe('canonical serializer (02 §2.3)', () => {
     for (const [type, keys] of Object.entries(KEY_ORDER)) assert.ok(keys.length > 0, type);
   });
 
+  // issue #16: `relearned_from` must land directly above `reviewed_by`, and both above the build
+  // stamp, so a PR diff reads "re-learned over a verified screen / signed off by / last verified".
+  it('meta puts the issue #16 review keys between status and last_verified_build', () => {
+    const meta = canonicalize('meta', {
+      last_verified_build: '4412', reviewed_by: 'dana', status: 'candidate',
+      relearned_from: 'verified', sources: ['exploration'],
+    }) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(meta), ['sources', 'status', 'relearned_from', 'reviewed_by', 'last_verified_build']);
+  });
+
   it('omits null/undefined and optional empty arrays, keeps required empty arrays', () => {
     const out = canonicalize('screen', { id: 'x', kind: 'screen', title: null, gates: [], variants: undefined, dynamic_regions: [], elements: [], edges: [], signature: { marker: 'none', required_ids: [] }, meta: { sources: ['manual'], status: 'candidate' } }) as Record<string, unknown>;
     assert.deepEqual(Object.keys(out), ['id', 'kind', 'signature', 'elements', 'edges', 'meta']);

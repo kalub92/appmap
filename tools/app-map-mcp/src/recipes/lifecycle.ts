@@ -1,7 +1,9 @@
 /**
- * [C1] Recipe status lifecycle (02 §6, 04 §8) with the 08 §5 thresholds AS CODE — 06 §4 and
- * 08 §8 require these numbers to live here and nowhere else (drift.ts and report.ts import
- * `THRESHOLDS`).
+ * [C1] Recipe AND screen status lifecycle (02 §6, 02 §8, 04 §8) with the 08 §5 thresholds AS CODE
+ * — 06 §4 and 08 §8 require these numbers to live here and nowhere else (drift.ts and report.ts
+ * import `THRESHOLDS`).
+ *
+ * ## Recipe transitions
  *
  * | transition                     | condition (from `RecipeStats`)                                              |
  * |--------------------------------|------------------------------------------------------------------------------|
@@ -12,6 +14,20 @@
  * | any → retired                  | a referenced screen is retired (`retireRecipesForScreen`)                    |
  *
  * `version` increments on structural change only (steps/params/entry); heals never bump it.
+ *
+ * ## Screen transitions (02 §8, issue #16)
+ *
+ * | transition                     | condition                                                                    |
+ * |--------------------------------|------------------------------------------------------------------------------|
+ * | — → candidate                  | `observe.nameScreen` (and `router-import`)                                   |
+ * | candidate → verified           | ONE clean observation: marker + every `required_id` + a matching structural hash (`markVerified`, 08 §5 row 5) |
+ * | verified → candidate           | human `markScreen(candidate)` only — the only way back out, and what makes a `name_screen` re-learn possible |
+ * | any → retired                  | dropped from the router export, or human `markScreen(retired)`; both cascade through `retireRecipesForScreen` |
+ *
+ * Promotion on a single observation is deliberate (a screen is cheap to re-verify), but it means
+ * a screen learned from a slightly wrong tree self-certifies against that same wrong tree — hence
+ * `markScreen`, and `nameScreen`'s `force`. Requiring ≥2 observations from distinct sessions would
+ * close that window and is filed as a follow-up; nothing here depends on it being one.
  *
  * ## The recompile write guard (04 §8, issue #13)
  *
@@ -80,7 +96,7 @@
  *   STRONGER, never weaker; a reviewed `expect` of `undefined` is covered by anything (02 §6).
  * - a matched step that was `intent_critical: true` must come back `intent_critical: true`
  *   (04 §3.7). `compile.markIntentCritical` recomputes it from ids.yaml, so this only fires when
- *   a human un-marked the element — a decision that belongs in `mark_recipe`, not in a replay.
+ *   a human un-marked the element — a decision that belongs in `mark`, not in a replay.
  *
  * Matching is greedy: a reviewed step pairs with the FIRST rebuilt step of the same identity at
  * or after the previous match. On a recipe with two identical taps that can pair against the
@@ -116,7 +132,7 @@
  * removes what the reviewer approved, and dropping the signature would make a machine-written
  * file read as merely unreviewed while destroying the 07 §7 record of who signed it. The recipe
  * is demoted to `candidate` either way, so a `ci_gate` recipe that gets recompiled keeps its
- * historical reviewer but loses its gate status until a human runs `mark_recipe(ci_gate)` again.
+ * historical reviewer but loses its gate status until a human runs `mark(ci_gate)` again.
  *
  * Because that signature outlives the steps it was given for, an accepted rebuild also stamps
  * `provenance.machine_recompile: true` (issue #13 criterion 4, the in-file half). `compiled_from`
@@ -134,8 +150,8 @@
 import type { AppMapContext } from '../context.ts';
 import type { RecipeStats } from '../store/db.ts';
 import { RECOMPILE_DIRTY_PREFIX } from '../store/db.ts';
-import type { BuildNumber, Condition, EdgeAction, ElementDef, ElementId, Expect, MarkRecipeInput, MarkRecipeResult, RecipeFile, RecipeId, RecipeStatus, RecipeStep, RunRecord, ScreenFile, ScreenId, StepId } from '../types.ts';
-import { RECIPE_STATUSES, edgeElement, now, screenIdOfDeepLink, stepElement } from '../types.ts';
+import type { BuildNumber, Condition, EdgeAction, ElementDef, ElementId, Expect, MarkRecipeInput, MarkRecipeResult, MarkScreenInput, MarkScreenResult, RecipeFile, RecipeId, RecipeStatus, RecipeStep, RunRecord, ScreenFile, ScreenId, ScreenStatus, StepId } from '../types.ts';
+import { RECIPE_STATUSES, SCREEN_STATUSES, edgeElement, now, screenIdOfDeepLink, stepElement } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { schemaDir } from '../paths.ts';
 import { crossReferenceIssues } from '../validate.ts';
@@ -667,25 +683,25 @@ function reportRecompileRefusal(
     kept_version: recipe.version,
     rejected_version: next.version,
     from_session: from.session,
-    hint: 'recompile by hand with compile_recipe + mark_recipe, or fix the trajectory and replay (04 §8)',
+    hint: 'recompile by hand with compile_recipe + mark, or fix the trajectory and replay (04 §8)',
   });
   if (outcome.diff !== '') {
     ctx.log.warn(`recompile refused — rejected draft for ${recipe.id}:\n${outcome.diff.slice(0, REFUSAL_DIFF_MAX_CHARS)}`);
   }
 }
 
-/** Parse + schema-validate + cross-reference a draft handed to `mark_recipe` (04 §3.8, 07 §4). */
+/** Parse + schema-validate + cross-reference a draft handed to `mark` (04 §3.8, 07 §4). */
 function checkedDraft(ctx: AppMapContext, draft: RecipeFile | string, recipeId: RecipeId): RecipeFile {
   const doc = typeof draft === 'string' ? parseYamlText<RecipeFile>(draft, `${recipeId}.yaml`) : draft;
   if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) {
-    throw new AppMapError(ERROR_CODES.BAD_INPUT, 'mark_recipe: `recipe` is not a recipe document', 'pass the compiled draft (RecipeFile or its canonical YAML text)');
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, 'mark: `recipe` is not a recipe document', 'pass the compiled draft (RecipeFile or its canonical YAML text)');
   }
   if (doc.id !== recipeId) {
-    throw new AppMapError(ERROR_CODES.BAD_INPUT, `mark_recipe: draft id ${String(doc.id)} does not match recipe_id ${recipeId}`, 'the draft must carry the same id');
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, `mark: draft id ${String(doc.id)} does not match recipe_id ${recipeId}`, 'the draft must carry the same id');
   }
   const schemaIssues = validateAgainstSchema(schemaDir(ctx.config), 'recipe', doc);
   if (schemaIssues.length > 0) {
-    throw new AppMapError(ERROR_CODES.INVALID_MAP, `mark_recipe: draft fails recipe.schema.json: ${schemaIssues.map((i) => `${i.path} ${i.message}`).join('; ')}`, 'fix the draft and call mark_recipe again (04 §3.8)');
+    throw new AppMapError(ERROR_CODES.INVALID_MAP, `mark: draft fails recipe.schema.json: ${schemaIssues.map((i) => `${i.path} ${i.message}`).join('; ')}`, 'fix the draft and call mark again (04 §3.8)');
   }
   // rules 2–6/8 against the loaded map (07 §4: a draft is user-authored content)
   const screens = new Map<string, ScreenFile>();
@@ -698,13 +714,13 @@ function checkedDraft(ctx: AppMapContext, draft: RecipeFile | string, recipeId: 
     recipes: new Map([[`${ctx.map.platform}/recipes/${recipeId}.yaml`, doc]]),
   }).filter((i) => i.severity === 'error' && i.file.endsWith(`/recipes/${recipeId}.yaml`));
   if (issues.length > 0) {
-    throw new AppMapError(ERROR_CODES.INVALID_MAP, `mark_recipe: draft fails 02 §10 cross-reference rules: ${issues.map((i) => `rule ${i.rule} ${i.message}`).join('; ')}`, 'every referenced id must exist in ids.yaml and every screen must exist');
+    throw new AppMapError(ERROR_CODES.INVALID_MAP, `mark: draft fails 02 §10 cross-reference rules: ${issues.map((i) => `rule ${i.rule} ${i.message}`).join('; ')}`, 'every referenced id must exist in ids.yaml and every screen must exist');
   }
   return doc;
 }
 
 /**
- * `mark_recipe {recipe_id, status, recipe?, reviewer?}` (03 §8, `MarkRecipeInput`): human-in-the-
+ * `mark {recipe_id, status, recipe?, reviewer?}` (03 §8, `MarkRecipeInput`): human-in-the-
  * loop promote/demote. `candidate` on a recipe that is not yet in the cache REQUIRES
  * `input.recipe` (the reviewed draft as `RecipeFile` or YAML text; parsed + schema-validated +
  * cross-referenced before write) — the only way a compiled draft becomes real (04 §3.8); the
@@ -714,10 +730,10 @@ function checkedDraft(ctx: AppMapContext, draft: RecipeFile | string, recipeId: 
  */
 export function markRecipe(ctx: AppMapContext, input: MarkRecipeInput): MarkRecipeResult {
   if (!input || typeof input.recipe_id !== 'string' || input.recipe_id === '') {
-    throw new AppMapError(ERROR_CODES.BAD_INPUT, 'mark_recipe needs a recipe_id', 'e.g. {recipe_id: "create_invoice", status: "candidate"}');
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, 'mark needs a recipe_id', 'e.g. {recipe_id: "create_invoice", status: "candidate"}');
   }
   if (!(RECIPE_STATUSES as readonly string[]).includes(input.status)) {
-    throw new AppMapError(ERROR_CODES.BAD_INPUT, `mark_recipe: status ${String(input.status)} is not one of ${RECIPE_STATUSES.join('|')}`, 'see 02 §6');
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, `mark: status ${String(input.status)} is not one of ${RECIPE_STATUSES.join('|')}`, 'see 02 §6');
   }
   const existing = currentRecipe(ctx, input.recipe_id);
   const from: RecipeStatus | null = existing?.status ?? null;
@@ -725,7 +741,7 @@ export function markRecipe(ctx: AppMapContext, input: MarkRecipeInput): MarkReci
   // 04 §3.8: nothing is written without this call, and a draft the server has never seen must
   // travel with it (architecture §7 decision 35 — the server keeps no per-session draft)
   if (existing === undefined && input.recipe === undefined) {
-    throw new AppMapError(ERROR_CODES.BAD_INPUT, `mark_recipe: ${input.recipe_id} is unknown and no draft was supplied`, 'pass the reviewed draft from compile_recipe as `recipe` (04 §3.8)');
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, `mark: ${input.recipe_id} is unknown and no draft was supplied`, 'pass the reviewed draft from compile_recipe as `recipe` (04 §3.8)');
   }
 
   let next: RecipeFile = input.recipe !== undefined
@@ -743,14 +759,14 @@ export function markRecipe(ctx: AppMapContext, input: MarkRecipeInput): MarkReci
     // is branch protection (a code-owner approval on the PR), because a local CLI cannot know who
     // is typing; this rejects the obvious self-sign so the recorded `reviewed_by` means something.
     if (typeof input.reviewer !== 'string' || input.reviewer.trim() === '') {
-      throw new AppMapError(ERROR_CODES.BAD_INPUT, 'mark_recipe: promoting to ci_gate requires `reviewer`', 'pass the reviewing human (07 §7); it is recorded in provenance.reviewed_by');
+      throw new AppMapError(ERROR_CODES.BAD_INPUT, 'mark: promoting to ci_gate requires `reviewer`', 'pass the reviewing human (07 §7); it is recorded in provenance.reviewed_by');
     }
     const reviewer = input.reviewer.trim();
     const author = typeof next.provenance?.compiled_by === 'string' ? next.provenance.compiled_by : undefined;
     if (author !== undefined && author.toLowerCase() === reviewer.toLowerCase()) {
       throw new AppMapError(
         ERROR_CODES.BAD_INPUT,
-        `mark_recipe: ${reviewer} compiled ${input.recipe_id} and cannot also review it`,
+        `mark: ${reviewer} compiled ${input.recipe_id} and cannot also review it`,
         'promotion to ci_gate needs a reviewer who is not the author (07 §7)',
       );
     }
@@ -763,7 +779,7 @@ export function markRecipe(ctx: AppMapContext, input: MarkRecipeInput): MarkReci
       if (!eligibleForCiGate(stats)) {
         throw new AppMapError(
           ERROR_CODES.BAD_INPUT,
-          `mark_recipe: ${input.recipe_id} is not eligible for ci_gate yet`,
+          `mark: ${input.recipe_id} is not eligible for ci_gate yet`,
           `08 §5 row 1: ≥${THRESHOLDS.ci_gate_min_success_rate * 100}% replay success across ≥${THRESHOLDS.ci_gate_min_builds} builds (seen ${stats.successes}/${stats.runs} over ${stats.builds.length} builds)`,
         );
       }
@@ -776,9 +792,92 @@ export function markRecipe(ctx: AppMapContext, input: MarkRecipeInput): MarkReci
   }
 
   next = { ...next, status: input.status };
+  // the dirty reason (and the log event) stay `mark_recipe:` even though the TOOL is now `mark`:
+  // they name the store-level operation, `db.test.ts`/`export.test.ts` pin them, and the screen
+  // half needs a distinguishable `mark_screen:` beside it (03 §4)
   ctx.db.putRecipe(next, { dirty: true, reason: `mark_recipe:${input.status}` });
   ctx.log.info('mark_recipe', { recipe: next.id, from, to: next.status, version: next.version });
   return { recipe_id: next.id, from, to: next.status, written: true };
+}
+
+/**
+ * `mark {screen_id, status, reviewer?, force?}` (03 §8, 02 §8, `MarkScreenInput`, issue #16): the
+ * human half of the SCREEN lifecycle, and the only way back out of `verified`.
+ *
+ * A screen promotes ITSELF (02 §8 / 08 §5 row 5: marker + every `required_id` + a matching
+ * structural hash, on ONE observation — `observe.ingestObservation`'s lazy re-verify). A screen
+ * learned from a slightly wrong tree satisfies all three against that same wrong tree, so bad data
+ * certifies itself on the very next observation, and the map used to have no way back: `mark`
+ * spoke only recipes, a heal is rejected exactly when the stored locators are `ambiguous`
+ * (04 §7.2), and the "reviewed edit" the old `name_screen` hint promised means hand-writing
+ * `structural_hash` and per-element `fingerprint` blocks. This is that way back.
+ *
+ *  - `candidate` withdraws the verification, so `last_verified_build` is DELETED — leaving it
+ *    would have `get_screen` reporting the decayed confidence (02 §8) of a verification a human
+ *    has just taken back, and `name_screen` would re-learn the screen under a build stamp that
+ *    certified the data it replaced;
+ *  - `verified` is REFUSED without `force`: it is earned by observation, and a hand-signed
+ *    `verified` is the self-certification this command exists to undo. Forced, it needs a
+ *    `reviewer` (07 §7) and stamps `last_verified_build = ctx.build`;
+ *  - `retired` cascades exactly like a router-export removal (02 §8): `retireRecipesForScreen`.
+ *    It deliberately does NOT clear `last_verified_build` — `import-router --purge-retired` reads
+ *    that field to implement "retired for one release, then deleted", and `isNewerBuild(b,
+ *    undefined)` is `true`, so clearing it would delete the file on the very next CI import;
+ *  - `reviewer` lands in `meta.reviewed_by` and CLEARS `meta.relearned_from`: the human has now
+ *    signed the current data, so the forced-re-learn marker is spent — the issue #13 precedent,
+ *    where `mark(ci_gate, reviewer)` deletes `provenance.machine_recompile`.
+ *
+ * Unlike `markVerified`, this writes (and dirties) even when the status is unchanged: the command
+ * is an explicit human act and the point of it is to record the reviewer. Running it twice
+ * re-exports a byte-identical file, which `export` skips as unchanged.
+ *
+ * Dirty reason `mark_screen:<status>` — the mirror of `mark_recipe:<status>`, and distinct from
+ * the `verify` / `heal` / `name_screen` reasons so a PR reader can see that a human did this
+ * (03 §4). NOTE (02 §8, issue #16 item 3): a demote is not a lock — the next clean observation
+ * re-promotes the screen. Demote, then re-learn. Making it a lock (promote only on a second
+ * observation, or on observations from distinct sessions/builds) belongs inside `markVerified`,
+ * not at a caller: three call sites promote screens — `observe.ingestObservation` (lazy
+ * re-verify), `guided.reportStep` and `headless.runHeadless` — so gating one leaves the other two.
+ */
+export function markScreen(ctx: AppMapContext, input: MarkScreenInput): MarkScreenResult {
+  if (!input || typeof input.screen_id !== 'string' || input.screen_id === '') {
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, 'mark needs a screen_id', 'e.g. {screen_id: "person_detail", status: "candidate"}');
+  }
+  if (!(SCREEN_STATUSES as readonly string[]).includes(input.status)) {
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, `mark: status ${String(input.status)} is not one of ${SCREEN_STATUSES.join('|')}`, 'see 02 §8');
+  }
+  // the cache first, then the loaded map — the same load order `markVerified` uses, so a screen
+  // this session has already touched is marked in its current shape; gates are markable too
+  const existing = ctx.db.getScreen(input.screen_id) ?? ctx.map.screens.get(input.screen_id) ?? ctx.map.gates.get(input.screen_id);
+  if (existing === undefined) {
+    throw new AppMapError(ERROR_CODES.NOT_FOUND, `mark: ${input.screen_id} is not a screen this map knows`, 'call summary for the screens it has, or name_screen to learn a new one (03 §8)');
+  }
+  const reviewer = typeof input.reviewer === 'string' && input.reviewer.trim() !== '' ? input.reviewer.trim() : undefined;
+  if (input.status === 'verified' && input.force !== true) {
+    throw new AppMapError(
+      ERROR_CODES.BAD_INPUT,
+      `mark: ${input.screen_id} cannot be marked verified by hand`,
+      'a screen verifies itself on a clean observation (02 §8, 08 §5 row 5); pass force with a reviewer to sign it anyway',
+    );
+  }
+  if (input.status === 'verified' && reviewer === undefined) {
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, 'mark: forcing verified requires `reviewer`', 'pass the reviewing human (07 §7); it is recorded in meta.reviewed_by');
+  }
+
+  const from: ScreenStatus = existing.meta.status;
+  const next: ScreenFile = structuredClone(existing);
+  next.meta = { ...next.meta, status: input.status };
+  if (input.status === 'candidate') delete next.meta.last_verified_build;
+  if (input.status === 'verified') next.meta.last_verified_build = ctx.build;
+  if (reviewer !== undefined) {
+    next.meta.reviewed_by = reviewer;
+    delete next.meta.relearned_from;
+  }
+
+  ctx.db.putScreen(next, { dirty: true, reason: `mark_screen:${input.status}` });
+  const retired_recipes = input.status === 'retired' ? retireRecipesForScreen(ctx, next.id) : [];
+  ctx.log.info('mark_screen', { screen: next.id, from, to: input.status, ...(reviewer !== undefined ? { reviewer } : {}) });
+  return { screen_id: next.id, from, to: input.status, written: true, retired_recipes };
 }
 
 /** What `markVerified` promotes; every list is optional. */

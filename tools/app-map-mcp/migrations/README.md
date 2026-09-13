@@ -19,3 +19,8 @@ Contract:
 - Idempotent: running a migration on an already-migrated map changes nothing.
 
 There is no migration yet: the only schema version is 1.
+
+An **additive** optional property (e.g. `meta.reviewed_by`) is not a bump and gets no script here:
+old files stay valid. It is still not free for consumers — they vendor `app-map/schema/`, and `meta`
+is `additionalProperties: false` — so re-copy the schema files into the map when upgrading the
+package, or `validate` rejects the first file the new package writes (02 §8).

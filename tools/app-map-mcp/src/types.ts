@@ -321,6 +321,16 @@ export interface Signature {
 export interface ScreenMeta {
   sources: ScreenSource[];
   status: ScreenStatus;
+  /**
+   * The status a `name_screen` force-re-learn overrode (02 §8, issue #16). It sits directly above
+   * `reviewed_by` for the reason `provenance.machine_recompile` does (issue #13): read together,
+   * the two lines say "this screen's data was re-learned over a `verified` one — the signature
+   * below is from after that, the reviewer above it signed something else". A human
+   * `mark {screen_id, reviewer}` clears it.
+   */
+  relearned_from?: ScreenStatus;
+  /** the human who last marked this screen by hand (07 §7); recipes carry theirs in `provenance.reviewed_by` */
+  reviewed_by?: string;
   last_verified_build?: BuildNumber;
 }
 
@@ -1206,8 +1216,22 @@ export interface NameScreenInput {
   /** must equal the registry's `deep_link` when both are present, else `none` */
   deep_link?: string;
   session?: SessionId;
+  /**
+   * Re-learn a screen that is no longer `candidate` (02 §8, issue #16): the signature is rebuilt
+   * from this observation, `meta.status` drops back to `candidate` and `meta.relearned_from`
+   * records what was overridden. Without it a non-candidate screen is `bad_input`.
+   */
+  force?: boolean;
 }
-export interface NameScreenResult { screen: ScreenFile; created: boolean; from_seq: number; /** element ids found on the snapshot */ elements: ElementId[] }
+export interface NameScreenResult {
+  screen: ScreenFile;
+  created: boolean;
+  from_seq: number;
+  /** element ids found on the snapshot */
+  elements: ElementId[];
+  /** set only when `force` overrode a non-candidate screen; the status it had (issue #16) */
+  relearned_from?: ScreenStatus;
+}
 export interface CompileRecipeInput {
   session: SessionId;
   task: string;
@@ -1226,7 +1250,7 @@ export interface CompileRecipeInput {
   /** end of the task slice (inclusive); defaults to the session's `task_end_seq` (finishTask) or the last observation */
   to_seq?: number;
 }
-/** `mark_recipe` tool input (03 §8, 04 §3.8, 07 §7). */
+/** `mark {recipe_id, …}` tool input (03 §8, 04 §3.8, 07 §7). */
 export interface MarkRecipeInput {
   recipe_id: RecipeId;
   status: RecipeStatus;
@@ -1245,11 +1269,28 @@ export type CompileRecipeResult =
   | { ok: true; recipe: RecipeFile; /** canonical YAML for review */ yaml: string; collapsed_observations: number; warnings: string[] }
   | { ok: false; reason: 'unparameterized_value' | 'no_task' | 'no_observations' | 'loops_never_converge' | 'missing_postcondition' | 'unknown_screen'; message: string; offending_values?: string[] };
 export interface MarkRecipeResult { recipe_id: RecipeId; from: RecipeStatus | null; to: RecipeStatus; written: boolean }
+/** `mark {screen_id, status, reviewer?, force?}` tool input (03 §8, 02 §8, issue #16). */
+export interface MarkScreenInput {
+  screen_id: ScreenId | GateId;
+  status: ScreenStatus;
+  /** recorded in `meta.reviewed_by`; REQUIRED to hand-sign `verified` (07 §7) */
+  reviewer?: string;
+  /** hand-sign `verified`, which is otherwise earned by a clean observation (02 §8, 08 §5 row 5) */
+  force?: boolean;
+}
+export interface MarkScreenResult {
+  screen_id: ScreenId | GateId;
+  from: ScreenStatus;
+  to: ScreenStatus;
+  written: boolean;
+  /** recipes retired by the 02 §8 cascade (`status: retired` only) */
+  retired_recipes: RecipeId[];
+}
 /** How one written path was produced (03 §4 write path, 04 §8 recompile guard — issue #13). */
 export interface ExportWrite {
   /** relative path; the same string appears at the same index in `ExportResult.written` */
   path: string;
-  /** the `DirtyRow.reason` behind the write (`heal`, `verify`, `mark_recipe:ci_gate`, `recompile:<trigger>`, …) */
+  /** the `DirtyRow.reason` behind the write (`heal`, `verify`, `mark_recipe:ci_gate`, `mark_screen:candidate`, `name_screen:force`, `recompile:<trigger>`, …) */
   reason: string;
   /**
    * True when this file's CONTENT was rebuilt by an automated recompile (04 §8) rather than

@@ -85,7 +85,11 @@ export const KEY_ORDER: Readonly<Record<CanonicalType, readonly string[]>> = {
   edge: ['action', 'to', 'preconditions', 'postconditions', 'status', 'last_verified_build'],
   action: ['type', 'element', 'direction', 'url', 'gate'],
   condition: ['auth', 'screen', 'flag', 'value', 'platform_version'],
-  meta: ['sources', 'status', 'last_verified_build'],
+  // `relearned_from` sits directly above `reviewed_by` for the reason `provenance.machine_recompile`
+  // does (issue #13, #16): in a PR diff the two lines are then read together — "this screen was
+  // re-learned over a verified one, and here is who signed off since" — instead of the marker
+  // landing after the build stamp where it reads as a footnote.
+  meta: ['sources', 'status', 'relearned_from', 'reviewed_by', 'last_verified_build'],
   recipe: ['id', 'version', 'platform', 'description', 'matches', 'params', 'preconditions', 'entry', 'steps', 'verify', 'status', 'provenance', 'last_verified_build'],
   param: ['name', 'type', 'required', 'values'],
   entry: ['deep_link', 'fallback_path'],

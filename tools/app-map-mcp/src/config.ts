@@ -49,7 +49,7 @@ export interface AppMapConfig {
    *   `provenance.machine_recompile: true` and labelled by `export`.
    * - `off`: replay is strictly read-only against the map. The demotion to `candidate` still
    *   happens — that is the 08 §5 signal, not a write to the recipe body — but the steps are
-   *   never rebuilt; a human recompiles with `compile_recipe` + `mark_recipe`.
+   *   never rebuilt; a human recompiles with `compile_recipe` + `mark`.
    *
    * There is deliberately no value that restores the pre-#13 unguarded write.
    */
