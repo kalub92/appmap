@@ -648,8 +648,12 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     (`observedElementIds` is hoisted above the screen loop and shared with decision 61's `kind:
     list` sweep; it deliberately excludes edge `action.element`, or it would answer its own
     question); or the capture — a `status: candidate` edge on a screen whose `sources` include
-    `router_export` and whose `meta.last_verified_build` is older than the build `manifest.yaml`
-    names. `elements[]` is the id set the last `name_screen` captured, at that build, and the
+    `router_export` and whose `meta.last_verified_build` is neither the build `manifest.yaml` names
+    nor demonstrably newer than it. For two integers that is "older than"; for a `build_number` that
+    does not compare numerically (`1.2.3`, `4413-rc1` — both schemas allow them) it is "they
+    differ", because decision 18's conservative fallback is the ERROR here, and taking it would
+    leave hole (c) below fully intact for every app that versions builds that way.
+    `elements[]` is the id set the last `name_screen` captured, at that build, and the
     refresh recaptures nothing, so a capture that old could not have contained an id the app has
     registered since — whether or not another screen declares it. All three, not one replacing
     another: the element condition alone would re-open #12 on first-run setup, because a seed's
@@ -683,7 +687,16 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     router seed naming shared chrome, which is issue #12 itself. Telling the two apart would need
     per-edge provenance in `screen.schema.json`, whose `edge` is `additionalProperties: false`. The
     hard error is therefore scoped to screens a capture HAS produced, which is where the map has
-    something to contradict. Issue #12.
+    something to contradict.
+    The capture condition only means anything if `manifest.yaml` actually moves, so `importRouter`'s
+    build bump takes the same shape: it records the export's build unless that build is demonstrably
+    OLDER, rather than only when it is demonstrably newer. Decision 18's numeric-only comparison is
+    false in BOTH directions for a `build_number` like `1.2.3` or `4413-rc1` (every schema allows
+    `^[0-9A-Za-z][0-9A-Za-z.\-]*$`), so such an app merged every later build's edges while its
+    manifest claimed build 1 for ever — and hole (c) then came back in full, because a frozen
+    manifest can never look newer than a capture. Decision 18's "fall back to the conservative
+    branch" is a rule about DECAY, where the conservative branch is "do not decay"; on both of these
+    the conservative branch is the one that keeps the map loading and the build honest. Issue #12.
 
 ## 8. How to implement your module
 

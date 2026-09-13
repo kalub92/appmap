@@ -264,6 +264,41 @@ describe('importRouter — seeding (01 R6, decision 40)', () => {
     assert.match(errs[0]!.message, /nav\.settings\.tab is not declared on this screen$/, errs[0]!.message);
   });
 
+  it('build 2 with a NON-INTEGER build_number warns too — the deadlock must not survive the way an app numbers builds', () => {
+    // Same hole (c) sequence, for an app whose `build_number` is `2026.9.12` / `1.2.3` / `4413-rc1`
+    // — every shape both schemas allow. `isNewerBuild` compares numerically only (decision 18), so
+    // for these the comparison is always false; keying the carve-out on it directly took decision
+    // 18's conservative branch, which HERE is the hard error, and left #12's cycle fully intact for
+    // every such app: measured on a pilot copy, validate FAILED and `openContext` returned
+    // `loadError = invalid_map`. Stale is "not this build, and not demonstrably newer than it".
+    // It takes BOTH hunks: the manifest must actually move to `2026.9.13` (`importRouter` refused,
+    // so the map claimed `4412` — the very build `invoice_detail` was captured on, which reads as a
+    // CURRENT capture and errors), and rule 2 must then read "differs" as stale.
+    doc.build.build_number = '2026.9.13';
+    const exported = doc.screens.find((s) => s.id === 'invoice_detail')!;
+    exported.edges = [...(exported.edges ?? []), { action: { type: 'tap', element: 'nav.settings.tab' }, to: 'invoice_list' }];
+    const result = importRouter(ctx, doc, spy);
+    assert.ok(result.updated.includes('invoice_detail'));
+    assert.equal(result.build_updated, true, 'the manifest has to record the build these edges came from');
+    assert.equal(ctx.db.getManifest()?.build.build_number, '2026.9.13');
+    assert.equal(screenOf('invoice_detail').meta.last_verified_build, '4412', 'the merge recaptures nothing');
+    exportMap(ctx);
+    ctx.close();
+
+    const r = validateMap(t.config, { platforms: ['ios'] });
+    assert.deepEqual(r.issues.filter((i) => i.severity === 'error'), [], formatIssues(r.issues));
+    const warned = r.issues.filter((i) => i.file === 'ios/screens/invoice_detail.yaml' && isUnlearnedEdgeElement(i));
+    assert.equal(warned.length, 1, formatIssues(r.issues));
+    assert.match(warned[0]!.message, /nav\.settings\.tab/, warned[0]!.message);
+
+    const reopened = openContext(t.config, { logSink: 'none', skipRetention: true, dbPath: ':memory:' });
+    try {
+      assert.equal(reopened.loadError, null, 'an app that versions builds 2026.9.13 must load on build 2 like any other (issue #12)');
+    } finally {
+      reopened.close();
+    }
+  });
+
   it('appends the unregistered screen to ids.yaml and reports it (06 R7 carries both changes)', () => {
     const result = importRouter(ctx, doc, spy);
     assert.deepEqual(result.unregistered, ['settings']);
@@ -345,6 +380,26 @@ describe('importRouter — refreshing (01 R6 "seeds or refreshes")', () => {
     const newer: RouterExport = { ...doc, build: { ...doc.build, build_number: '4413' } };
     assert.equal(importRouter(ctx, newer, spy).build_updated, true);
     assert.equal(ctx.db.getManifest()?.build.build_number, '4413');
+    const older: RouterExport = { ...doc, build: { ...doc.build, build_number: '4412' } };
+    assert.equal(importRouter(ctx, older, spy).build_updated, false, 'an older export must not walk the manifest back');
+    assert.equal(ctx.db.getManifest()?.build.build_number, '4413');
+  });
+
+  it('…and when the export merely DIFFERS, for a build_number that does not compare numerically (issue #12)', () => {
+    // `isNewerBuild` is numeric-only (architecture decision 18) while both schemas allow any
+    // `^[0-9A-Za-z][0-9A-Za-z.\-]*$`, so an app numbering builds `1.2.3` / `4413-rc1` never bumped:
+    // the merge appended every later build's edges and the manifest went on claiming the first
+    // build for ever. 02 §10 rule 2's stale-capture subject compares THAT build with each screen's
+    // `meta.last_verified_build`, so a frozen manifest can never look stale and issue #12's
+    // build N+1 deadlock came straight back for those apps.
+    for (const build of ['2026.9.13', '4413-rc1', '1.2.3']) {
+      const other: RouterExport = { ...doc, build: { ...doc.build, build_number: build } };
+      assert.equal(importRouter(ctx, other, spy).build_updated, true, build);
+      assert.equal(ctx.db.getManifest()?.build.build_number, build);
+    }
+    // and still not backwards, once the manifest is on a number again
+    const back: RouterExport = { ...doc, build: { ...doc.build, build_number: '4412' } };
+    assert.equal(importRouter(ctx, back, spy).build_updated, true, 'nothing orders 1.2.3 against 4412, so the export wins');
   });
 
   it('dryRun writes nothing', () => {

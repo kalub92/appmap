@@ -240,8 +240,13 @@ on the loaded map (`summary` names them), but never block either.
      apply — `mergeRouterScreen` adds the new build's edges and touches neither `elements[]` nor
      `meta.status`.
    - the **capture** — a `status: candidate` edge on a screen whose `sources` include
-     `router_export` and whose `meta.last_verified_build` is **older than the build
-     `manifest.yaml` names**. `elements[]` is the id set the last `name_screen` captured, at that
+     `router_export` and whose `meta.last_verified_build` is **not the build `manifest.yaml` names,
+     and not demonstrably newer than it**. For two integer build numbers that is exactly "older
+     than"; `build_number` may be any `^[0-9A-Za-z][0-9A-Za-z.\-]*$` string (§3), and builds that do
+     not compare numerically (`1.2.3`, `4413-rc1`) count as stale whenever they differ, because the
+     conservative branch of a rule whose job is to keep the map loadable is the warning — comparing
+     them as "not newer, so error" would leave the deadlock below fully intact for such an app.
+     `elements[]` is the id set the last `name_screen` captured, at that
      build; the refresh above appends the next build's edges to the same file and recaptures
      nothing, so the capture could not have contained an id the app registered since. This is the
      same refresh as the element condition, for the case where the new edge names **shared chrome**

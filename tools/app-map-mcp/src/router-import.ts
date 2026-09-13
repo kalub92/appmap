@@ -27,7 +27,10 @@
  *    screen's edges whose `to` is the purged screen (and their postconditions naming it), and
  *    (c) deletes the recipes that were retired with it (`purged_recipes`) — they reference a
  *    screen file that no longer exists;
- *  - the manifest `build` is refreshed from the export's `build` when newer
+ *  - the manifest `build` is refreshed from the export's `build` unless that build is demonstrably
+ *    OLDER — so a `build_number` that does not compare numerically (`1.2.3`, `4413-rc1`) still
+ *    advances, instead of the manifest claiming build 1 for ever while the merge appends every
+ *    later build's edges (02 §10 rule 2's stale-capture subject reads that build; issue #12)
  *    (`db.putManifest`, `build_updated: true`).
  * Writes go to the cache as dirty; `export` produces the diff (06 R7 PR).
  *
@@ -266,7 +269,21 @@ export function importRouter(ctx: AppMapContext, doc: RouterExport, opts: Import
   }
 
   const manifest: Manifest | undefined = ctx.db.getManifest() ?? ctx.map.manifest;
-  const bumpBuild = manifest !== undefined && isNewerBuild(doc.build.build_number, manifest.build?.build_number);
+  // The export is the authority on which build these edges came from, so the manifest records it
+  // unless the export is demonstrably OLDER (a re-run of a previous build's artifact, which must
+  // not walk the map backwards). Not `isNewerBuild(export, manifest)` alone: that compares
+  // numerically only (architecture decision 18) and `build_number` may be any
+  // `^[0-9A-Za-z][0-9A-Za-z.\-]*$` string — for an app numbering builds `1.2.3` or `4413-rc1` it is
+  // always false, so the merge appended every later build's edges while the manifest went on
+  // claiming the first build for ever. 02 §10 rule 2's stale-capture subject compares that build
+  // with each screen's `meta.last_verified_build` to tell a refresh outrunning exploration from a
+  // contradiction, so a frozen manifest re-opened issue #12's deadlock in full for those apps:
+  // measured, `import-router` at `2026.9.13` appending a `nav.settings.tab` edge to the pilot's
+  // `invoice_detail` left the manifest on `4412`, validate errored and `openContext` returned
+  // `loadError = invalid_map`. Same shape as rule 2's own test: "different, and not older".
+  const bumpBuild = manifest !== undefined
+    && doc.build.build_number !== manifest.build?.build_number
+    && !isNewerBuild(manifest.build?.build_number, doc.build.build_number);
 
   if (dryRun) {
     result.retired = retirements.map((s) => s.id);

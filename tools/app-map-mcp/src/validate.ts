@@ -12,8 +12,9 @@
  *     router-export seed, 01 R6/03 §5); the ELEMENT, a still-`candidate` edge whose element no
  *     capture has produced on ANY screen (what a build N+1 `import-router` refresh appends to an
  *     already-explored screen when the app registered a new id); or the CAPTURE, a still-`candidate`
- *     edge on a router-written screen whose `elements[]` was captured on an older build than the
- *     manifest names (the same refresh naming SHARED CHROME another screen already declares). An
+ *     edge on a router-written screen whose `elements[]` was captured on a build the manifest has
+ *     moved past — or, for a `build_number` that does not compare numerically, any build other than
+ *     the one it names (the same refresh naming SHARED CHROME another screen already declares). An
  *     element missing from ids.yaml entirely stays an error on every screen, and a non-`candidate`
  *     edge is a claim that the tap happened here; element ids in
  *     screen files match `ID_REGEX` (2+ segments; `ELEMENT_ID_REGEX` applies to ids.yaml only);
@@ -435,9 +436,24 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
     // which is issue #12's cycle again. Scoped to screens the router writes, so a hand-authored map
     // keeps the hard error, and it self-heals: re-explore the screen and `name_screen` stamps this
     // build, after which an element that really is absent errors again.
+    // "Stale" is NOT `isNewerBuild(manifest, captured)`: that comparison is numeric-only
+    // (architecture decision 18), and both schemas let `build_number` be any
+    // `^[0-9A-Za-z][0-9A-Za-z.\-]*$` — `1.2.3`, `4413-rc1`. For such an app every comparison is
+    // `false`, so decision 18's "fall back to the conservative branch" would land on the hard error
+    // here, and the build N+1 shared-chrome deadlock survives in full (measured: `import-router` at
+    // `2026.9.13` appending a `nav.settings.tab` edge to the pilot's `invoice_detail` gives rule 2
+    // as an ERROR and `openContext` returns `loadError = invalid_map`). The conservative branch of
+    // a rule whose whole job is to keep the map loadable is the WARNING. So: the capture is not of
+    // the build the manifest names, and is not demonstrably NEWER than it — which for two integers
+    // is exactly `captured < manifest`, and for anything else is "they differ". Only ever turns an
+    // error into a warning, never the reverse. The residual case, disclosed: a capture stamped at a
+    // non-comparable build the manifest has NOT reached (a `--build` override running ahead of
+    // `manifest.yaml`) reads as stale and warns.
     const staleCapture = doc.meta.last_verified_build !== undefined
       && doc.meta.sources.includes('router_export')
-      && isNewerBuild(input.build, doc.meta.last_verified_build);
+      && input.build !== undefined
+      && input.build !== doc.meta.last_verified_build
+      && !isNewerBuild(doc.meta.last_verified_build, input.build);
     doc.elements.forEach((el, ei) => {
       const loc = `/elements/${ei}`;
       if (!ID_REGEX.test(el.id)) issues.push(issue(2, file, `element id ${el.id} violates 01 R2 (${ID_REGEX.source})`, `${loc}/id`));

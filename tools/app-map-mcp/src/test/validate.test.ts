@@ -500,6 +500,41 @@ describe('rule 2 — a router-export seed warns until exploration learns its ele
     assert.match(issues[0]!.message, /the router added after this screen was last captured/, issues[0]!.message);
   });
 
+  it('a build_number that does not compare numerically is stale whenever it differs (issue #12 hole c, non-integer builds)', () => {
+    // `isNewerBuild` compares numerically only (architecture decision 18) and both schemas allow
+    // `^[0-9A-Za-z][0-9A-Za-z.\-]*$`, so for an app that versions builds `1.2.3` or `4413-rc1`
+    // every comparison is false. Taking decision 18's conservative branch here lands on the hard
+    // ERROR, which is hole (c)'s deadlock in full: measured on a pilot copy, `import-router` at
+    // `2026.9.13` appending a `nav.settings.tab` edge to `invoice_detail` failed validate and
+    // `openContext` came back `invalid_map`. For THIS rule the conservative branch is the warning.
+    for (const [captured, manifest] of [['2026.9.12', '2026.9.13'], ['4413-rc1', '4413-rc2'], ['1.2.3', '1.10.0']] as const) {
+      const stale = exploredScreen([tapCell('candidate')], { meta: { sources: ['exploration', 'router_export'], status: 'verified', last_verified_build: captured } });
+      const issues = edgeElementIssues(crossRef(stale, { neighbours: ['invoice.add.button', 'invoice.list.cell'], build: manifest }));
+      assert.equal(issues.length, 1, `${captured}→${manifest}: ${formatIssues(issues)}`);
+      assert.equal(issues[0]!.severity, 'warning', `${captured}→${manifest}: ${formatIssues(issues)}`);
+      assert.ok(isUnlearnedEdgeElement(issues[0]!), formatIssues(issues));
+    }
+  });
+
+  it('…but the SAME non-integer build on both sides is a current capture, and still an ERROR', () => {
+    // the relaxation is keyed on the capture being of a different build, not on the comparison
+    // failing: a screen recaptured on the build the manifest names has nothing left to excuse it
+    const current = exploredScreen([tapCell('candidate')], { meta: { sources: ['exploration', 'router_export'], status: 'verified', last_verified_build: '2026.9.13' } });
+    const issues = edgeElementIssues(crossRef(current, { neighbours: ['invoice.add.button', 'invoice.list.cell'], build: '2026.9.13' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error', formatIssues(issues));
+    assert.equal(isUnlearnedEdgeElement(issues[0]!), false);
+  });
+
+  it('a capture from a demonstrably NEWER integer build is not stale — decision 18 still decides when it can', () => {
+    // a `--build` override running ahead of `manifest.yaml`: 4414 > 4413, so the capture is current
+    // or better and the element it does not contain is a real contradiction
+    const ahead = exploredScreen([tapCell('candidate')], { meta: { sources: ['exploration', 'router_export'], status: 'verified', last_verified_build: '4414' } });
+    const issues = edgeElementIssues(crossRef(ahead, { neighbours: ['invoice.add.button', 'invoice.list.cell'], build: '4413' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error', formatIssues(issues));
+  });
+
   it('a stale capture only excuses a screen the ROUTER writes — a hand-authored one keeps the hard error', () => {
     // `sources` without `router_export`: nothing appends edges to this file on its own, so an
     // undeclared element is someone naming the wrong id and there is no cycle to break.
