@@ -100,7 +100,10 @@ describe('compileRecipe — 04 §9: the pilot session compiles to create_invoice
     assert.equal(recipe.platform, 'ios');
     assert.equal(recipe.version, 1);
     assert.equal(recipe.status, 'candidate', '04 §3.8: a draft, never verified');
-    assert.equal(recipe.entry.deep_link, 'appmap://invoice_new?fixture=logged_in', committed().entry.deep_link);
+    assert.equal(recipe.entry.deep_link, 'appmap://invoice_new?fixture=logged_in');
+    // the committed recipe was previously passed as assert.equal's third argument, which is the
+    // `message` slot — so it was never compared. Compare it for real (04 §3.5 entry optimization).
+    assert.equal(recipe.entry.deep_link, committed().entry.deep_link, 'compiled entry must match the committed recipe');
     assert.deepEqual(recipe.preconditions, [{ auth: 'logged_in' }]);
     assert.deepEqual(recipe.params, PARAMS);
     assert.deepEqual(recipe.verify, { screen: 'invoice_detail' });
