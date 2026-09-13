@@ -44,7 +44,7 @@ rejects literals, orphan constants and unreferenced screen markers in CI.
 ```swift
 // SwiftUI
 NavigationStack { … }
-    .appMapScreen(AppMapID.Screen.invoiceList)        // .accessibilityElement(children: .contain) + identifier
+    .appMapScreen(AppMapID.Screen.invoiceList)        // container + a 1pt marker element the driver can see (issue #15)
 Button("New Invoice") { … }.appMapID(AppMapID.Element.invoiceAddButton)
 // UIKit, in viewDidLoad
 appMapScreen(AppMapID.Screen.invoiceList)
@@ -55,11 +55,36 @@ Box(Modifier.appMapScreen(AppMapId.Screen.INVOICE_LIST)) { … }   // semantics 
 Button(onClick = …, modifier = Modifier.appMapId(AppMapId.Element.INVOICE_ADD_BUTTON)) { … }
 // Views: android:id resource ids named after the registry id (dots → underscores)
 ```
+A screen marker is **two** things, and both are load-bearing (issue #15). The screen root is an
+accessibility *container* carrying `screen.<screen_id>` — VoiceOver groups by it, and readers that
+list containers find the id there. Inside it, `appMapScreen` also pins a **1pt marker element**
+carrying the same id: the iOS simulator's accessibility service renders a *flat* tree and does not
+list containers at all, so a driver reading it (`argent run native-describe-screen --json`) sees
+every element id and no `screen.<id>`. The marker element is what actually reaches the driver, and
+`marker` is the only weight-1.0 identification signal there is (03 §5.2) — without it
+identification falls back to the weaker `required_ids` / structural-hash cascade, which is
+ambiguous between screens that share an element set.
+
+The marker is 1 × 1 pt of clear colour with hit testing off, pinned to the root's top-leading
+corner: it changes no layout, swallows no tap and announces nothing. It is deliberately **not**
+`accessibilityHidden` / `accessibilityElementsHidden` — the driver reads the same accessibility
+tree VoiceOver does, so hiding it from VoiceOver hides it from the driver. The accepted cost is one
+extra unlabeled VoiceOver stop per screen. `overlay(alignment:)` needs iOS 15+/macOS 12+ (the
+package targets iOS 16 / macOS 13). The UIKit call installs the equivalent 1pt
+`AppMapScreenMarkerView` subview and is idempotent: calling it from both `viewDidLoad` and
+`viewWillAppear` retargets the marker rather than stacking a second one.
+
 Exactly one marker is visible per full-screen state; sheets and modals carry their own. Tooling does
 not rely on that — a pushed screen leaves the covered screen's marker in the accessibility tree, so
-app-map prefers the **deepest** marker (01 R3). Cells of one
-kind share an id (`invoice.list.cell`); containers with data-driven content are `dynamic: true` in
-`ids.yaml` so the scrubber drops their text (07 §2.3).
+app-map prefers the **deepest** marker (01 R3). Since every marker is now a 1pt box at its root's
+top-leading corner, two stacked screens whose roots are both flush with the top (a
+`fullScreenCover`, a `TabView` swap) report markers with an *identical* frame, so `tree.ts` never
+collapses two elements carrying different identifiers even when the rest of their geometry, label
+and value match, and on an exact `y` tie the later element in capture order — the screen just
+presented — wins.
+
+Cells of one kind share an id (`invoice.list.cell`); containers with data-driven content are
+`dynamic: true` in `ids.yaml` so the scrubber drops their text (07 §2.3).
 
 ## 4. Register routes for the router export (01 R6)
 
@@ -224,11 +249,21 @@ source or an MCP config, and refuses the commit on any error. Bypass one commit 
 `APP_MAP_SKIP_PRECOMMIT=1 git commit` (or `git commit -n`). CI runs the same commands, so the hook
 only moves the feedback earlier — it is never the only gate.
 
+## Answered
+
+- *Do SwiftUI containers with `.accessibilityElement(children: .contain)` reach the driver, and do
+  they swallow child taps?* They do **not** swallow child taps — every element id is reported and
+  tappable — but the container itself never reaches the driver (issue #15). The iOS simulator's
+  accessibility service renders a flat tree in which containers are not elements at all, so the
+  container form alone is never listed and `screen.<id>` was simply missing. `appMapScreen` now
+  pins a 1pt marker element inside the container (§3); the container modifier stays for VoiceOver
+  grouping and for readers that do list containers.
+
 ## Open questions (01 §5)
 
 - Verify that Argent surfaces Compose `testTag` values as resource ids when `testTagsAsResourceId` is
-  set; if not, fall back to Views ids for the pilot.
-- Confirm whether SwiftUI containers with `.accessibilityElement(children: .contain)` remain hittable
-  for Argent's tap and do not swallow child taps.
+  set; if not, fall back to Views ids for the pilot. Compose produces a resource-id on a semantics
+  node rather than a container, so the iOS container problem above does not obviously apply — but
+  nobody has checked it against a real Argent Android capture.
 - Decide whether fixtures live in the app target or a debug-only module; prefer a debug module to keep
   production binary size flat.

@@ -66,6 +66,8 @@ elements:
 
 Every screen's root container carries `screen.<screen_id>` and is exposed in the accessibility tree.
 
+The container form below is **not sufficient on its own**: the iOS simulator's accessibility service renders a flat tree in which containers are not elements, so a driver reading it never sees `screen.<screen_id>` (issue #15). A 1 pt, non-hit-testable accessibility *element* carrying the same id must sit inside the container — which is what `AppMapKit.appMapScreen(_:)` on `View`, `UIView` and `UIViewController` do, so app code keeps calling the modifier unchanged.
+
 SwiftUI:
 ```swift
 struct InvoiceListView: View {
@@ -86,7 +88,7 @@ Box(Modifier
 ```
 Views: `android:id` or `view.tag` plus contentDescription is not the mechanism — use resource ids.
 
-Only one marker may be visible at a time for a full-screen state; sheets and modals carry their own marker (`screen.invoice_filter_sheet`). Tooling must not *rely* on that: on iOS a pushed screen leaves the covered screen's marker in the accessibility tree, so two markers are routinely present. Readers therefore **prefer the deepest marker** — deepest in the node hierarchy, ties broken by the greatest `y` (a flat driver capture has no hierarchy to compare) and then by document order — rather than giving up when there is more than one.
+Only one marker may be visible at a time for a full-screen state; sheets and modals carry their own marker (`screen.invoice_filter_sheet`). Tooling must not *rely* on that: on iOS a pushed screen leaves the covered screen's marker in the accessibility tree, so two markers are routinely present. Readers therefore **prefer the deepest marker** — deepest in the node hierarchy, ties broken by the greatest `y` (a flat driver capture has no hierarchy to compare) and then by document order — rather than giving up when there is more than one. Because every marker is a 1 pt element at its root's top-leading corner, the `y` tie is routine rather than exotic (two roots both flush with the top), so a normalizer must not collapse two elements carrying different identifiers however identical the rest of their geometry, label and value (issue #15).
 
 ### R4 — Element identifiers
 
@@ -153,5 +155,6 @@ Register every interrupter the agent may meet: OS permission prompts, paywalls, 
 ## 5. Open questions
 
 - Verify that Argent surfaces Compose `testTag` values as resource ids when `testTagsAsResourceId` is set; if not, fall back to Views ids for the pilot.
-- Confirm whether SwiftUI containers with `.accessibilityElement(children: .contain)` remain hittable for Argent's tap and don't swallow child taps.
 - Decide whether fixtures live in the app target or a debug-only module; prefer a debug module to keep production binary size flat.
+
+Answered: SwiftUI containers with `.accessibilityElement(children: .contain)` do **not** swallow child taps, but they are not listed at all in the flat tree a driver reads — see R3 and `instrumentation/README.md` (issue #15).

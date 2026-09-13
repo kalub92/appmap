@@ -293,7 +293,11 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     (`application > window > [marker-subtree, tabBar]`); `xcuitest` is the nested `{type,
     identifier, label, value, frame, children}` snapshot other drivers emit (best-effort);
     Maestro hierarchy is `{elements:[{attributes, children}]}` (best-effort); plus the hook
-    `tool_response` (`structuredContent.snapshot`) wrapper. Fixtures carry a `_note`.
+    `tool_response` (`structuredContent.snapshot`) wrapper. Fixtures carry a `_note`. Collapsing
+    exact duplicates in the flat shape exempts elements carrying DIFFERENT identifiers (issue
+    #15): `appMapScreen` pins every marker as a 1pt box at its root's top-leading corner, so two
+    stacked screens report two markers with one frame, and collapsing them dropped the pushed
+    screen's marker before `deepestMarker` could ever see it.
 13. **Trajectory `input.text` and the task text are kept, PII-redacted** — a deliberate
     deviation from the letter of 07 §2.2/§4 ("nothing raw touches disk"): the compiler needs
     equality between what was typed and a declared param value (04 §3.4). Both strings pass

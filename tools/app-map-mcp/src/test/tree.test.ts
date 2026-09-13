@@ -8,7 +8,8 @@ import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { structuralHash } from '../signature.ts';
 import {
   MAX_TREE_DEPTH,
-  allNodes, centerOf, compactJson, countNodes, deepestMarker, detectTreeShape, extractSnapshot, findByA11yId,
+  allNodes, centerOf, compactJson, countNodes, dedupeArgentElements, deepestMarker, detectTreeShape, extractSnapshot,
+  findByA11yId,
   findMarkerNodes, fromArgentScreen, fromMaestroHierarchy, fromXcuiSnapshot, isNormalizedTree, labelOf, nodeAtPath,
   nodesWithRole, normalizeTree, parentOf, pathOf, rolePath, screenRoot, siblingIndex, walk,
 } from '../tree.ts';
@@ -313,6 +314,43 @@ describe('fromArgentScreen — real @swmansion/argent@0.25.0 output (03 §5, iss
       'sha1:f146624953c6f612abb0b886da783c60421173ff',
       'films_list.yaml signature.structural_hash',
     );
+  });
+
+  it('never collapses two markers that share a 1pt frame — the 1pt overlay makes that routine (issue #15)', () => {
+    // `AppMapKit.appMapScreen` now pins every marker as a 1pt element at its screen root's
+    // top-leading corner, so two roots flush with the top (a `fullScreenCover`, a `TabView`
+    // swap) report two markers with an IDENTICAL normalized frame, no label and no value.
+    // Collapsing them kept the first — the covered screen's, because it already carried an
+    // identifier — and `identify_screen` then answered the screen underneath.
+    const marker = (id: string): Record<string, unknown> => ({
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      normalizedFrame: { x: 0, y: 0, width: 0.0026, height: 0.0012 },
+      traits: [], identifier: id, viewClassName: 'SwiftUI.AccessibilityNode',
+    });
+    const elements = [
+      marker('screen.invoice_list'),
+      marker('screen.invoice_detail'),
+      { normalizedFrame: { x: 0.04, y: 0.12, width: 0.2, height: 0.04 }, traits: ['button'], identifier: 'invoice.detail.back.button', viewClassName: 'UIButton' },
+    ];
+    assert.deepEqual(
+      dedupeArgentElements(elements, 390, 844).map((e) => e['identifier']),
+      ['screen.invoice_list', 'screen.invoice_detail', 'invoice.detail.back.button'],
+      'two different identifiers are two elements a locator can tell apart (02 §5.1)',
+    );
+    const t = fromArgentScreen({ status: 'ok', screenFrame: { x: 0, y: 0, width: 390, height: 844 }, elements }, 'ios', { roleHints: PILOT_HINTS });
+    const { nodes, count } = findMarkerNodes(t);
+    assert.equal(count, 1, 'the covered marker is still dropped by the rebuild, not by the dedupe');
+    assert.equal(nodes[0]!.a11y_id, 'screen.invoice_detail', 'document order breaks the exact `y` tie: last wins');
+    assert.deepEqual(screenRoot(t).bbox_norm, { x: 0, y: 0, w: 1, h: 1 }, 'the 1pt overlay frame is replaced by the screen');
+
+    // the identified/unidentified rule is untouched: an unlabeled twin with no identifier still
+    // merges into the marker sharing its frame (the doubled tab bar, issue #10)
+    const withTwin = dedupeArgentElements([
+      ...elements,
+      { frame: { x: 0, y: 0, width: 1, height: 1 }, normalizedFrame: { x: 0, y: 0, width: 0.0026, height: 0.0012 }, traits: [], viewClassName: 'SwiftUI.AccessibilityNode' },
+    ], 390, 844);
+    assert.equal(withTwin.length, 3, 'the unidentified twin merges rather than becoming a fourth element');
+    assert.deepEqual(withTwin.map((e) => e['identifier']), ['screen.invoice_list', 'screen.invoice_detail', 'invoice.detail.back.button']);
   });
 
   it('keeps only the deepest marker — a pushed detail leaves the parent marker behind', () => {

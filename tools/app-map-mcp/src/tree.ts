@@ -14,7 +14,12 @@
  *  - `xcuitest`: the nested XCUITest-like snapshot some other drivers emit — `{type,
  *    identifier?, label?, value?, enabled?, hasFocus?, selected?, frame:{x,y,width,height},
  *    children[]}` possibly wrapped as `{root, screen:{width,height}, build_number?, bundle_id?,
- *    udid?}` (fixtures/raw/xcuitest-snapshot.invoice_list.json — best-effort). The wrapper's
+ *    udid?}` (fixtures/raw/xcuitest-snapshot.invoice_list.json — best-effort). A reader that DOES
+ *    list containers sees an `appMapScreen` root twice — the container and the 1 pt marker
+ *    element inside it both carry `screen.<id>` (issue #15) — so `structuralHash` would count the
+ *    pair twice and differ from a hand-written fixture. `fromArgentScreen` is unaffected (the
+ *    flat capture only ever emits the leaf) and no nested-capture app exists yet, so this is left
+ *    alone rather than special-cased. The wrapper's
  *    `build_number` → `Tree.build` and `bundle_id` → `Tree.app_id` (03 §3 `APP_MAP_BUILD=auto`,
  *    03 §13; observe.ts calls `ctx.setBuild`); `udid` is dropped (07 §2.2 device identifiers).
  *    The flat Argent capture carries neither, so `APP_MAP_BUILD=auto` falls back to config there;
@@ -39,7 +44,8 @@
  * locator (02 §5.1) and inventing frame-containment would change every `path`,
  * `fingerprint.parent_role` and `sibling_index` the map has already learned. Four rules:
  *   1. exact-duplicate elements collapse (`dedupeArgentElements`) — the iOS AX service reports
- *      the tab bar twice, once with identifiers and once without;
+ *      the tab bar twice, once with identifiers and once without — but two elements carrying two
+ *      DIFFERENT identifiers never collapse, however identical the rest of the tuple (issue #15);
  *   2. only the deepest marker survives (01 R3 as amended for pushed screens, see
  *      `deepestMarker`); the markers it covers are dropped, not kept as siblings;
  *   3. the surviving marker becomes a full-screen `container` (its own 1pt overlay frame — see
@@ -444,7 +450,8 @@ function clampBBox(b: BBoxNorm): BBoxNorm {
 
 /**
  * One element per `(normalized frame, label, value)`, preferring the twin that carries an
- * `identifier` and keeping the first twin's position in capture order (`sibling_index`, 02 §5.1).
+ * `identifier` and keeping the first twin's position in capture order (`sibling_index`, 02 §5.1)
+ * — except that two elements carrying two DIFFERENT identifiers never collapse (issue #15).
  *
  * This is a GENERAL exact-duplicate rule, not a tab-bar special case, even though the tab bar is
  * where it bites (the iOS AX service reports every tab twice, once identified and once not, and
@@ -453,8 +460,21 @@ function clampBBox(b: BBoxNorm): BBoxNorm {
  * AX service reported twice: no locator strategy we have could ever tell them apart, so keeping
  * both only manufactures ambiguity and doubles every `sibling_index`. Restricting the rule to the
  * tab bar would need a tab-bar detector that itself depends on the duplicates already being gone.
- * The deliberate cost: two genuinely distinct, exactly coincident controls with the same label
- * collapse into one — which no locator could have addressed separately anyway.
+ *
+ * The exception exists because "no locator could tell them apart" is simply false once the two
+ * carry different `identifier`s — `a11y_id` is the weight-1.0 locator (02 §5.1). It became
+ * load-bearing with issue #15: `appMapScreen` now pins every marker as a 1 pt element at its
+ * screen root's top-leading corner, so two stacked screens (a `fullScreenCover`, a `TabView`
+ * swap, or a push whose detail root is flush with the top) report two markers with an identical
+ * frame, no label and no value. Collapsing those kept the twin that came FIRST — the marker of
+ * the screen underneath, because it already carried an identifier so the prefer-the-identified
+ * branch never fired — and `identify_screen` then answered the covered screen, re-introducing
+ * exactly the failure issue #10 fixed: `deepestMarker` never got to see the second marker
+ * because normalization had already eaten it.
+ *
+ * The deliberate cost is now narrower: two genuinely distinct, exactly coincident controls that
+ * share a label AND an identifier (or carry no identifier at all) collapse into one — which no
+ * locator could have addressed separately anyway.
  */
 export function dedupeArgentElements(
   elements: readonly Record<string, unknown>[], vw: number, vh: number,
@@ -468,7 +488,17 @@ export function dedupeArgentElements(
     if (at === undefined) {
       slots.set(key, out.length);
       out.push(el);
-    } else if (optString(out[at]!['identifier']) === undefined && optString(el['identifier']) !== undefined) {
+      continue;
+    }
+    const kept = optString(out[at]!['identifier']);
+    const mine = optString(el['identifier']);
+    if (kept !== undefined && mine !== undefined && kept !== mine) {
+      // two identifiers = two elements a locator CAN tell apart (issue #15). Point the slot at
+      // the newest twin so a later UNidentified duplicate still merges into it rather than
+      // resurrecting the older one.
+      slots.set(key, out.length);
+      out.push(el);
+    } else if (kept === undefined && mine !== undefined) {
       out[at] = el;
     }
   }
@@ -514,6 +544,13 @@ export function fromArgentScreen(input: unknown, platform: Platform, opts: Argen
   // same answer: a flat capture has no hierarchy, so every marker is at the same depth and `y`
   // decides — the lower marker is the one the pushed screen drew — with document order (last
   // wins) breaking an exact tie, exactly as `deepestMarker` does.
+  // Issue #15 makes that tie ROUTINE rather than a corner case: every marker is now a 1 pt box
+  // at its screen root's top-leading corner, so two roots flush with the top (a
+  // `fullScreenCover`, a `TabView` swap) report the same `y`. Last wins on the assumption that
+  // the AX service enumerates a presented screen after the one it covers — which the
+  // `invoice_detail` capture is consistent with but does not prove for a cover; only a real
+  // simulator capture can. Note the reference integration's Python bridge differs here
+  // (`max(key=y)` keeps the FIRST maximum).
   let top: Record<string, unknown> | undefined;
   let topY = -1;
   for (const el of unique) {
