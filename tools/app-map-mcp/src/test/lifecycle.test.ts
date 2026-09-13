@@ -885,6 +885,52 @@ describe('recompileFrom — the 04 §8 recompile write guard (issue #13)', () =>
     );
   });
 
+  // The 04 §8 recompile is the outcome 03 §3's driver swappability was really about: classifying
+  // a non-Argent call correctly is worth nothing if the rebuild is refused anyway. `launch_app`
+  // was `lifecycle` under `argent` and `unknown` under every other prefix, `unknown` is an
+  // incompleteness warning, and criterion 1 above refuses on one — so the automatic recompile was
+  // permanently dead for every driver but Argent, and silently, since the refusal names a launch
+  // call and reads like a real defect report.
+  it('a non-Argent trajectory whose calls include a launch recompiles, instead of being refused on a spurious `unknown` (03 §3)', () => {
+    const tm = makeTempAppMapDir({ env: { APP_MAP_DRIVER: 'maestro' } });
+    const c = openContext(tm.config, { logSink: 'none', skipRetention: true, dbPath: ':memory:' });
+    try {
+      assert.equal(c.config.driver, 'maestro', 'the whole point of the fixture: no DRIVER_VERBS table');
+      c.db.putRecipe(reviewedThreeStep(), { dirty: false });
+      // the same covering seqs 4-8 as the accepted-rebuild test above, re-recorded under the
+      // names another driver registers, plus the `launch_app` a real run opens with
+      const asMaestro: Record<string, string> = {
+        mcp__argent__tap: 'mcp__maestro__tapOn',
+        mcp__argent__type_text: 'mcp__maestro__input_text',
+      };
+      const fixture = loadTrajectoryFixture('create_invoice.session');
+      for (const o of fixture) {
+        if (![4, 5, 6, 7, 8].includes(o.seq)) continue;
+        c.db.insertObservation({ ...o, tool: asMaestro[o.tool] ?? o.tool });
+      }
+      // seq 3 re-recorded as the launch: it already carries the invoice_new tree as it stood
+      // BEFORE the amount field was tapped, which is what seq 4's `expect` is inferred against
+      const beforeFirstStep = fixture.find((o) => o.seq === 3)!;
+      c.db.insertObservation({ ...beforeFirstStep, tool: 'mcp__maestro__launch_app', input: { app_id: 'com.example.pilot' }, element: undefined, screen_before: 'invoice_new' });
+      const decision = forceRecompile(c);
+
+      assert.deepEqual(decision?.recompile?.refusals, [], 'the launch is a known non-step, so nothing blocks');
+      assert.equal(decision?.recompile?.written, true);
+      assert.equal(
+        decision?.recompile?.warnings.some((w) => w.includes('launch_app')),
+        false,
+        `the launch produced no warning at all: ${decision?.recompile?.warnings.join(' | ')}`,
+      );
+      const next = c.db.getRecipe('create_invoice') as RecipeFile;
+      assert.deepEqual(next.steps.map((x) => x.action), ['tap', 'type', 'tap', 'select', 'tap'], 'and the maestro-named calls compiled to the same steps Argent\'s did');
+      assert.equal(next.provenance.reviewed_by, 'caleb');
+      assert.equal(next.provenance.machine_recompile, true);
+    } finally {
+      c.close();
+      tm.cleanup();
+    }
+  });
+
   it('an INCOMPLETENESS warning blocks the write even when the steps cover the reviewed ones (criterion 2)', () => {
     ctx.db.putRecipe(reviewedThreeStep(), { dirty: false });
     // seqs 1 and 4-8 (the excursion at 2-3 left out, so the collapse note is not in play), plus a

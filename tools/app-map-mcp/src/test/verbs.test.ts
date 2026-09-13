@@ -140,6 +140,88 @@ describe('classifyVerb — the @swmansion/argent@0.25.0 tool surface (04 §3.3, 
     assert.equal(classify('mcp__argent__screenshot'), 'perception');
   });
 
+  // --- the generic fallback's non-step kinds (03 §3 driver swappability) ---------------------
+  //
+  // The fallback covered the four STEP verbs and perception and NOTHING else, so the same call
+  // classified differently depending only on the prefix it was recorded under: `launch_app` was
+  // `lifecycle` for `argent` and `unknown` for every other driver. `unknown` is an incompleteness
+  // warning in compile.ts, and lifecycle.ts's 04 §8 write guard refuses any rebuild carrying one —
+  // so a driver swap silently killed the automatic recompile instead of just losing a table.
+
+  it('the same lifecycle call classifies the same whatever the driver prefix is (03 §3, 04 §8)', () => {
+    // the five probes from the report, in order
+    assert.equal(classify('mcp__argent__launch_app'), 'lifecycle', 'the tabled driver, unchanged');
+    assert.equal(classify('mcp__maestro__launch_app', 'maestro'), 'lifecycle', 'same name, same semantics, no table');
+    assert.equal(classify('mcp__maestro__run_flow', 'maestro'), 'batch');
+    // `back` is Android's system Back, classified by BACK_RE since the hold/back fix
+    assert.equal(classify('mcp__maestro__back', 'maestro'), 'unsupported');
+    assert.equal(classify('mcp__mobile-mcp__mobile_launch_app', 'mobile-mcp'), 'lifecycle');
+  });
+
+  it('waits, app lifecycle and log dumps are known non-steps for an untabled driver too', () => {
+    const lifecycle = [
+      'launch_app', 'launchApp', 'relaunch', 'restart_app', 'start_app', 'reinstall_app',
+      'install_app', 'installApp', 'uninstall_app', 'terminate_app', 'terminateApp', 'kill_app',
+      'activate_app', 'activateApp',
+      'wait', 'waitForAnimationToEnd', 'await_element', 'wait_for_idle', 'screen_idle', 'sleep', 'delay',
+      'device_info', 'deviceInfo', 'network_logs', 'logcat', 'console_log',
+    ];
+    for (const tool of lifecycle) {
+      assert.equal(classify(`mcp__maestro__${tool}`, 'maestro'), 'lifecycle', tool);
+      assert.equal(isStepVerb(classify(`mcp__maestro__${tool}`, 'maestro')), false, tool);
+    }
+  });
+
+  it('a batch is `batch` for an untabled driver, not the one interaction its name happens to contain', () => {
+    // `batch` is a LOUD kind (compile.ts drops it with a warning), so it is tested BEFORE the
+    // step patterns: compiling `tap_sequence` into a single `tap` would fabricate the per-step
+    // postconditions 04 §3.6 says cannot be reconstructed from one observation.
+    for (const tool of ['run_flow', 'runFlow', 'run_sequence', 'batch', 'run_batch', 'macro', 'tap_sequence', 'swipe_sequence']) {
+      assert.equal(classify(`mcp__maestro__${tool}`, 'maestro'), 'batch', tool);
+    }
+  });
+
+  it('the hierarchy dump other drivers spell differently is still `perception`, never a warning', () => {
+    for (const tool of ['page_source', 'pageSource', 'view_source', 'elements_on_screen', 'list_elements_on_screen', 'view_tree', 'ui_tree', 'a11y_tree', 'semantics', 'get_semantics']) {
+      assert.equal(classify(`mcp__maestro__${tool}`, 'maestro'), 'perception', tool);
+    }
+    assert.equal(classify('mcp__mobile-mcp__mobile_list_elements_on_screen', 'mobile-mcp'), 'perception');
+  });
+
+  it('the generic non-step patterns cannot steal a genuine step verb from a non-Argent driver', () => {
+    // the four 02 §6 verbs on the untabled driver: none of the new patterns may touch them
+    assert.equal(classify('mcp__maestro__open-url', 'maestro'), 'open_link');
+    assert.equal(classify('mcp__maestro__tap', 'maestro'), 'tap');
+    assert.equal(classify('mcp__maestro__swipe', 'maestro'), 'swipe');
+    assert.equal(classify('mcp__maestro__input_text', 'maestro'), 'type');
+    // `lifecycle` is SILENT, so its patterns are tested LAST — after every step pattern. A
+    // composite that waits and then ACTS is the act, not the wait; a silent drop here is the
+    // issue #9 failure mode (the step vanishes and the recipe passes while exercising nothing).
+    assert.equal(classify('mcp__maestro__waitForElementAndTap', 'maestro'), 'tap');
+    assert.equal(classify('mcp__maestro__wait_for_element_and_input_text', 'maestro'), 'type');
+    assert.equal(classify('mcp__maestro__scroll_until_visible', 'maestro'), 'swipe');
+    assert.equal(classify('mcp__maestro__wait_and_open_url', 'maestro'), 'open_link');
+  });
+
+  it('a name that merely resembles a lifecycle word is still `unknown`, so it warns rather than vanishing', () => {
+    // `activate` is the one lifecycle word a driver could plausibly use for "activate this
+    // element" (i.e. a tap), so only the app-scoped spelling is silent
+    assert.equal(classify('mcp__maestro__activate', 'maestro'), 'unknown');
+    assert.equal(classify('mcp__maestro__activate_element', 'maestro'), 'unknown');
+    assert.equal(classify('mcp__argent__telemetry_flush'), 'unknown', 'the pre-existing probe is untouched');
+    assert.equal(classify('mcp__maestro__login', 'maestro'), 'unknown', '`login` is not a log dump');
+    assert.equal(classify('mcp__maestro__skill', 'maestro'), 'unknown', '`skill` is not `kill`');
+  });
+
+  it('the driver table stays authoritative where it has an entry (03 §3)', () => {
+    // every confirmed 0.25.0 entry classifies to exactly its tabled kind — including `button` and
+    // `tv-remote`, which no generic pattern claims, and the lifecycle/batch entries the generic
+    // patterns now also match. This is what pins the harness grant list below.
+    for (const [name, kind] of Object.entries(ARGENT_VERBS)) {
+      assert.equal(classify(`mcp__argent__${name}`, ARGENT), kind, name);
+    }
+  });
+
   it('bareToolName strips `mcp__<driver>__`, a foreign driver prefix, and leaves a bare name alone', () => {
     assert.equal(bareToolName('mcp__argent__gesture-tap', ARGENT), 'gesture-tap');
     // a trajectory outlives an APP_MAP_DRIVER change: the recorded prefix may not be today's

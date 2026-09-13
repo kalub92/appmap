@@ -17,6 +17,23 @@
  * keep older trajectories (`tap`, `type_text`, `open_url`, `swipe`, `describe_ui`) and other
  * drivers compiling. Whatever matches nothing at all is `unknown`, never silent.
  *
+ * Those patterns used to cover the four STEP verbs and perception and nothing else, so 03 §3's
+ * driver swappability held for classification but not for OUTCOMES: `launch_app` was `lifecycle`
+ * under `argent` and `unknown` under any other prefix, every `unknown` becomes an incompleteness
+ * warning in compile.ts, and `lifecycle.ts`'s recompile gate refuses a rebuild carrying one. The
+ * 04 §8 automatic recompile was therefore permanently dead for every driver but Argent — silently,
+ * because a refusal on a launch call reads like a defect report. The fallback now also carries the
+ * two kinds no driver can avoid having: `BATCH_RE` (a `run-flow`/`run-sequence`/macro shape) and
+ * `APP_LIFECYCLE_RE`/`WAIT_RE`/`DEVICE_RE` (launch/install/terminate, waits, log dumps), and
+ * `PERCEPTION_RE` learned the hierarchy-dump spellings other drivers use (`page_source`,
+ * `elements_on_screen`, `view_tree`, `semantics`).
+ *
+ * Deliberately NO second entry in `DRIVER_VERBS`. A table is a claim that a driver really
+ * registers those names, and only Argent's was checked against a live `argent tools` (issue #9);
+ * 05 §5's grant check reads a table as exactly that evidence (issue #21), so a Maestro table
+ * written from memory would look identical to a confirmed one. A generic pattern claims only that
+ * a name SHAPED like a launch is a launch — true of any driver, and falsifiable by reading it.
+ *
  * The table only ever covered the tools ONE onboarding made visible, so `unsupported` listed
  * exactly the two non-tap gestures Argent happens to name. The generic fallback decided the rest,
  * and its tap test is a bare substring match — so `long_press`, `touch_and_hold`, `double_tap`
@@ -37,11 +54,13 @@ export type StepVerb = 'tap' | 'type' | 'swipe' | 'open_link';
  * What a driver call is. The kinds that are not a `StepVerb`:
  *  - `perception` — reading the screen (`screenshot`, `describe`, a hierarchy dump): never a step
  *    and never a warning, since the compiler expects the driver to look before it acts (03 §8);
- *  - `lifecycle` — waits, app launch/restart, log dumps, and the `report_step` observation
- *    guided replay synthesizes without hooks (04 §5): a KNOWN non-step, so it is silent too;
- *  - `batch` — several interactions inside one call (Argent `run-sequence`), rejected with a
- *    warning: one observation carries one screen pair and one element (02 §7), so the per-step
- *    postconditions of 04 §3.6 cannot be reconstructed from it;
+ *  - `lifecycle` — waits, app launch/restart/install, device and log dumps, and the `report_step`
+ *    observation guided replay synthesizes without hooks (04 §5): a KNOWN non-step, so it is
+ *    silent too. Being silent is why its generic patterns are tested LAST, after every step
+ *    pattern has declined;
+ *  - `batch` — several interactions inside one call (Argent `run-sequence`, Maestro `run-flow`),
+ *    rejected with a warning: one observation carries one screen pair and one element (02 §7), so
+ *    the per-step postconditions of 04 §3.6 cannot be reconstructed from it;
  *  - `unsupported` — a real interaction that 02 §6 has no step for: Argent's `button` and
  *    `tv-remote`, plus everything the generic `HOLD_RE`/`BACK_RE` below catch (a long press, a
  *    double tap, a pinch/drag, Android's system Back). The point of the kind is that the call is
@@ -136,11 +155,38 @@ const HOLD_RE = /long_?(?:press|tap|click|touch|hold)|(?:press|tap|click|touch)_
 // `back` step (a back edge is modelled in the map, 02 §4.2), so the honest answer is "a real
 // interaction with no step": dropped, and WARNED about, so the reviewer re-drives or adds an edge.
 const BACK_RE = /(?:^|_)back(?:_|$)|go_?back|press_?back|nav(?:igate)?_?back|back_?button|key_?event|key_?code/;
+// Several interactions in one call. `unsupported`/`batch` are the LOUD kinds — compile.ts drops
+// the call WITH a warning — so they are safe to test before the step patterns, and a batch has to
+// be: `tap_sequence` and `run-flow` contain a step word each, and compiling either into the ONE
+// interaction that word names is the fabrication 04 §3.6 forbids (one observation carries one
+// screen pair, so N interactions cannot be given N postconditions). Argent's `run-sequence` is
+// tabled; this is the same idea under whatever name another driver gives it (`run_flow`, a macro).
+const BATCH_RE = /run_?sequence|run_?flow|(?:^|_)batch|(?:^|_)sequence(?:_|$)|(?:^|_)macro(?:_|$)/;
 const TAP_RE = /tap|click|press|touch/;
-const PERCEPTION_RE = /screenshot|snapshot|hierarchy|describe|dump|accessibility/;
+// `page_source`/`elements_on_screen`/`view_tree`/`ui_tree`/`semantics` are the shapes non-Argent
+// drivers give the hierarchy dump that `native-full-hierarchy` is here (Appium and Maestro read
+// the page source, mobile-mcp lists the elements on screen, a Flutter driver reads semantics).
+const PERCEPTION_RE = /screenshot|snapshot|hierarchy|describe|dump|accessibility|page_?source|view_?source|elements_?on_?screen|list_?elements|(?:ui|view|a11y|element|widget|layout)_?tree|semantics/;
 const OPEN_LINK_RE = /open_?url|open_?link|deep_?link/;
 const TYPE_RE = /type|input_text|set_text|enter_text|keyboard|paste/;
 const SWIPE_RE = /swipe|scroll/;
+// A known non-step, tested LAST — after every step pattern — because `lifecycle` is SILENT and a
+// silently dropped interaction is the #9 failure mode this module exists to stop. Testing it here
+// means it can only ever turn an `unknown` into a known non-step: a composite like `wait_and_tap`
+// or `launch_and_tap` has already been claimed by `TAP_RE` above and stays a step.
+//
+// The app is started, stopped or replaced between steps. `_?` between the words because
+// `normalizeVerb` collapses camelCase (`launchApp` → `launchapp`), a leading `(?:^|_)` so nothing
+// matches mid-word. `activate` is the one word here that a driver could plausibly use for "activate
+// this element" (i.e. a tap), so it is only lifecycle when it names the APP — an unqualified
+// `activate` stays `unknown` and warns rather than vanishing.
+const APP_LIFECYCLE_RE = /(?:^|_)(?:re)?launch|(?:^|_)(?:re|un)?install|(?:^|_)restart|(?:^|_)start_?app|(?:^|_)terminate|(?:^|_)kill|(?:de)?activate_?app|app_?(?:de)?activate/;
+// The driver holds until the UI settles. Argent tables `await-ui-element`/`await-screen-idle`;
+// every driver spells its own (`wait`, `waitForAnimationToEnd`, `idle`, `sleep`).
+const WAIT_RE = /(?:^|_)a?wait|(?:^|_)idle|(?:^|_)sleep|(?:^|_)delay/;
+// Device facts and log dumps: a read that is not the screen, so not `perception` either. Argent
+// tables `native-network-logs`/`view-network-logs`; `logcat` and `device_info` are the rest.
+const DEVICE_RE = /device_?info|(?:device|network|console|system)_?logs?|(?:^|_)logcat/;
 
 /** What a driver call is (04 §3.3). Total: an unrecognised tool is `unknown`, never nothing. */
 export function classifyVerb(tool: string, driver: string): VerbKind {
@@ -153,6 +199,9 @@ export function classifyVerb(tool: string, driver: string): VerbKind {
   // a gesture or a system Back BEFORE the tap test: each contains `press`/`touch`/`tap`, and a
   // `tap` is the wrong step for every one of them (see the notes on the patterns)
   if (HOLD_RE.test(name) || BACK_RE.test(name)) return 'unsupported';
+  // a batch BEFORE the step tests too: `run_flow`/`tap_sequence` each contain a step word, and a
+  // batch compiled into one of the interactions it contains is worse than one rejected (04 §3.6)
+  if (BATCH_RE.test(name)) return 'batch';
   // `tap_and_describe` acts before it reads: a name that is both is an interaction
   const tapish = TAP_RE.test(name);
   if (PERCEPTION_RE.test(name) && !tapish) return 'perception';
@@ -160,6 +209,9 @@ export function classifyVerb(tool: string, driver: string): VerbKind {
   if (TYPE_RE.test(name)) return 'type';
   if (SWIPE_RE.test(name) && !tapish) return 'swipe';
   if (tapish) return 'tap';
+  // LAST, because `lifecycle` is silent: at this point every step pattern has already declined,
+  // so this can only upgrade an `unknown`, never swallow an interaction (see the patterns)
+  if (APP_LIFECYCLE_RE.test(name) || WAIT_RE.test(name) || DEVICE_RE.test(name)) return 'lifecycle';
   return 'unknown';
 }
 
