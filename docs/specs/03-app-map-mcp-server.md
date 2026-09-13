@@ -86,8 +86,8 @@ Tool names appear to the harness as `mcp__app-map__<name>`. All outputs are comp
 | `summary` | `{}` | screens count, recipes list (id + description), current build, gates | ≤600 tokens; what SessionStart injects |
 | `identify_screen` | `{snapshot?}` | §5 result | uses last recorded observation if `snapshot` omitted |
 | `get_screen` | `{screen_id}` | compact block (below) | ≤400 tokens |
-| `find_element` | `{screen_id, element_id \| intent}` | resolved locator + confidence, or miss with top candidates | |
-| `plan_path` | `{from, to}` | `{deep_link}` or ordered edge list | prefers deep link (invariant 7) |
+| `find_element` | `{screen_id?, element_id \| intent}` | resolved locator + confidence, or miss with top candidates | an omitted `screen_id` is the last observation's screen (§2) |
+| `plan_path` | `{from?, to}` | `{deep_link}` or ordered edge list | prefers deep link (invariant 7); an omitted `from` is the last observation's screen, else `unknown` (§2) |
 | `match_recipe` | `{instruction, platform?}` | `{recipe_id, confidence, params_needed[]}` or `{no_match, candidates[]}` | regex cascade; candidates ≤ 8 lines |
 | `run_recipe` | `{recipe_id, params, mode: guided \| headless}` | guided: `{run_id, step}`; headless: run report | 04 §5–6 |
 | `report_step` | `{run_id, step_id, ok, note?}` | next step, `done`, or `fallback: {step, reason}` | verifies against last observation |
@@ -126,9 +126,17 @@ Resources exist for harnesses that prefer reading over tool calls; tools remain 
 | `app-map export [--force]` | dev, Stop hook, CI | cache → canonical YAML |
 | `app-map record --stdin` | PostToolUse hook | ingest one hook payload |
 | `app-map summary --max-tokens N` | SessionStart hook | |
+| `app-map identify-screen [--session S] [--snapshot f]` | scripts, CI | shares the §8 tool body; exit 1 when the screen is `unknown` |
+| `app-map get-screen <screen_id>` | scripts, CI | shares the §8 tool body |
+| `app-map find-element <element_id> [--screen S] [--intent I]` | scripts, CI | shares the §8 tool body; exit 1 on a miss |
+| `app-map plan-path [FROM] TO` | scripts, CI | shares the §8 tool body; exit 1 on `kind: none` |
+| `app-map name-screen <screen_id> [--title T] [--deep-link L] [--force]` | dev, bootstrap | shares the §8 tool body; writes the cache, then `export` |
+| `app-map match-recipe "<instruction>"` | scripts | shares the §8 tool body; declares the task (04 §2); exit 1 on `no_match` |
+| `app-map run-recipe R --params k=v… [--mode guided\|headless]` | scripts, CI | shares the §8 tool body — the same one `run --guided` uses |
+| `app-map report-step --run-id R --step-id S --ok true\|false` | scripts, CI | shares the §8 tool body; exit 1 on a `fallback` |
 | `app-map import-router <json>` | CI | seed/refresh screens from 01 R6 |
 | `app-map compile --session S --task T --name R` | dev | 04 §3 |
-| `app-map run R --params k=v… [--headless]` | dev, CI | 04 §6 |
+| `app-map run R --params k=v… [--guided \| --headless]` | dev, CI | 04 §5-6; `--guided` is the explicit spelling of the default |
 | `app-map maestro-export [R \| --all] --out DIR` | CI | 04 §6.2 |
 | `app-map drift --build B` | CI | 06 R4 |
 | `app-map report [--since]` | dev | 08 §4 |
@@ -138,6 +146,12 @@ Resources exist for harnesses that prefer reading over tool calls; tools remain 
 | `app-map mark R STATUS [--reviewer NAME] [--recipe-file path] [--force]` | dev | 04 §3.8 — the recipe half of the `mark` tool |
 | `app-map mark-screen S STATUS [--reviewer NAME] [--force]` | dev | 02 §8 — the screen half; the only way back out of `verified` |
 | `app-map merge-driver %O %A %B` | git | 02 §9 |
+
+Every §8 tool that reads or drives the map has a CLI twin; both call the same function in
+`src/tools.ts` and the twin's `--json` output IS the tool's `structuredContent`, so a script,
+a CI job or a bootstrap run gets the same answer over either front end. The CLI never speaks
+MCP. Exit codes follow the CLI's own contract — 0 ok, 1 the command failed or reported a
+finding, 2 usage — so a shell driver can branch on `$?` without parsing the JSON.
 
 ## 11. Non-functional requirements
 

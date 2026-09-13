@@ -1,7 +1,9 @@
 /**
  * [D2] `bin/app-map` CLI (03 §10). Shares the library with the server; never talks to a
  * running server except `record`, which prefers the ingest socket (03 §2) and falls back to
- * direct SQLite writes.
+ * direct SQLite writes. Every 03 §8 tool that reads or drives the map has a twin here and both
+ * call the SAME body in `tools.ts` (issue #17) — the CLI imports no MCP SDK, and a script, a CI
+ * job or a bootstrap run never has to hand-roll an MCP stdio client to reach `name_screen`.
  *
  * | command                                                     | used by            | body                                              |
  * |-------------------------------------------------------------|--------------------|---------------------------------------------------|
@@ -9,9 +11,17 @@
  * | export [--force] [--check]                                  | dev, Stop hook, CI | store/export.exportMap                            |
  * | record --stdin                                              | PostToolUse hook   | ingest-socket.postToIngestSocket ‖ observe.recordHookPayload; ALWAYS exit 0 |
  * | summary [--max-tokens N] [--hook-json]                      | SessionStart hook  | format.formatSessionStartContext; `--hook-json` wraps in `SessionStartHookOutput` |
+ * | identify-screen [--session S] [--snapshot f]                | scripts, CI        | tools.toolIdentifyScreen; exit 1 when the screen is `unknown` |
+ * | get-screen <screen_id> [--session S]                        | scripts, CI        | tools.toolGetScreen — the fixed ≤400-token block (03 §8) |
+ * | find-element <element_id> [--screen S] [--intent I]         | scripts, CI        | tools.toolFindElement; exit 1 on a miss (the candidates are still printed) |
+ * | plan-path [FROM] TO [--from S]                              | scripts, CI        | tools.toolPlanPath; exit 1 on `kind: none` |
+ * | name-screen <screen_id> [--title T] [--deep-link L] [--force] | dev, bootstrap   | tools.toolNameScreen; writes the CACHE — run `export` after (03 §4) |
+ * | match-recipe "<instruction>" [--session S]                  | scripts            | tools.toolMatchRecipe; declares the task (04 §2), so it WRITES; exit 1 on `no_match` |
+ * | run-recipe R --params k=v… [--session S] [--mode m]         | scripts, CI        | tools.toolRunRecipe — the same body `run --guided` uses |
+ * | report-step --run-id R --step-id S --ok true\|false [--note N] | scripts, CI     | tools.toolReportStep; exit 1 on a `fallback`. Works across processes: the run lives in SQLite (04 §5) |
  * | import-router <json> [--no-retire] [--strict] [--purge-retired] [--dry-run] | CI | router-import.importRouter (+ export unless dry-run) |
  * | compile --session S --task T --name R [--param name:type[=value]…] [--to-seq N] | dev | compile.compileRecipe (`=value` fills `values`) → prints YAML |
- * | run R --params k=v… [--headless] [--params-file f] | run --all --status s,… --headless [--params-file f] [--report path] | dev, CI | guided (prints first step) or headless (report JSON) |
+ * | run R --params k=v… [--guided \| --headless] [--params-file f] [--session S] | run --all --status s,… --headless [--params-file f] [--report path] | dev, CI | guided (`tools.toolRunRecipe`, prints the first step) or headless (`runHeadless` directly). The two headless spellings differ on purpose: `run --headless --json` prints the FLAT `HeadlessReport` the CI job reads, while `run-recipe --mode headless` prints the tool's `{mode, recipe, version, report}` |
  * | maestro-export [R | --all] [--status s,…] [--params-file f] --out DIR | CI      | maestro.maestroExport; exit 1 (`bad_input`) when a required param has no value |
  * | drift [--build B] [--platform p] [--router path] [--out path] | CI               | drift.driftTour; `--build` defaults to the router export's build, else `APP_MAP_BUILD`/manifest; exit 1 when `summary.blocking` |
  * | report [--since ISO|30d] [--json]                            | dev                | report.report                                     |
@@ -42,10 +52,10 @@ import { cacheFile, PACKAGE_ROOT } from './paths.ts';
 import type {
   HookPayload, RecipeParam, RecipeParams, RecipeStatus, RouterExport, ScreenStatus, SessionStartHookOutput,
 } from './types.ts';
-import { PARAM_TYPES, RECIPE_STATUSES, SCREEN_STATUSES } from './types.ts';
+import { PARAM_TYPES, RECIPE_STATUSES, SCREEN_STATUSES, UNKNOWN_SCREEN } from './types.ts';
 import { formatIssues, validateMap } from './validate.ts';
 import { exportMap } from './store/export.ts';
-import { formatRunStep, formatSessionStartContext } from './format.ts';
+import { formatSessionStartContext } from './format.ts';
 import { recordHookPayload } from './observe.ts';
 import { parseRequestLine, postToIngestSocket } from './ingest-socket.ts';
 import { importRouter } from './router-import.ts';
@@ -53,7 +63,6 @@ import { compileRecipe } from './recipes/compile.ts';
 import { markRecipe, markScreen } from './recipes/lifecycle.ts';
 import { maestroExport } from './recipes/maestro.ts';
 import { runAllHeadless, runHeadless } from './recipes/headless.ts';
-import { startGuidedRun } from './recipes/guided.ts';
 import { driftTour, formatDriftTable } from './drift.ts';
 import { formatReport, report as buildReport } from './report.ts';
 import { genConfigs } from './gen-configs.ts';
@@ -62,6 +71,11 @@ import { intentCriticalDiff, policyCheck } from './policy-check.ts';
 import { runMergeDriver } from './merge-driver.ts';
 import { migrateId } from './migrate-id.ts';
 import { readAllowlist } from './yaml/load.ts';
+import type { ToolResult } from './tools.ts';
+import {
+  toolFindElement, toolGetScreen, toolIdentifyScreen, toolMatchRecipe, toolNameScreen, toolPlanPath,
+  toolReportStep, toolRunRecipe,
+} from './tools.ts';
 
 export interface CliIo {
   stdin: () => Promise<string>;
@@ -72,7 +86,10 @@ export interface CliIo {
 }
 
 export const COMMANDS = [
-  'validate', 'export', 'record', 'summary', 'import-router', 'compile', 'run', 'maestro-export', 'drift', 'report',
+  'validate', 'export', 'record', 'summary',
+  // the 03 §8 map tools, as CLI twins sharing the tools.ts bodies (issue #17)
+  'identify-screen', 'get-screen', 'find-element', 'plan-path', 'name-screen', 'match-recipe', 'run-recipe', 'report-step',
+  'import-router', 'compile', 'run', 'maestro-export', 'drift', 'report',
   'gen-configs', 'lint-ids', 'policy-check', 'intent-critical-diff', 'mark', 'mark-screen', 'merge-driver', 'migrate-id', 'help',
 ] as const;
 export type Command = (typeof COMMANDS)[number];
@@ -222,6 +239,14 @@ async function dispatch(args: ParsedArgs, io: CliIo): Promise<number> {
     case 'validate': return cmdValidate(args, io);
     case 'export': return cmdExport(args, io);
     case 'summary': return cmdSummary(args, io);
+    case 'identify-screen': return cmdIdentifyScreen(args, io);
+    case 'get-screen': return cmdGetScreen(args, io);
+    case 'find-element': return cmdFindElement(args, io);
+    case 'plan-path': return cmdPlanPath(args, io);
+    case 'name-screen': return cmdNameScreen(args, io);
+    case 'match-recipe': return cmdMatchRecipe(args, io);
+    case 'run-recipe': return cmdRunRecipe(args, io);
+    case 'report-step': return cmdReportStep(args, io);
     case 'import-router': return cmdImportRouter(args, io);
     case 'compile': return cmdCompile(args, io);
     case 'run': return cmdRun(args, io);
@@ -297,6 +322,19 @@ function bool(args: ParsedArgs, name: string): boolean {
   return args.flags[name] === true;
 }
 
+/**
+ * `--ok true|false` — tri-state ON PURPOSE. `bool()` reads a missing flag as `false`, which for
+ * `report-step --ok` would silently turn "the driver forgot to say" into "the step failed" and
+ * fail a run that never ran. A missing `--ok` must be a usage error instead, so `ok` is NOT in
+ * `BOOLEAN_FLAGS` and this reads the value.
+ */
+function boolValue(args: ParsedArgs, name: string): boolean | undefined {
+  const raw = str(args, name);
+  if (raw === undefined) return undefined;
+  if (raw !== 'true' && raw !== 'false') throw new UsageError(`--${name} must be true or false (got ${raw})`);
+  return raw === 'true';
+}
+
 function int(args: ParsedArgs, name: string): number | undefined {
   const raw = str(args, name);
   if (raw === undefined) return undefined;
@@ -348,6 +386,21 @@ function repoRootFor(io: CliIo): string {
 function emit(io: CliIo, args: ParsedArgs, json: unknown, text: string): void {
   if (bool(args, 'json')) io.stdout(`${JSON.stringify(json, null, 2)}\n`);
   else if (!bool(args, 'quiet')) io.stdout(text.endsWith('\n') ? text : `${text}\n`);
+}
+
+/**
+ * Print a shared tool body's result (tools.ts) the way every other command prints: the JSON
+ * document under `--json` — which is byte-for-byte what the MCP tool puts in
+ * `structuredContent`, so a script gets the same answer over either front end (issue #17) —
+ * otherwise the fixed text block the tool already carries (03 §8 `text`), or that same JSON
+ * pretty-printed when the tool has none (as `run --headless` does). Returns the document so the
+ * command can read its own exit-code rule out of it.
+ */
+function emitTool(io: CliIo, args: ParsedArgs, result: ToolResult, text?: string): Record<string, unknown> {
+  // only `get_screen` and `summary` are text-only (03 §8); everything else carries JSON
+  const json = result.structuredContent ?? { text: result.content[0]?.text ?? '' };
+  emit(io, args, json, text ?? (typeof json.text === 'string' ? json.text : JSON.stringify(json, null, 2)));
+  return json;
 }
 
 async function readAllStdin(): Promise<string> {
@@ -484,6 +537,182 @@ function cmdSummary(args: ParsedArgs, io: CliIo): number {
   });
 }
 
+// ---------------------------------------------------------------------------------------------
+// CLI twins of the 03 §8 map tools (issue #17). Each one is glue only: parse argv, call the
+// SAME body `server.ts` registers (tools.ts), print its JSON, map the result to an exit code.
+// Nothing here speaks MCP — that was the whole complaint (a script had to hand-roll an stdio
+// client to reach `name_screen`).
+//
+// Exit codes follow the 03 §10 contract every other command follows: 0 ok · 1 the command
+// failed OR reported a finding · 2 usage. A "finding" is the tool's own negative answer —
+// `unknown` screen, `found: false`, `kind: none`, `no_match`, a `fallback` — so a CI job can
+// branch on `$?` without parsing the JSON. A thrown AppMapError is exit 1 via `main`.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `identify-screen [--session S] [--snapshot f]` — the `identify_screen` twin (03 §8).
+ * 03 §8 keeps `unknown` a RESULT rather than an error and the JSON still says so, but the exit
+ * code says it too: a bootstrap or CI script asking "does the map still recognise this screen?"
+ * reads `$?`, the same way `validate` and `drift` report findings.
+ */
+function cmdIdentifyScreen(args: ParsedArgs, io: CliIo): number {
+  const session = str(args, 'session');
+  const snapshot = str(args, 'snapshot');
+  return withContext(configFor(args, io), { readOnly: true }, (ctx) => {
+    const json = emitTool(io, args, toolIdentifyScreen(ctx, {
+      ...(snapshot !== undefined ? { snapshot: readJsonFile(absPath(io, snapshot)) } : {}),
+      ...(session !== undefined ? { session } : {}),
+    }));
+    return json.screen_id === UNKNOWN_SCREEN ? 1 : 0;
+  });
+}
+
+/** `get-screen <screen_id> [--session S]` — the `get_screen` twin; the fixed ≤400-token block (03 §8). */
+function cmdGetScreen(args: ParsedArgs, io: CliIo): number {
+  const screenId = args.positional[0];
+  if (screenId === undefined) throw new UsageError('get-screen needs a screen id');
+  const session = str(args, 'session');
+  return withContext(configFor(args, io), { readOnly: true }, (ctx) => {
+    const result = toolGetScreen(ctx, { screen_id: screenId, ...(session !== undefined ? { session } : {}) });
+    // the tool's output is the block itself; `--json` wraps it as `GetScreenResult` so a script
+    // still gets exactly one JSON document on stdout
+    emitTool(io, args, { ...result, structuredContent: { screen_id: screenId, text: result.content[0]?.text ?? '' } });
+    return 0;
+  });
+}
+
+/** `find-element <element_id> [--screen S] [--intent I] [--session S]` — the `find_element` twin (03 §8). */
+function cmdFindElement(args: ParsedArgs, io: CliIo): number {
+  const elementId = args.positional[0];
+  const intent = str(args, 'intent');
+  if (elementId === undefined && intent === undefined) throw new UsageError('find-element needs an element id or --intent');
+  const screen = str(args, 'screen');
+  const session = str(args, 'session');
+  return withContext(configFor(args, io), { readOnly: true }, (ctx) => {
+    const json = emitTool(io, args, toolFindElement(ctx, {
+      ...(elementId !== undefined ? { element_id: elementId } : {}),
+      ...(intent !== undefined ? { intent } : {}),
+      // omitted: the tool falls back to the last observation's screen (03 §2)
+      ...(screen !== undefined ? { screen_id: screen } : {}),
+      ...(session !== undefined ? { session } : {}),
+    }));
+    return json.found === true ? 0 : 1;
+  });
+}
+
+/**
+ * `plan-path [FROM] TO [--from S]` — the `plan_path` twin (03 §8). One positional is the
+ * destination and `from` is the screen the last observation left the app on (03 §2); two
+ * positionals spell both ends out, which is what a CI reachability check wants.
+ */
+function cmdPlanPath(args: ParsedArgs, io: CliIo): number {
+  const [first, second] = args.positional;
+  const to = second ?? first;
+  if (to === undefined) throw new UsageError('plan-path needs a destination screen id');
+  const from = second !== undefined ? first : str(args, 'from');
+  return withContext(configFor(args, io), { readOnly: true }, (ctx) => {
+    const json = emitTool(io, args, toolPlanPath(ctx, { ...(from !== undefined ? { from } : {}), to }));
+    return json.kind === 'none' ? 1 : 0;
+  });
+}
+
+/**
+ * `name-screen <screen_id> [--title T] [--deep-link L] [--session S] [--force]` — the
+ * `name_screen` twin (03 §8). This is the tool issue #17 reported as unreachable without an MCP
+ * client. It writes the CACHE only; run `app-map export` afterwards to get the YAML (03 §4).
+ */
+function cmdNameScreen(args: ParsedArgs, io: CliIo): number {
+  const screenId = args.positional[0];
+  if (screenId === undefined) throw new UsageError('name-screen needs a screen id');
+  const title = str(args, 'title');
+  const deepLink = str(args, 'deep-link');
+  const session = str(args, 'session');
+  return withContext(configFor(args, io), {}, (ctx) => {
+    emitTool(io, args, toolNameScreen(ctx, {
+      screen_id: screenId,
+      ...(title !== undefined ? { title } : {}),
+      ...(deepLink !== undefined ? { deep_link: deepLink } : {}),
+      ...(session !== undefined ? { session } : {}),
+      // 02 §8 / issue #16: re-learn a screen that is no longer `candidate`
+      ...(bool(args, 'force') ? { force: true } : {}),
+    }));
+    return 0;
+  });
+}
+
+/**
+ * `match-recipe "<instruction>" [--session S]` — the `match_recipe` twin (03 §8). NOT read-only:
+ * 04 §2 declares the task on the session on every call, matched or not. `--platform` is the
+ * existing global flag and already picks the served map through `configFor`, so nothing extra is
+ * forwarded to the tool.
+ */
+function cmdMatchRecipe(args: ParsedArgs, io: CliIo): number {
+  const instruction = args.positional.join(' ').trim();
+  if (instruction === '') throw new UsageError('match-recipe needs an instruction, e.g. "create an invoice for $50"');
+  const session = str(args, 'session');
+  return withContext(configFor(args, io), {}, (ctx) => {
+    const json = emitTool(io, args, toolMatchRecipe(ctx, { instruction, ...(session !== undefined ? { session } : {}) }));
+    return json.matched === true ? 0 : 1;
+  });
+}
+
+/**
+ * The 03 §8 `run_recipe` body, printed the way 03 §10 has always printed a guided start: the run
+ * header line, then the fixed step block (04 §5). `run --guided` and `run-recipe` share this, so
+ * the two spellings are one implementation (issue #17 criterion 1).
+ */
+async function startRun(ctx: AppMapContext, args: ParsedArgs, io: CliIo, input: { recipe_id: string; params: RecipeParams; mode?: string; session?: string }): Promise<number> {
+  const result = await toolRunRecipe(ctx, input);
+  const json = result.structuredContent ?? {};
+  if (json.mode === 'guided') {
+    emitTool(io, args, result, `run ${String(json.run_id)} (${String(json.recipe)} v${String(json.version)})\n${String(json.text)}`);
+    return 0;
+  }
+  // headless through the TOOL nests the report under `report` (03 §8); `run --headless` keeps
+  // printing the flat `HeadlessReport` instead — see the header table.
+  emitTool(io, args, result);
+  return (json.report as { ok?: boolean } | undefined)?.ok === true ? 0 : 1;
+}
+
+/** `run-recipe R [--params k=v ...] [--session S] [--mode guided|headless]` — the `run_recipe` twin. */
+async function cmdRunRecipe(args: ParsedArgs, io: CliIo): Promise<number> {
+  const recipeId = args.positional[0];
+  if (recipeId === undefined) throw new UsageError('run-recipe needs a recipe id');
+  const params = parseKeyValues(list(args, 'params'));
+  const session = str(args, 'session');
+  const mode = str(args, 'mode');
+  return withContextAsync(configFor(args, io), {}, async (ctx) => await startRun(ctx, args, io, {
+    recipe_id: recipeId, params,
+    ...(mode !== undefined ? { mode } : {}),
+    ...(session !== undefined ? { session } : {}),
+  }));
+}
+
+/**
+ * `report-step --run-id R --step-id S --ok true|false [--note N] [--snapshot f]` — the
+ * `report_step` twin (03 §8). The run state lives in SQLite (04 §5), so this works in a SECOND
+ * process against a run `run-recipe` started in a first — which is the whole point: a shell
+ * driver can walk a guided run without holding an MCP session open.
+ */
+async function cmdReportStep(args: ParsedArgs, io: CliIo): Promise<number> {
+  const runId = str(args, 'run-id');
+  const stepId = str(args, 'step-id');
+  if (runId === undefined || stepId === undefined) throw new UsageError('report-step needs --run-id and --step-id');
+  const ok = boolValue(args, 'ok');
+  if (ok === undefined) throw new UsageError('report-step needs --ok true|false');
+  const note = str(args, 'note');
+  const snapshot = str(args, 'snapshot');
+  return withContextAsync(configFor(args, io), {}, async (ctx) => {
+    const json = emitTool(io, args, await toolReportStep(ctx, {
+      run_id: runId, step_id: stepId, ok,
+      ...(note !== undefined ? { note } : {}),
+      ...(snapshot !== undefined ? { snapshot: readJsonFile(absPath(io, snapshot)) } : {}),
+    }));
+    // 04 §5: a fallback is a finding — the step did not verify and the driver has to decide
+    return json.status === 'fallback' ? 1 : 0;
+  });
+}
+
 function cmdImportRouter(args: ParsedArgs, io: CliIo): number {
   const file = args.positional[0];
   if (file === undefined) throw new UsageError('import-router needs a router export path');
@@ -586,6 +815,10 @@ async function cmdRun(args: ParsedArgs, io: CliIo): Promise<number> {
   const config = configFor(args, io);
   const paramsFile = str(args, 'params-file');
   const headless = bool(args, 'headless');
+  // `--guided` is the explicit spelling of the default (04 §5); it was in the flag grammar but
+  // nothing read it (issue #17 criterion 4). Asking for both modes at once is a usage error
+  // rather than a silent precedence rule.
+  if (bool(args, 'guided') && headless) throw new UsageError('run takes --guided or --headless, not both');
   if (bool(args, 'all')) {
     if (!headless) throw new UsageError('run --all requires --headless (06 R5)');
     const wanted = statuses(args);
@@ -614,9 +847,11 @@ async function cmdRun(args: ParsedArgs, io: CliIo): Promise<number> {
       emit(io, args, result, JSON.stringify(result, null, 2));
       return result.ok ? 0 : 1;
     }
-    const result = await startGuidedRun(ctx, { recipe_id: recipeId, params });
-    emit(io, args, result, `run ${result.run_id} (${result.recipe} v${result.version})\n${formatRunStep(result.step)}`);
-    return 0;
+    // one implementation with `run-recipe` (issue #17): the same 03 §8 body, the same two-line
+    // block. `--session` finally reaches a guided `run` too, which a scripted driver needs so its
+    // observations and its run share one session (03 §2).
+    const session = str(args, 'session');
+    return await startRun(ctx, args, io, { recipe_id: recipeId, params, mode: 'guided', ...(session !== undefined ? { session } : {}) });
   });
 }
 
@@ -806,9 +1041,17 @@ commands:
   export [--force] [--check]     cache → canonical YAML (03 §4)
   record --stdin                 ingest one hook payload (05 §3); always exits 0
   summary [--max-tokens N] [--hook-json]
+  identify-screen [--session S] [--snapshot f]   03 §8 twin; exit 1 when the screen is unknown
+  get-screen <screen_id> [--session S]
+  find-element <element_id> [--screen S] [--intent I] [--session S]
+  plan-path [FROM] TO [--from S]
+  name-screen <screen_id> [--title T] [--deep-link L] [--session S] [--force]   then run export
+  match-recipe "<instruction>" [--session S]
+  run-recipe R [--params k=v ...] [--session S] [--mode guided|headless]
+  report-step --run-id R --step-id S --ok true|false [--note N] [--snapshot f]
   import-router <json> [--no-retire] [--strict] [--purge-retired] [--dry-run]
   compile --session S --task T --name R [--param name:type[=value] ...] [--to-seq N]
-  run R --params k=v ... [--headless] [--params-file f] | run --all --status s,... --headless [--params-file f] [--report path]
+  run R --params k=v ... [--guided | --headless] [--session S] [--params-file f] | run --all --status s,... --headless [--params-file f] [--report path]
   maestro-export [R | --all] [--status s,...] [--params-file f] --out DIR
   drift [--build B] [--router path] [--out path]
   report [--since ISO|30d] [--artifacts-dir DIR] [--json]
@@ -820,6 +1063,7 @@ commands:
   mark-screen S STATUS [--reviewer NAME] [--force]   demote / retire a screen (02 §8)
   merge-driver %O %A %B [%P]
   migrate-id OLD NEW [--dry-run]
+  help
 global (before or after the command): --dir, --platform, --build, --json, --quiet
 env: APP_MAP_INSTRUMENTED_PLATFORMS (lint-ids: platforms whose app source is in this repo)
 `;

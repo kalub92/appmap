@@ -7,6 +7,7 @@
 // Usage:
 //   scripts/app-map/gen-ids                 regenerate both files in place
 //   scripts/app-map/gen-ids --check         exit 1 with a diff if committed files differ
+//   scripts/app-map/gen-ids --platforms ios only generate/check the Swift file (issue #17)
 //   scripts/app-map/gen-ids --ids <path> --out-ios <path> --out-android <path>
 //
 // No dependencies beyond the `yaml` package already vendored by tools/app-map-mcp.
@@ -20,6 +21,10 @@ const require = createRequire(new URL('../../tools/app-map-mcp/package.json', im
 const { parse: parseYaml } = require('yaml');
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+// 01 R1 ships one file per platform. An iOS-only repo has nowhere to put the Kotlin one, and
+// `--out-android /dev/null` generated fine but made `--check` print a permanent diff against
+// /dev/null (issue #17), so the output set is selectable — mirroring `lint-ids --platform`.
+const PLATFORMS = ['ios', 'android'];
 const DEFAULTS = {
   ids: resolve(REPO_ROOT, 'app-map/ids.yaml'),
   ios: resolve(REPO_ROOT, 'instrumentation/ios/AppMapKit/Sources/AppMapKit/AppMapID.swift'),
@@ -48,13 +53,14 @@ Options:
   --ids <path>          registry to read       (default: app-map/ids.yaml)
   --out-ios <path>      Swift output           (default: instrumentation/ios/AppMapKit/Sources/AppMapKit/AppMapID.swift)
   --out-android <path>  Kotlin output          (default: instrumentation/android/appmap/src/main/kotlin/com/example/appmap/AppMapId.kt)
+  --platforms <list>    which outputs to write/check, comma separated (default: ios,android)
   --quiet               only print errors
   -h, --help            this text`);
   process.exit(code);
 }
 
 function parseArgs(argv) {
-  const opts = { check: false, quiet: false, ids: DEFAULTS.ids, ios: DEFAULTS.ios, android: DEFAULTS.android };
+  const opts = { check: false, quiet: false, ids: DEFAULTS.ids, ios: DEFAULTS.ios, android: DEFAULTS.android, platforms: [...PLATFORMS] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -66,6 +72,14 @@ function parseArgs(argv) {
     else if (a === '--ids') opts.ids = next();
     else if (a === '--out-ios') opts.ios = next();
     else if (a === '--out-android') opts.android = next();
+    else if (a === '--platforms' || a === '--platform') {
+      // NOT through next(): it resolve()s its value as a filesystem path, which would turn
+      // `ios` into an absolute directory name.
+      if (i + 1 >= argv.length) fail(`missing value for ${a}`);
+      opts.platforms = argv[++i].split(',').map((p) => p.trim()).filter(Boolean);
+      if (!opts.platforms.length) fail(`${a} needs at least one of ${PLATFORMS.join(',')}`);
+      for (const p of opts.platforms) if (!PLATFORMS.includes(p)) fail(`unknown platform "${p}" (expected ${PLATFORMS.join(',')})`);
+    }
     else if (a === '-h' || a === '--help') usage(0);
     else fail(`unknown argument: ${a}`);
   }
@@ -318,9 +332,9 @@ function main() {
   const reg = loadRegistry(opts.ids);
   const groups = buildGroups(reg);
   const outputs = [
-    { path: opts.ios, text: renderSwift(groups) },
-    { path: opts.android, text: renderKotlin(groups) },
-  ];
+    { platform: 'ios', path: opts.ios, text: renderSwift(groups) },
+    { platform: 'android', path: opts.android, text: renderKotlin(groups) },
+  ].filter((o) => opts.platforms.includes(o.platform));
   const label = (p) => { const r = relative(REPO_ROOT, p); return r && !r.startsWith('..') ? r : p; };
 
   if (opts.check) {

@@ -5,7 +5,7 @@
  *
  * Import order below mirrors the dependency layers (no cycles):
  *   types/config/errors/paths/token/log → yaml,tree,scrub,signature → store,identify,resolve,
- *   plan,format → observe,recipes/*,heal,drift,router-import → server,cli.
+ *   plan,format → observe,recipes/*,heal,drift,router-import → tools → server,cli.
  */
 
 // ---- leaf -------------------------------------------------------------------------------------
@@ -73,8 +73,10 @@ export { importRouter, mergeRouterScreen, routerScreenToScreenFile } from './rou
 export type { ImportRouterOptions } from './router-import.ts';
 
 // ---- top ------------------------------------------------------------------------------------------
-export { RESOURCE_TEMPLATES, SERVER_NAME, TOOL_NAMES, createServer, startServer, toolError, toolJson, toolText } from './server.ts';
-export type { RunningServer, ToolName, ToolResult } from './server.ts';
+export { TOOL_NAMES, toolCompileRecipe, toolError, toolExport, toolFindElement, toolGetScreen, toolIdentifyScreen, toolJson, toolMark, toolMatchRecipe, toolNameScreen, toolPlanPath, toolRecordObservation, toolReportStep, toolRunRecipe, toolSummary, toolText } from './tools.ts';
+export type { ToolName, ToolOptions, ToolResult } from './tools.ts';
+export { RESOURCE_TEMPLATES, SERVER_NAME, createServer, startServer } from './server.ts';
+export type { RunningServer } from './server.ts';
 export { INGEST_TIMEOUT_MS, MAX_REQUEST_BYTES, parseRequestLine, postToIngestSocket, startIngestServer } from './ingest-socket.ts';
 export type { IngestResponse, IngestServer } from './ingest-socket.ts';
 export { KIND_SYNONYMS, constantNames, findStringLiteralIds, lintIds } from './lint-ids.ts';

@@ -17,7 +17,7 @@ Out of scope: any change to production behavior. Accessibility identifiers ship 
 ### R1 — Shared id registry
 
 - `app-map/ids.yaml` is the single source of every screen id, element id, and gate id.
-- `scripts/app-map/gen-ids` generates `AppMapID.swift` (enum with static strings) and `AppMapId.kt` (object with const vals). Generated files are committed; CI fails if they are out of sync (06 R2).
+- `scripts/app-map/gen-ids` generates `AppMapID.swift` (enum with static strings) and `AppMapId.kt` (object with const vals). Generated files are committed; CI fails if they are out of sync (06 R2). A single-platform repo passes `--platforms ios` (or `android`) to generate and `--check` only the file it has.
 - App code MUST reference ids through the generated constants, never string literals.
 
 ```yaml

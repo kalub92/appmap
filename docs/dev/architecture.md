@@ -17,7 +17,7 @@ signature without updating this file and every caller. Read `docs/dev/toolchain.
 | C1 | `src/observe.ts`, `src/recipes/match.ts`, `src/recipes/compile.ts`, `src/recipes/verbs.ts`, `src/recipes/lifecycle.ts` | stub | A2, B1, B2 |
 | C2 | `src/heal.ts`, `src/recipes/guided.ts` | stub | A2, B1, B2, C1 (lifecycle, observe) |
 | C3 | `src/recipes/maestro.ts`, `src/recipes/headless.ts`, `src/drift.ts`, `src/router-import.ts` | stub | A2, B1, B2, C1, C2 |
-| D1 | `src/server.ts`, `src/ingest-socket.ts`, `src/index.ts` | stub | everything |
+| D1 | `src/tools.ts`, `src/server.ts`, `src/ingest-socket.ts`, `src/index.ts` | stub | everything |
 | D2 | `src/cli.ts`, `src/lint-ids.ts`, `src/gen-configs.ts`, `src/policy-check.ts`, `src/report.ts` | stub | everything |
 
 Import layering (no cycles — enforced by review; `lib.ts` lists modules in this order):
@@ -27,7 +27,8 @@ types/config/errors/paths/token/log
   → yaml/*, tree, scrub, signature
     → store/*, context, identify, resolve, plan, format
       → observe, recipes/*, heal, drift, router-import
-        → server, ingest-socket, cli, lint-ids, gen-configs, policy-check, report
+        → tools
+          → server, ingest-socket, cli, lint-ids, gen-configs, policy-check, report
 ```
 
 Design rules (apply to every module):
@@ -706,7 +707,8 @@ screen absent from the export → `retired` and its recipes retired; `purgeRetir
 import with a newer build deletes it.
 
 ### D1 — server and socket
-Fill: `server.ts`, `ingest-socket.ts`, `index.ts`.
+Fill: `tools.ts` (the 03 §8 bodies, shared with the CLI twins — issue #17; it imports no MCP SDK
+so `cli.ts` can call it), `server.ts`, `ingest-socket.ts`, `index.ts`.
 Tests: `server.test.ts` — in-memory MCP client (SDK `InMemoryTransport`) lists exactly the 13
 tools and 3 resource templates; `summary` ≤600 tokens; `get_screen` block with `conf` from the
 last observation and, for a screen never observed, the decayed value; `match_recipe` with

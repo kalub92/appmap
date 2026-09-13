@@ -11,7 +11,8 @@ import { describe, it } from 'node:test';
 import type { RecipeFile, SessionStartHookOutput } from '../types.ts';
 import { openContext } from '../context.ts';
 import { estimateTokens } from '../token.ts';
-import { parseArgs, USAGE } from '../cli.ts';
+import { GET_SCREEN_MAX_TOKENS } from '../format.ts';
+import { COMMANDS, parseArgs, USAGE } from '../cli.ts';
 import { validateAgainstSchema } from '../yaml/schemas.ts';
 import { PACKAGE_ROOT, loadHookFixture, loadRouterExportFixture, makeTempAppMapDir, readFixture } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
@@ -533,11 +534,22 @@ describe('exit codes (03 §10: 0 ok · 1 failure · 2 usage)', () => {
     });
   });
 
-  it('help exits 0 and lists every command', () => {
+  // Replaces the old hard-coded 18-name list (issue #17 added eight more): a literal list goes
+  // stale silently, so assert the INVARIANT instead — `COMMANDS` and the help text are the same
+  // set, and `help` prints it.
+  it('help exits 0 and COMMANDS and the usage text stay in sync (03 §10)', () => {
+    const lines = USAGE.slice(USAGE.indexOf('commands:')).split('\n').slice(1);
+    const documented = new Set<string>();
+    for (const line of lines) {
+      const m = /^ {2}(\S+)/.exec(line);
+      if (m === null) break; // the `commands:` block ends at the first line that is not indented
+      documented.add(m[1]!);
+    }
+    assert.deepEqual([...documented].sort(), [...COMMANDS].sort(), 'every command is documented and vice versa');
     const r = runCli(['help']);
     assert.equal(r.code, 0);
-    for (const cmd of ['validate', 'export', 'record', 'summary', 'import-router', 'compile', 'run', 'maestro-export', 'drift', 'report', 'gen-configs', 'lint-ids', 'policy-check', 'intent-critical-diff', 'mark', 'mark-screen', 'merge-driver', 'migrate-id']) {
-      assert.ok(r.stdout.includes(cmd), `usage must mention ${cmd}`);
+    for (const cmd of COMMANDS) {
+      assert.match(r.stdout, new RegExp(`^ {2}${cmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'm'), `usage must list ${cmd}`);
     }
     assert.equal(runCli([]).code, 0);
   });
@@ -1085,6 +1097,258 @@ describe('app-map import-router flags (01 R6, 03 §10)', () => {
       const r2 = runCli(['import-router', torn], { dir: t.dir });
       assert.equal(r2.code, 1);
       assert.match(r2.stderr, /not valid JSON/);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// CLI twins of the 03 §8 map tools (03 §10, issue #17). These are the commands a script, a CI
+// job or a bootstrap run needs: before them, reaching `name_screen` meant hand-rolling an MCP
+// stdio client. Each case asserts BOTH the machine-readable shape and the exit code, because
+// that pair is the contract a shell driver reads.
+// ---------------------------------------------------------------------------------------------
+
+/** the PostToolUse fixture, recorded exactly as the hook records it (05 §3) */
+function recordTap(t: TempAppMapDir): void {
+  const r = runCli(['record', '--stdin'], { dir: t.dir, input: `${JSON.stringify(loadHookFixture('post-tool-use.tap'))}\n` });
+  assert.equal(r.code, 0, r.stderr);
+}
+
+describe('app-map identify-screen / get-screen / find-element / plan-path (03 §10, issue #17)', () => {
+  it('identify-screen --json names the screen of the last observation and exits 0', () => {
+    withTemp((t) => {
+      recordTap(t);
+      const r = runCli(['identify-screen', '--json'], { dir: t.dir });
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      const json = JSON.parse(r.stdout) as { screen_id: string; source: string; session: string };
+      assert.equal(json.screen_id, 'invoice_new');
+      assert.equal(json.source, 'observation', '03 §8: the tool says where the answer came from');
+      assert.equal(json.session, 'sess_2026-09-10_0007');
+    });
+  });
+
+  it('identify-screen without an observation exits 1 with no_observation (03 §2)', () => {
+    withTemp((t) => {
+      const r = runCli(['identify-screen'], { dir: t.dir });
+      assert.equal(r.code, 1, r.stdout + r.stderr);
+      assert.match(r.stderr, /no_observation/);
+    });
+  });
+
+  it('get-screen prints the fixed ≤400-token block and exits 0; an unknown id exits 1, a missing one exits 2', () => {
+    withTemp((t) => {
+      const r = runCli(['get-screen', 'invoice_list'], { dir: t.dir });
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /^screen invoice_list/, '03 §8: the block is parse-stable');
+      assert.ok(estimateTokens(r.stdout) <= GET_SCREEN_MAX_TOKENS, `${estimateTokens(r.stdout)} tokens`);
+      // `--json` wraps the same block as one document so a script never has to split stdout
+      const asJson = runCli(['get-screen', 'invoice_list', '--json'], { dir: t.dir });
+      assert.equal(asJson.code, 0, asJson.stderr);
+      const doc = JSON.parse(asJson.stdout) as { screen_id: string; text: string };
+      assert.equal(doc.screen_id, 'invoice_list');
+      assert.equal(doc.text, r.stdout.trimEnd());
+      const miss = runCli(['get-screen', 'nope'], { dir: t.dir });
+      assert.equal(miss.code, 1, miss.stdout + miss.stderr);
+      assert.match(miss.stderr, /not_found/);
+      assert.equal(runCli(['get-screen'], { dir: t.dir }).code, 2, 'a missing positional is usage');
+    });
+  });
+
+  it('find-element resolves a pilot element and exits 0; a miss exits 1 but still prints the candidates', () => {
+    withTemp((t) => {
+      const hit = runCli(['find-element', 'invoice.add.button', '--screen', 'invoice_list', '--json'], { dir: t.dir });
+      assert.equal(hit.code, 0, hit.stdout + hit.stderr);
+      const found = JSON.parse(hit.stdout) as { found: boolean; element: string; hit: { target: Record<string, unknown> } };
+      assert.equal(found.found, true);
+      assert.deepEqual(found.hit.target, { by: 'id', id: 'invoice.add.button' }, 'the driver locator is the point of the command');
+      const miss = runCli(['find-element', 'invoice.nope.button', '--screen', 'invoice_list', '--json'], { dir: t.dir });
+      assert.equal(miss.code, 1, miss.stdout + miss.stderr);
+      const missed = JSON.parse(miss.stdout) as { found: boolean; candidates: Array<{ id: string }> };
+      assert.equal(missed.found, false);
+      assert.ok(missed.candidates.length > 0, '03 §8: a miss carries candidates — exit 1 must not swallow them');
+      assert.equal(runCli(['find-element'], { dir: t.dir }).code, 2, 'neither an id nor --intent is usage');
+    });
+  });
+
+  it('find-element defaults --screen to the last observation (03 §2, issue #17)', () => {
+    withTemp((t) => {
+      recordTap(t);
+      const r = runCli(['find-element', 'invoice.amount.field', '--json'], { dir: t.dir });
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      const json = JSON.parse(r.stdout) as { found: boolean; screen_id: string };
+      assert.equal(json.found, true);
+      assert.equal(json.screen_id, 'invoice_new', 'the screen came from the observation, not the command line');
+    });
+  });
+
+  it('plan-path prefers the deep link and exits 0; an unreachable pair exits 1 with kind none', () => {
+    withTemp((t) => {
+      const one = runCli(['plan-path', 'invoice_new', '--json'], { dir: t.dir });
+      assert.equal(one.code, 0, one.stdout + one.stderr);
+      const plan = JSON.parse(one.stdout) as { kind: string; deep_link: string; from: string };
+      assert.equal(plan.kind, 'deep_link', 'invariant 7');
+      assert.equal(plan.deep_link, 'appmap://invoice_new');
+      assert.equal(plan.from, 'unknown', 'no observation yet, so `from` degrades to unknown');
+      // two positionals spell both ends out; client_picker has no deep link, so from `unknown`
+      // there is no route at all
+      const none = runCli(['plan-path', 'unknown', 'client_picker', '--json'], { dir: t.dir });
+      assert.equal(none.code, 1, none.stdout + none.stderr);
+      assert.equal((JSON.parse(none.stdout) as { kind: string }).kind, 'none');
+      assert.equal(runCli(['plan-path'], { dir: t.dir }).code, 2);
+    });
+  });
+
+  it('plan-path defaults FROM to the last observation (03 §2, issue #17)', () => {
+    withTemp((t) => {
+      recordTap(t);
+      const r = runCli(['plan-path', 'client_picker', '--json'], { dir: t.dir });
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      const plan = JSON.parse(r.stdout) as { kind: string; from: string; edges: Array<{ to: string }> };
+      assert.equal(plan.from, 'invoice_new', 'the observation supplied the starting screen');
+      assert.equal(plan.kind, 'edges');
+      assert.equal(plan.edges.at(-1)?.to, 'client_picker');
+    });
+  });
+});
+
+describe('app-map match-recipe / name-screen (03 §10, issue #17)', () => {
+  it('match-recipe matches the pilot recipe and exits 0; no_match exits 1 with the candidates', () => {
+    withTemp((t) => {
+      const r = runCli(['match-recipe', 'create an invoice for $50 for Acme Corp', '--session', 'sess_cli', '--json'], { dir: t.dir });
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      const json = JSON.parse(r.stdout) as { matched: boolean; recipe_id: string; session: string };
+      assert.equal(json.matched, true);
+      assert.equal(json.recipe_id, 'create_invoice');
+      // 04 §2: the call declares the task on the session, matched or not — so it is not read-only
+      assert.equal(json.session, 'sess_cli');
+      const miss = runCli(['match-recipe', 'delete a client', '--json'], { dir: t.dir });
+      assert.equal(miss.code, 1, miss.stdout + miss.stderr);
+      assert.equal((JSON.parse(miss.stdout) as { no_match: boolean }).no_match, true);
+      assert.equal(runCli(['match-recipe'], { dir: t.dir }).code, 2);
+    });
+  });
+
+  it('name-screen creates the screen from the last observation and export writes its YAML (issue #17: no MCP client needed)', () => {
+    withTemp((t) => {
+      // register a screen (and one of its elements) the map has no file for yet — 01 R1: the
+      // registry comes first, the screen file is what `name-screen` learns
+      const ids = join(t.dir, 'ids.yaml');
+      writeFileSync(ids, `${readFileSync(ids, 'utf8')
+        .replace('gates:\n', '  - id: settings\n    title: Settings\n    deep_link: appmap://settings\ngates:\n')
+        .trimEnd()}\n  - id: settings.close.button\n    kind: button\n`);
+      // the capture of a screen the map has never seen: its own marker, one registered element,
+      // and nothing that could make it read as a screen the map already knows
+      const onSettings = JSON.stringify(loadHookFixture('post-tool-use.tap'))
+        .replaceAll('screen.invoice_new', 'screen.settings')
+        .replaceAll('"identifier":"invoice.cancel.button"', '"identifier":"settings.close.button"')
+        .replaceAll('"identifier":"invoice.', '"identifier":"unregistered.')
+        .replaceAll('New Invoice', 'Settings');
+      assert.equal(runCli(['record', '--stdin'], { dir: t.dir, input: `${onSettings}\n` }).code, 0);
+      assert.equal(runCli(['identify-screen'], { dir: t.dir }).code, 1, 'the screen is unknown until it is named');
+
+      const r = runCli(['name-screen', 'settings', '--json'], { dir: t.dir });
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      const json = JSON.parse(r.stdout) as { screen_id: string; created: boolean; status: string; deep_link: string };
+      assert.equal(json.screen_id, 'settings');
+      assert.equal(json.created, true);
+      assert.equal(json.status, 'candidate', '02 §8: a named screen is never born verified');
+      assert.equal(json.deep_link, 'appmap://settings', 'the registry is authoritative (02 §10 rule 2)');
+      assert.deepEqual((JSON.parse(r.stdout) as { elements: string[] }).elements, ['settings.close.button']);
+
+      // 03 §4: name_screen writes the cache; `export` turns it into canonical YAML
+      const exported = runCli(['export'], { dir: t.dir });
+      assert.equal(exported.code, 0, exported.stdout + exported.stderr);
+      assert.ok(existsSync(join(t.dir, 'ios', 'screens', 'settings.yaml')), exported.stdout);
+      assert.equal(runCli(['export', '--check'], { dir: t.dir }).code, 0, 'the written file is canonical');
+      assert.equal(runCli(['validate'], { dir: t.dir }).code, 0, 'and the map still validates');
+      assert.equal(runCli(['identify-screen'], { dir: t.dir }).code, 0, 'the same tree now identifies');
+    });
+  });
+
+  it('name-screen on an unregistered id exits 1 with invalid_map, and a missing positional exits 2', () => {
+    withTemp((t) => {
+      recordTap(t);
+      const r = runCli(['name-screen', 'nope_screen'], { dir: t.dir });
+      assert.equal(r.code, 1, r.stdout + r.stderr);
+      assert.match(r.stderr, /invalid_map/);
+      assert.equal(runCli(['name-screen'], { dir: t.dir }).code, 2);
+    });
+  });
+
+  it('name-screen --force re-learns a screen that is no longer candidate (02 §8, issue #16)', () => {
+    withTemp((t) => {
+      recordTap(t);
+      assert.equal(runCli(['mark-screen', 'invoice_new', 'verified', '--reviewer', 'dana', '--force'], { dir: t.dir }).code, 0);
+      const refused = runCli(['name-screen', 'invoice_new'], { dir: t.dir });
+      assert.equal(refused.code, 1, refused.stdout + refused.stderr);
+      assert.match(refused.stderr, /already verified/);
+      const forced = runCli(['name-screen', 'invoice_new', '--force', '--json'], { dir: t.dir });
+      assert.equal(forced.code, 0, forced.stdout + forced.stderr);
+      assert.equal((JSON.parse(forced.stdout) as { relearned_from: string }).relearned_from, 'verified');
+    });
+  });
+});
+
+describe('app-map run-recipe / report-step / run --guided (04 §5, 03 §10, issue #17)', () => {
+  it('run-recipe hands out s0, and report-step against that run id in a SECOND process advances the run', () => {
+    withTemp((t) => {
+      const device = makeFakeDevice(t.dir);
+      recordTap(t);
+      const started = runCli(['run-recipe', 'create_invoice', '--params', 'amount=50', 'client=Acme Corp', '--json'], { dir: t.dir, env: device.env });
+      assert.equal(started.code, 0, started.stdout + started.stderr);
+      const run = JSON.parse(started.stdout) as { mode: string; run_id: string; step: { id: string; action: string } };
+      assert.equal(run.mode, 'guided');
+      assert.equal(run.step.id, 's0');
+      assert.equal(run.step.action, 'open_link', '04 §5: the entry step is the deep link');
+
+      // the driver "executes" s0 and the hook records the resulting tree — the fixture IS the
+      // invoice_new tree s0 expects
+      recordTap(t);
+      // 04 §5: the run lives in SQLite, so a SECOND process can report against it (issue #17)
+      const reported = runCli(['report-step', '--run-id', run.run_id, '--step-id', 's0', '--ok', 'true', '--json'], { dir: t.dir, env: device.env });
+      assert.equal(reported.code, 0, reported.stdout + reported.stderr);
+      const next = JSON.parse(reported.stdout) as { run_id: string; status: string; step: { id: string } };
+      assert.equal(next.run_id, run.run_id, 'the same run, across two process invocations');
+      assert.equal(next.status, 'ok', reported.stdout);
+      assert.equal(next.step.id, 's1');
+    });
+  });
+
+  it('report-step rejects an unknown run id (exit 1) and a missing or non-boolean --ok (exit 2)', () => {
+    withTemp((t) => {
+      const unknown = runCli(['report-step', '--run-id', 'run_nope', '--step-id', 's0', '--ok', 'true'], { dir: t.dir });
+      assert.equal(unknown.code, 1, unknown.stdout + unknown.stderr);
+      assert.match(unknown.stderr, /run_not_active/);
+      // a MISSING --ok must never be read as `false`: that would report a step the driver never ran
+      assert.equal(runCli(['report-step', '--run-id', 'r', '--step-id', 's0'], { dir: t.dir }).code, 2);
+      assert.equal(runCli(['report-step', '--run-id', 'r', '--step-id', 's0', '--ok', 'maybe'], { dir: t.dir }).code, 2);
+      assert.equal(runCli(['report-step', '--step-id', 's0', '--ok', 'true'], { dir: t.dir }).code, 2);
+    });
+  });
+
+  it('run --guided is the explicit spelling of the default, and --guided --headless is usage (issue #17 criterion 4)', () => {
+    withTemp((t) => {
+      const device = makeFakeDevice(t.dir);
+      recordTap(t);
+      const r = runCli(['run', 'create_invoice', '--guided', '--params', 'amount=50', 'client=Acme Corp'], { dir: t.dir, env: device.env });
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /^run run_\S+ \(create_invoice v3\)$/m, 'byte-identical to the bare `run`');
+      assert.match(r.stdout, /step s0 open_link appmap:\/\/invoice_new\?fixture=logged_in/);
+      assert.equal(runCli(['run', 'create_invoice', '--guided', '--headless'], { dir: t.dir, env: device.env }).code, 2);
+    });
+  });
+
+  it('run-recipe --mode headless nests the report the way the MCP tool does, and exits on its ok', () => {
+    withTemp((t) => {
+      const device = makeFakeDevice(t.dir);
+      const r = runCli(['run-recipe', 'create_invoice', '--mode', 'headless', '--json'], { dir: t.dir, env: device.env });
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      const json = JSON.parse(r.stdout) as { mode: string; recipe: string; report: { ok: boolean; mode: string } };
+      assert.equal(json.mode, 'headless');
+      assert.equal(json.recipe, 'create_invoice');
+      assert.equal(json.report.ok, true, '03 §8 nests it under `report`; `run --headless` prints it flat');
+      assert.equal(runCli(['run-recipe'], { dir: t.dir }).code, 2);
+      assert.equal(runCli(['run-recipe', 'create_invoice', '--mode', 'sideways'], { dir: t.dir, env: device.env }).code, 1);
     });
   });
 });

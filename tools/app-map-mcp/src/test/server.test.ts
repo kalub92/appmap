@@ -281,6 +281,17 @@ describe('find_element', () => {
   it('needs element_id or intent', async () => {
     assertToolError(await call('find_element', { screen_id: 'invoice_list' }), ERROR_CODES.BAD_INPUT);
   });
+
+  // issue #17: the CLI twin is `find-element <element_id> [--screen S]`, so `screen_id` is
+  // optional and 03 §2's last observation supplies it.
+  it('defaults screen_id to the last observation, and says so when there is none (03 §2, issue #17)', async () => {
+    const missing = assertToolError(await call('find_element', { element_id: 'invoice.amount.field' }), ERROR_CODES.BAD_INPUT);
+    assert.match(missing.error, /screen_id/, 'with no observation the miss must name the argument to pass');
+    await drive('invoice_new');
+    const result = ok(await call('find_element', { element_id: 'invoice.amount.field' }));
+    assert.equal(result.found, true);
+    assert.equal(result.screen_id, 'invoice_new');
+  });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -305,6 +316,19 @@ describe('plan_path', () => {
     const result = ok(await call('plan_path', { from: 'unknown', to: 'client_picker' }));
     assert.equal(result.kind, 'none');
     assert.match(String(result.reason), /unknown/);
+  });
+
+  // issue #17: the CLI twin is `plan-path <to>`, so `from` is optional and defaults to the
+  // screen the last observation left the app on; with no observation it degrades to `unknown`,
+  // which is exactly what an explicit "unknown" already meant.
+  it('defaults from to the last observation, else unknown (03 §2, issue #17)', async () => {
+    const blind = ok(await call('plan_path', { to: 'client_picker' }));
+    assert.equal(blind.from, 'unknown');
+    assert.equal(blind.kind, 'none');
+    await drive('invoice_new');
+    const result = ok(await call('plan_path', { to: 'client_picker' }));
+    assert.equal(result.from, 'invoice_new', 'the observation supplied the starting screen');
+    assert.equal(result.kind, 'edges');
   });
 });
 
