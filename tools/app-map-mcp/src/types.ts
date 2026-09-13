@@ -627,9 +627,26 @@ export interface DriverInput {
   /** a named key rather than text (Argent `keyboard --key return`): no step expresses it (04 §3.3) */
   key?: string;
   url?: string;
+  /**
+   * the swipe direction when the driver names one. Argent's `gesture-swipe` does NOT: it takes
+   * the coordinate pair below and no direction flag at all (docs/dev/harness-notes.md §2), so on
+   * that driver `direction` is absent and the coordinates are the only evidence of which way the
+   * finger went (04 §3.3, `recipes/compile.ts` `swipeDirection`).
+   */
   direction?: SwipeDirection;
+  /** the point a tap/press addressed (`observe.resolveActedElement`) */
   x?: number;
   y?: number;
+  /**
+   * a swipe's start and end point. Argent spells these `--fromX/--fromY/--toX/--toY`, **not**
+   * `startX/startY/endX/endY` (harness-notes §2); `recipes/compile.ts` `swipeDirection` also
+   * accepts the `start*`/`end*` and snake_case spellings other drivers use, via the index
+   * signature below.
+   */
+  fromX?: number;
+  fromY?: number;
+  toX?: number;
+  toY?: number;
   index?: number;
   [k: string]: unknown;
 }

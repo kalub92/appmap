@@ -509,6 +509,12 @@ function deepLinkOfScreen(map: LoadedMap, screen: ScreenId): string | undefined 
  * `select` edge carries no match text — 02 §4.2 records the element, never the row that was
  * picked — so neither `select` form can be rebuilt from one (issue #19); the tap on the cell id
  * lands on whichever row is first, which is all an entry approximation can promise.
+ *
+ * `undefined` means "this edge cannot be expressed as a step" and the caller drops the leg. A
+ * swipe edge with no `direction` is one of those: screen.schema.json REQUIRES `direction` on a
+ * swipe edge, so only an unvalidated map can produce one, and substituting `up` would swipe the
+ * wrong way through someone's entry path while looking like a plan that worked (same reasoning as
+ * `compile.swipeDirection` — a direction is never invented, 04 §3.3).
  */
 function edgeStepFor(id: StepId, action: { type: string; element?: ElementId; url?: string; gate?: GateId; direction?: 'up' | 'down' | 'left' | 'right' }, to: ScreenId): RecipeStep | undefined {
   const expect: Expect = { screen: to };
@@ -518,7 +524,7 @@ function edgeStepFor(id: StepId, action: { type: string; element?: ElementId; ur
     case 'dismiss_gate':
       return action.gate === undefined ? undefined : { id, action: 'dismiss_gate', gate: action.gate, expect };
     case 'swipe':
-      return { id, action: 'swipe', direction: action.direction ?? 'up', ...(action.element !== undefined ? { element: action.element } : {}), expect };
+      return action.direction === undefined ? undefined : { id, action: 'swipe', direction: action.direction, ...(action.element !== undefined ? { element: action.element } : {}), expect };
     default:
       // tap, and the navigation-by-typing edges a guided entry can only approximate
       return action.element === undefined ? undefined : { id, action: 'tap', element: action.element, expect };

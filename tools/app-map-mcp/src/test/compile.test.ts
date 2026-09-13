@@ -23,7 +23,7 @@ import { forbiddenContentIssues } from '../validate.ts';
 import {
   collapseBacktracking, compileRecipe, focusedElement, inferPostconditions, isFocusFallbackWarning,
   isNormalisationWarning, markIntentCritical, optimizeEntry, parameterize, sliceTrajectory,
-  translateSteps,
+  swipeDirection, translateSteps,
 } from '../recipes/compile.ts';
 import type { TranslatedStep } from '../recipes/compile.ts';
 import { loadFixtureTree, loadTrajectoryFixture, makeTempAppMapDir } from './helpers.ts';
@@ -302,6 +302,73 @@ describe('translateSteps — 04 §3.3', () => {
     assert.equal(steps[1]!.step.action === 'dismiss_gate' && steps[1]!.step.gate, 'gate.push_permission');
   });
 
+  it("a swipe's direction comes from its from/to coordinate pair when the call names none (issue #9 generality)", () => {
+    // Argent's `gesture-swipe` takes `--fromX/--fromY/--toX/--toY` and NO direction flag
+    // (harness-notes §2), and no conversion existed — so `direction ?? 'up'` compiled a
+    // left-swiped carousel and a swipe-to-delete row alike into "swipe up". Replay then moved
+    // nothing, and an inherited "screen unchanged" postcondition PASSED.
+    // Screen coordinates grow down and right; the direction is the one the FINGER travelled.
+    const cases: Array<{ input: Record<string, number>; expect: string; why: string }> = [
+      { input: { fromX: 200, fromY: 600, toX: 200, toY: 200 }, expect: 'up', why: 'straight up' },
+      { input: { fromX: 200, fromY: 200, toX: 200, toY: 600 }, expect: 'down', why: 'straight down' },
+      { input: { fromX: 300, fromY: 400, toX: 40, toY: 400 }, expect: 'left', why: 'a carousel swiped left' },
+      { input: { fromX: 40, fromY: 400, toX: 300, toY: 400 }, expect: 'right', why: 'swipe-to-reveal' },
+      // a diagonal: the axis with the larger |delta| wins, so this is `left`, not `up`
+      { input: { fromX: 300, fromY: 500, toX: 60, toY: 420 }, expect: 'left', why: 'diagonal, x dominates' },
+      { input: { fromX: 300, fromY: 500, toX: 260, toY: 180 }, expect: 'up', why: 'diagonal, y dominates' },
+      // `startX`/`endY` is the spelling harness-notes §2 says Argent does NOT use — other drivers do
+      { input: { startX: 100, startY: 100, endX: 100, endY: 700 }, expect: 'down', why: 'start/end aliases' },
+    ];
+    for (const c of cases) {
+      const r = translateSteps(ctx.map, [obs({
+        seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list',
+        tool: 'mcp__argent__gesture-swipe', input: c.input,
+      })], ctx.config.driver);
+      assert.deepEqual(r.warnings, [], c.why);
+      const step = r.steps[0]?.step;
+      assert.equal(step?.action === 'swipe' && step.direction, c.expect, c.why);
+    }
+    // and the pure helper agrees about where each answer came from
+    assert.deepEqual(swipeDirection({ fromX: 0, fromY: 0, toX: 0, toY: 9 }), { direction: 'down', source: 'coordinates' });
+    assert.deepEqual(swipeDirection({ direction: 'left' }), { direction: 'left', source: 'declared' });
+  });
+
+  it('a swipe with neither a direction nor coordinates is DROPPED with a warning, not defaulted to `up` (issue #9 generality)', () => {
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__gesture-swipe', input: {} }),
+      // half a coordinate pair is not a coordinate pair
+      obs({ seq: 2, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__gesture-swipe', input: { fromX: 10, fromY: 20 } }),
+      // a gesture that went nowhere, and one with no dominant axis: neither names a direction
+      obs({ seq: 3, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__gesture-swipe', input: { fromX: 10, fromY: 20, toX: 10, toY: 20 } }),
+      obs({ seq: 4, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__gesture-swipe', input: { fromX: 10, fromY: 20, toX: 110, toY: 120 } }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps, [], 'inventing `up` is what made a swipe that moved nothing pass');
+    assert.equal(r.warnings.length, 4);
+    for (const w of r.warnings) {
+      assert.match(w, /mcp__argent__gesture-swipe/);
+      assert.match(w, /no swipe direction could be established/);
+      assert.equal(isNormalisationWarning(w), false, 'a dropped call is incompleteness (04 §8)');
+    }
+    assert.match(r.warnings[0]!, /^seq 1: /);
+    assert.match(r.warnings[2]!, /zero-length/);
+    assert.match(r.warnings[3]!, /exact diagonal/);
+  });
+
+  it('an explicit `direction` still wins, and an unreadable one falls back to the coordinates', () => {
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__gesture-swipe', input: { direction: 'left', fromX: 0, fromY: 0, toX: 0, toY: 500 } }),
+      // a Maestro-vocabulary driver shouts its directions; recipe.schema.json only accepts `up`
+      obs({ seq: 2, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__maestro__swipe', input: { direction: 'RIGHT' } as never }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.warnings, []);
+    assert.deepEqual(r.steps.map((x) => x.step.action === 'swipe' && x.step.direction), ['left', 'right']);
+    // a direction the schema would reject is worth no more than none: derive from the pair instead
+    assert.deepEqual(swipeDirection({ direction: 'sideways' as never, fromX: 0, fromY: 0, toX: 500, toY: 0 }), { direction: 'right', source: 'coordinates' });
+    const none = swipeDirection({ direction: 'sideways' as never });
+    assert.equal(none.direction, undefined);
+    assert.match(none.direction === undefined ? none.why : '', /`direction: sideways` is not one of up\/down\/left\/right/);
+  });
+
   it('a swipe carries its direction, and perception-only calls are never steps', () => {
     const r = translateSteps(ctx.map, [
       obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__swipe', input: { direction: 'up' } }),
@@ -379,6 +446,37 @@ describe('translateSteps — 04 §3.3', () => {
     assert.deepEqual(r.steps, []);
     assert.equal(r.warnings.length, 1);
     assert.match(r.warnings[0]!, /no recipe step can express/);
+  });
+
+  it('a long press / double tap / touch-and-hold is dropped WITH a warning, never compiled to a tap (issue #9 generality)', () => {
+    // the repro: a UIKit row whose context menu opens on long-press, or a Compose
+    // `combinedClickable(onLongClick = …)`. Before the fix each of these classified `tap` (the
+    // generic fallback's TAP_RE is a bare substring test), so the recipe navigated INTO the row
+    // and the next `expect` passed on the wrong screen.
+    const tools = ['long_press', 'double_tap', 'touch_and_hold'];
+    const r = translateSteps(ctx.map, tools.map((tool, i) => obs({
+      seq: i + 1, screen_before: 'invoice_list', screen_after: 'invoice_list',
+      tool: `mcp__argent__${tool}`, input: { id: 'invoice.add.button' }, element: 'invoice.add.button',
+    })), ctx.config.driver);
+    assert.deepEqual(r.steps, [], 'no gesture may become a step — least of all a `tap`');
+    assert.equal(r.warnings.length, 3);
+    for (const [i, tool] of tools.entries()) {
+      assert.match(r.warnings[i]!, new RegExp(`^seq ${i + 1}: mcp__argent__${tool} `), tool);
+      assert.match(r.warnings[i]!, /no recipe step can express/, tool);
+      // a dropped call is incompleteness: it must not overwrite a reviewed recipe unattended (04 §8)
+      assert.equal(isNormalisationWarning(r.warnings[i]!), false, tool);
+    }
+  });
+
+  it('a plain tap/gesture-tap/click/press still compiles to a `tap` (the gesture patterns do not over-match)', () => {
+    for (const tool of ['tap', 'gesture-tap', 'click', 'press']) {
+      const r = translateSteps(ctx.map, [obs({
+        seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_new',
+        tool: `mcp__argent__${tool}`, input: { id: 'invoice.add.button' }, element: 'invoice.add.button',
+      })], ctx.config.driver);
+      assert.deepEqual(r.steps.map((x) => x.step.action), ['tap'], tool);
+      assert.deepEqual(r.warnings, [], tool);
+    }
   });
 
   it('a tap whose element could not be resolved is not a step, and says so (issue #9)', () => {

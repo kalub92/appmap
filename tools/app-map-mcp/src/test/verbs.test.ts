@@ -98,6 +98,48 @@ describe('classifyVerb — the @swmansion/argent@0.25.0 tool surface (04 §3.3, 
     assert.equal(classify('mcp__maestro__report_step', 'maestro'), 'lifecycle');
   });
 
+  it('a hold/multi-touch gesture is `unsupported`, NOT the `tap` its name contains (issue #9 generality)', () => {
+    // TAP_RE is a bare substring test, so every one of these used to classify as a plain `tap`:
+    // a context-menu long-press compiled to a tap that OPENED the row, replay navigated into the
+    // detail screen instead of the menu, and the `expect` that followed passed on the wrong
+    // screen. Argent's table names only the two non-tap gestures one onboarding made visible.
+    const gestures = [
+      'long_press', 'longPress', 'long-press', 'long_tap', 'press_and_hold', 'pressAndHold',
+      'touch_and_hold', 'touchAndHold', 'double_tap', 'doubleTap', 'double-click', 'triple_tap',
+      'force_touch', 'force_press', '3d_touch', 'deep_press', 'hold', 'gesture_hold',
+      'pinch', 'pinch_zoom', 'zoom_in', 'rotate', 'drag', 'drag_and_drop',
+    ];
+    for (const tool of gestures) {
+      assert.equal(classify(`mcp__argent__${tool}`), 'unsupported', tool);
+      assert.equal(isStepVerb(classify(`mcp__argent__${tool}`)), false, tool);
+    }
+    // an untabled driver reaches the same fallback, so the fix is not Argent-specific
+    assert.equal(classify('mcp__maestro__longPressOn', 'maestro'), 'unsupported');
+  });
+
+  it("Android's system Back is `unsupported`, not a `tap` and not a silent `lifecycle` (issue #9 generality)", () => {
+    // `press_back` contained `press` and compiled to a TAP on whatever was last resolved; `back`,
+    // `go_back`, `key_event` and `keycode` matched nothing and were reported as "not a known
+    // verb". Back CHANGES THE SCREEN, so `lifecycle` (silent) would leave a hole in the recipe
+    // and the next step would run on a screen the recipe never reached — 02 §6 has no `back`
+    // step, so the honest classification is a real interaction with no step: dropped AND warned.
+    for (const tool of ['back', 'go_back', 'goBack', 'press_back', 'pressBack', 'navigate_back', 'back_button', 'key_event', 'keyEvent', 'keycode', 'key_code']) {
+      assert.equal(classify(`mcp__argent__${tool}`), 'unsupported', tool);
+    }
+  });
+
+  it('the gesture and back patterns do not over-match a plain tap, press, or the keyboard', () => {
+    // the boundaries are what keep `feedback`/`backspace` out and `tap`/`press` in
+    for (const tool of ['tap', 'gesture-tap', 'click', 'press', 'touch', 'tapOn', 'tap_and_describe']) {
+      assert.equal(classify(`mcp__argent__${tool}`), 'tap', tool);
+    }
+    assert.equal(classify('mcp__argent__keyboard'), 'type', '`keyboard` must not read as a key_event');
+    assert.equal(classify('mcp__argent__backspace'), 'unknown', '`backspace` is not the Back button');
+    assert.equal(classify('mcp__argent__send_feedback'), 'unknown', '`feedback` contains `back` but is not Back');
+    assert.equal(classify('mcp__argent__gesture-swipe'), 'swipe');
+    assert.equal(classify('mcp__argent__screenshot'), 'perception');
+  });
+
   it('bareToolName strips `mcp__<driver>__`, a foreign driver prefix, and leaves a bare name alone', () => {
     assert.equal(bareToolName('mcp__argent__gesture-tap', ARGENT), 'gesture-tap');
     // a trajectory outlives an APP_MAP_DRIVER change: the recorded prefix may not be today's

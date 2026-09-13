@@ -17,6 +17,16 @@
  * keep older trajectories (`tap`, `type_text`, `open_url`, `swipe`, `describe_ui`) and other
  * drivers compiling. Whatever matches nothing at all is `unknown`, never silent.
  *
+ * The table only ever covered the tools ONE onboarding made visible, so `unsupported` listed
+ * exactly the two non-tap gestures Argent happens to name. The generic fallback decided the rest,
+ * and its tap test is a bare substring match — so `long_press`, `touch_and_hold`, `double_tap`
+ * and `press_back` all classified as a plain `tap`. A UIKit row that opens a context menu on
+ * long-press, or a Compose `combinedClickable(onLongClick = …)`, then compiled to a tap that
+ * opens the row instead: replay navigated somewhere else entirely and the following `expect`
+ * either passed on the wrong screen or failed misleadingly. `HOLD_RE`/`BACK_RE` below are
+ * therefore tested BEFORE the tap pattern — same #9 failure class, in the gesture shapes the
+ * pilot app never used.
+ *
  * Layer: leaf (imports nothing). Pure.
  */
 
@@ -32,7 +42,10 @@ export type StepVerb = 'tap' | 'type' | 'swipe' | 'open_link';
  *  - `batch` — several interactions inside one call (Argent `run-sequence`), rejected with a
  *    warning: one observation carries one screen pair and one element (02 §7), so the per-step
  *    postconditions of 04 §3.6 cannot be reconstructed from it;
- *  - `unsupported` — a real interaction that 02 §6 has no step for (`button`, `tv-remote`);
+ *  - `unsupported` — a real interaction that 02 §6 has no step for: Argent's `button` and
+ *    `tv-remote`, plus everything the generic `HOLD_RE`/`BACK_RE` below catch (a long press, a
+ *    double tap, a pinch/drag, Android's system Back). The point of the kind is that the call is
+ *    NOT silently turned into the nearest step that exists;
  *  - `unknown` — in no table and matching no pattern: always a warning (issue #9).
  */
 export type VerbKind = StepVerb | 'perception' | 'lifecycle' | 'batch' | 'unsupported' | 'unknown';
@@ -63,7 +76,7 @@ export function normalizeVerb(tool: string, driver: string): string {
 export const ARGENT_VERBS: DriverVerbTable = {
   // interactions that are steps
   gesture_tap: 'tap',
-  gesture_swipe: 'swipe',
+  gesture_swipe: 'swipe', // takes `--fromX/--fromY/--toX/--toY` and NO direction flag (harness-notes §2): compile.ts derives the direction from the pair
   gesture_scroll: 'swipe', // Chromium only, but a scroll is a swipe as far as 02 §6 is concerned
   keyboard: 'type', // `--text` types; `--key return` presses a named key (no step — compile.ts warns)
   paste: 'type',
@@ -99,6 +112,30 @@ export const DRIVER_VERBS: Readonly<Record<string, DriverVerbTable>> = { argent:
 
 // Generic fallback, in the same precedence the pre-#9 literals used, matched on the NORMALIZED
 // name so `open-url` and `open_url` behave alike for an untabled driver as well.
+//
+// `normalizeVerb` lower-cases, so camelCase collapses into one word (`longPress` → `longpress`);
+// and `_` is a word character, so `\b` cannot separate `go_back` from `feedback`. Both patterns
+// below therefore spell their separators out: `_?` between the words of a compound, `(?:^|_)` /
+// `(?:_|$)` around a word that must stand alone.
+//
+// A gesture 02 §6 has no step for. Tested FIRST, because `TAP_RE` is a bare substring test and
+// `long_press`/`touch_and_hold`/`double_tap` all contain one of its four words — which is how a
+// context-menu long-press used to compile to a tap that opened the row (module doc above).
+// `unsupported`, not `unknown`: these ARE interactions, the vocabulary just cannot express them,
+// and compile.ts already drops an `unsupported` call with a warning naming the tool.
+const HOLD_RE = /long_?(?:press|tap|click|touch|hold)|(?:press|tap|click|touch)_?and_?hold|double_?(?:tap|click|press|touch)|triple_?(?:tap|click)|force_?(?:touch|press)|3d_?touch|deep_?press|(?:^|_)hold(?:_|$)|pinch|zoom|rotate|drag/;
+// Android's system Back, and the raw key dispatch it is usually sent through (`adb shell input
+// keyevent 4`). `press_back` matched `press` and compiled to a TAP on whatever was last resolved;
+// `back`, `go_back`, `key_event` and `keycode` matched nothing and were reported as "not a known
+// verb", which reads like a typo rather than the navigation it is.
+//
+// `unsupported` rather than `lifecycle`, deliberately: Back CHANGES THE SCREEN, so it is not a
+// known non-step the way a wait or a screenshot is. `lifecycle` is silent, and a silent drop of a
+// navigation leaves a hole in the recipe — the next step then runs on a screen the recipe never
+// reached, which is the #9 failure mode this whole classification exists to stop. 02 §6 has no
+// `back` step (a back edge is modelled in the map, 02 §4.2), so the honest answer is "a real
+// interaction with no step": dropped, and WARNED about, so the reviewer re-drives or adds an edge.
+const BACK_RE = /(?:^|_)back(?:_|$)|go_?back|press_?back|nav(?:igate)?_?back|back_?button|key_?event|key_?code/;
 const TAP_RE = /tap|click|press|touch/;
 const PERCEPTION_RE = /screenshot|snapshot|hierarchy|describe|dump|accessibility/;
 const OPEN_LINK_RE = /open_?url|open_?link|deep_?link/;
@@ -113,6 +150,9 @@ export function classifyVerb(tool: string, driver: string): VerbKind {
   if (universal !== undefined) return universal;
   const tabled = DRIVER_VERBS[driver]?.[name];
   if (tabled !== undefined) return tabled;
+  // a gesture or a system Back BEFORE the tap test: each contains `press`/`touch`/`tap`, and a
+  // `tap` is the wrong step for every one of them (see the notes on the patterns)
+  if (HOLD_RE.test(name) || BACK_RE.test(name)) return 'unsupported';
   // `tap_and_describe` acts before it reads: a name that is both is an interaction
   const tapish = TAP_RE.test(name);
   if (PERCEPTION_RE.test(name) && !tapish) return 'perception';

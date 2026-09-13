@@ -37,7 +37,7 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
   | tap | `gesture-tap` |
   | type text | `keyboard` (`--text` types; `--key` presses a named key) |
   | paste text | `paste` |
-  | swipe | `gesture-swipe` — flags are `fromX`/`fromY`/`toX`/`toY`, **not** `startX`/`startY`/`endX`/`endY` |
+  | swipe | `gesture-swipe` — flags are `fromX`/`fromY`/`toX`/`toY`, **not** `startX`/`startY`/`endX`/`endY`, and there is **no direction flag at all** |
   | scroll (**Chromium only**) | `gesture-scroll` |
   | open a URL / deep link | `open-url` |
   | launch / restart | `launch-app`, `restart-app`, `reinstall-app` |
@@ -55,6 +55,23 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
   before the lookup, so the *classifier* treats `open-url` and `open_url` alike — but the
   **registered** spelling is hyphenated, and that is the only spelling a `tools:` frontmatter
   entry or a `--` flag may use, because the harness matches those literally.
+- **`gesture-swipe` names no direction**, only the coordinate pair above, while 02 §6's `swipe`
+  step is `{direction: up|down|left|right}`. The compiler therefore DERIVES the direction from the
+  pair (`recipes/compile.ts` `swipeDirection`): the axis with the larger |delta| wins and its sign
+  picks the direction, with screen coordinates growing down/right and the direction being the one
+  the finger travelled (`toY < fromY` is `up`). Until that conversion existed the compiler wrote
+  `direction: obs.input.direction ?? 'up'` and no `fromX`→direction code existed anywhere, so
+  EVERY swipe compiled to "swipe up": a React Native carousel swiped left and a UIKit row swiped
+  to reveal Delete both replayed as a swipe up, nothing moved, and an inherited "screen unchanged"
+  postcondition passed. A swipe with neither a usable `direction` nor a usable coordinate pair is
+  now dropped with a warning — never given an assumed direction.
+- **A gesture Argent does not register still has to classify.** `ARGENT_VERBS` lists only the two
+  non-tap gestures this table names (`button`, `tv-remote`), so a driver tool called `long-press`,
+  `double-tap` or `touch-and-hold` falls to `verbs.ts`'s generic patterns — where the tap test is
+  a bare `tap|click|press|touch` substring match and used to swallow all three. `HOLD_RE` and
+  `BACK_RE` are tested before it and classify them `unsupported`, together with Android's system
+  Back (`back`, `go-back`, `press-back`, `key-event`, `keycode`): Back changes the screen and 02 §6
+  has no step for it, so it must be dropped *and warned about*, not silently skipped.
 - **Every Argent tool requires `--udid`.** There is no implicit "booted device".
 - **`run-sequence` performs N interactions in one tool call**, so one observation can correspond
   to several steps. That is exactly why `ARGENT_VERBS` classifies it `batch` and the compiler

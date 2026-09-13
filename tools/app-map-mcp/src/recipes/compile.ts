@@ -22,8 +22,12 @@
  *     tap on a `dynamic` cell → `select` with `match.text` = the tapped text, on the enclosing
  *     dynamic `list` when the screen declares one and otherwise on the CELL itself
  *     (`select {cell, match}`) — a SwiftUI list container is not an accessibility element, so no
- *     list id can exist (issue #19); an open-link (Argent `open-url`) → `open_link`; `swipe` →
- *     `swipe`; a tap that dismissed a gate (gate present before, absent after, element is a gate
+ *     list id can exist (issue #19); an open-link (Argent `open-url`) → `open_link`; a swipe →
+ *     `swipe`, with the direction the call DECLARED or, failing that, the one its `from`/`to`
+ *     coordinate pair describes — Argent's `gesture-swipe` has no direction flag at all, only
+ *     `--fromX/--fromY/--toX/--toY` (harness-notes §2), and a swipe whose direction cannot be
+ *     established either way is dropped with a warning rather than assumed (`swipeDirection`);
+ *     a tap that dismissed a gate (gate present before, absent after, element is a gate
  *     dismiss id) → `dismiss_gate`. Perception and wait/lifecycle calls are KNOWN non-steps and
  *     pass silently; every other call that yields no step is dropped WITH a warning naming its
  *     seq and tool, because a step that disappears quietly turns a recipe into a test that
@@ -56,8 +60,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppMapContext } from '../context.ts';
-import type { CompileRecipeInput, CompileRecipeResult, ElementId, Expect, LoadedMap, Observation, RecipeEntry, RecipeFile, RecipeParam, RecipeStep, ScreenId, ScrubbedTree, StepId } from '../types.ts';
-import { PARAM_SLOT_REGEX, UNKNOWN_SCREEN, focusObservable, screenIdOfDeepLink, stepElement } from '../types.ts';
+import type { CompileRecipeInput, CompileRecipeResult, DriverInput, ElementId, Expect, LoadedMap, Observation, RecipeEntry, RecipeFile, RecipeParam, RecipeStep, ScreenId, ScrubbedTree, StepId, SwipeDirection } from '../types.ts';
+import { PARAM_SLOT_REGEX, SWIPE_DIRECTIONS, UNKNOWN_SCREEN, focusObservable, screenIdOfDeepLink, stepElement } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { PACKAGE_ROOT } from '../paths.ts';
 import { walk } from '../tree.ts';
@@ -289,6 +293,77 @@ function enclosingDynamicList(map: LoadedMap, screen: ScreenId, cell: ElementId)
 }
 
 /**
+ * What `swipeDirection` concluded: a direction and where it came from, or no direction and why.
+ * The `why` is a sentence fragment `translateSteps` splices into its `drop()` line.
+ */
+export type SwipeDirectionResult =
+  | { direction: SwipeDirection; source: 'declared' | 'coordinates' }
+  | { direction: undefined; source?: undefined; why: string };
+
+/** the first finite number among `keys`, so one spelling of a coordinate flag serves them all */
+function coordinate(input: DriverInput, keys: readonly string[]): number | undefined {
+  for (const key of keys) {
+    const v = input[key];
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+  }
+  return undefined;
+}
+
+const FROM_X = ['fromX', 'from_x', 'startX', 'start_x'];
+const FROM_Y = ['fromY', 'from_y', 'startY', 'start_y'];
+const TO_X = ['toX', 'to_x', 'endX', 'end_x'];
+const TO_Y = ['toY', 'to_y', 'endY', 'end_y'];
+
+/**
+ * The direction of a `swipe` driver call (04 §3.3 → 02 §6 `swipe.direction`). Pure.
+ *
+ * A declared `direction` wins — case-insensitively, because a driver that speaks Maestro's
+ * vocabulary reports `UP` while recipe.schema.json only accepts `up`, and a direction the schema
+ * rejects is not a direction. Otherwise it is DERIVED from the call's start/end points: Argent's
+ * `gesture-swipe` takes `--fromX/--fromY/--toX/--toY` and names no direction at all
+ * (docs/dev/harness-notes.md §2), so on that driver the coordinates are the only evidence there
+ * is. `startX`/`endX` and the snake_case spellings are accepted as aliases so an untabled driver
+ * (03 §3) compiles too.
+ *
+ * The axis with the larger |delta| wins and its sign picks the direction. Screen coordinates grow
+ * DOWN and RIGHT, and a swipe's direction is the direction the FINGER travelled (Maestro's
+ * `swipe: {direction: UP}` drags upwards), so `toY < fromY` is `up`.
+ *
+ * Three shapes name no direction and say so instead of guessing: no usable coordinate pair, a
+ * zero-length gesture, and an exact 45° diagonal (no axis is larger, so choosing one would be
+ * inventing the answer). `translateSteps` drops those with the reason.
+ *
+ * This replaces `obs.input.direction ?? 'up'`, which — since no driver in `ARGENT_VERBS` sends
+ * `direction` — compiled EVERY swipe to "swipe up": a left-swiped React Native carousel and a
+ * UIKit row swiped to reveal Delete both became a swipe up, replay moved nothing, and an
+ * inherited "screen unchanged" postcondition then PASSED (issue #9's failure class).
+ */
+export function swipeDirection(input: DriverInput): SwipeDirectionResult {
+  const declared: unknown = input.direction;
+  const named = typeof declared === 'string' ? declared.trim().toLowerCase() : '';
+  if (named !== '' && (SWIPE_DIRECTIONS as readonly string[]).includes(named)) {
+    return { direction: named as SwipeDirection, source: 'declared' };
+  }
+  // a direction nobody can read is worth no more than none at all: fall through to the coordinates
+  const unreadable = named === '' ? '' : ` (\`direction: ${String(declared)}\` is not one of ${SWIPE_DIRECTIONS.join('/')})`;
+  const fromX = coordinate(input, FROM_X);
+  const fromY = coordinate(input, FROM_Y);
+  const toX = coordinate(input, TO_X);
+  const toY = coordinate(input, TO_Y);
+  if (fromX === undefined || fromY === undefined || toX === undefined || toY === undefined) {
+    return { direction: undefined, why: `carried no usable \`direction\`${unreadable} and no from/to coordinate pair to derive one from` };
+  }
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  if (Math.abs(dx) === Math.abs(dy)) {
+    const shape = dx === 0 ? 'is zero-length' : 'is an exact diagonal, so neither axis dominates';
+    return { direction: undefined, why: `swiped (${fromX}, ${fromY}) → (${toX}, ${toY})${unreadable}, which ${shape}` };
+  }
+  if (Math.abs(dx) > Math.abs(dy)) return { direction: dx > 0 ? 'right' : 'left', source: 'coordinates' };
+  return { direction: dy > 0 ? 'down' : 'up', source: 'coordinates' };
+}
+
+/**
  * Step 3's output: the steps, plus one line per observation that did NOT become one and is not a
  * known non-step. `compileRecipe` folds these into `CompileRecipeResult.warnings` (issue #9).
  */
@@ -346,7 +421,14 @@ export function translateSteps(map: LoadedMap, observations: readonly Observatio
       continue;
     }
     if (kind === 'swipe') {
-      push({ id, action: 'swipe', direction: obs.input.direction ?? 'up', ...(obs.element !== undefined ? { element: obs.element } : {}) });
+      const swipe = swipeDirection(obs.input);
+      if (swipe.direction === undefined) {
+        // never invent a direction: a swipe up that should have been a swipe left moves nothing,
+        // and an inherited "screen unchanged" postcondition then passes (04 §3.3)
+        drop(`${swipe.why}, so no swipe direction could be established (04 §3.3)`);
+        continue;
+      }
+      push({ id, action: 'swipe', direction: swipe.direction, ...(obs.element !== undefined ? { element: obs.element } : {}) });
       continue;
     }
     if (kind === 'tap') {
