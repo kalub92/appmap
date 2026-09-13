@@ -139,6 +139,16 @@ export function lintIds(config: Pick<AppMapConfig, 'dir'>, opts: LintIdsOptions)
         issues.push(err('bad_id', `gate "${g.id}" dismiss "${g.dismiss}" must be "${g.id}.<verb>" — 01 R2`));
       } else registered.add(g.dismiss);
     }
+    // issue #24: a gate's other controls follow the same `gate.<name>.<verb>` shape and are
+    // registered ids like the dismiss, so the orphan/literal checks below cover them too
+    for (const c of g.controls ?? []) {
+      if (typeof c?.id !== 'string') continue;
+      if (!GATE_DISMISS_REGEX.test(c.id) || !c.id.startsWith(`${g.id}.`)) {
+        issues.push(err('bad_id', `gate "${g.id}" control "${c.id}" must be "${g.id}.<verb>" — 01 R2`));
+      } else if (c.id === g.dismiss) {
+        issues.push(err('bad_id', `gate "${g.id}" lists its dismiss control "${c.id}" in controls[] — dismiss is declared once, as the safe escape (issue #24)`));
+      } else registered.add(c.id);
+    }
   }
   // 01 R2: "Ids MUST NOT contain copy text or localized strings." The regex only fixes the SHAPE,
   // so `invoice.save_invoice_button_en.button` passes it while being exactly what R2 forbids.

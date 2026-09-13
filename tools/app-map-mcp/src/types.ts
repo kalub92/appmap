@@ -38,7 +38,19 @@ export const GATE_ID_REGEX = /^gate\.[a-z0-9_]+$/;
 export const GATE_DISMISS_REGEX = /^gate\.[a-z0-9_]+\.[a-z0-9_]+$/;
 /** screen markers: `screen.<screen_id>` (01 R3) */
 export const MARKER_REGEX = /^screen\.([a-z][a-z0-9_]*)$/;
-/** deep links `appmap://<screen_id>[?k=v…]` (01 R5) */
+/**
+ * The scheme every deep link is WRITTEN with in the map (01 R5). The app may register a
+ * different one (`manifest.deep_link_scheme`, issue #25); the committed form is always this one
+ * and is rewritten on the way out (`emitDeepLink`) and back on the way in (`canonicalDeepLink`).
+ */
+export const CANONICAL_DEEP_LINK_SCHEME = 'appmap';
+/**
+ * A URL scheme the app may register (RFC 3986 `scheme`, lower-cased). Constrained further than
+ * the RFC so it survives a shell word and an `Info.plist`/intent-filter round trip unquoted:
+ * lowercase, no `+`/`.` leading, ≤64 chars.
+ */
+export const DEEP_LINK_SCHEME_REGEX = /^[a-z][a-z0-9+.-]{0,63}$/;
+/** deep links `appmap://<screen_id>[?k=v…]` as the MAP writes them (01 R5) */
 export const DEEP_LINK_REGEX = /^appmap:\/\/([a-z][a-z0-9_]*)(\?[A-Za-z0-9_.=&%-]*)?$/;
 /** structural hash (02 §4.4) */
 export const STRUCTURAL_HASH_REGEX = /^sha1:[0-9a-f]{40}$/;
@@ -121,14 +133,14 @@ export const DEGRADED_THRESHOLD = 0.6;
 /** strategies that Maestro can express (04 §6.2) */
 export const HEADLESS_STRATEGIES: readonly LocatorStrategy[] = ['a11y_id', 'role_label', 'text'];
 
-export const STEP_ACTIONS = ['tap', 'type', 'select', 'swipe', 'open_link', 'wait_for', 'dismiss_gate'] as const;
+export const STEP_ACTIONS = ['tap', 'type', 'select', 'swipe', 'open_link', 'wait_for', 'dismiss_gate', 'tap_gate'] as const;
 export type StepAction = (typeof STEP_ACTIONS)[number];
 
 /** edge actions are the step actions minus `wait_for` */
 export const EDGE_ACTION_TYPES = ['tap', 'type', 'select', 'swipe', 'open_link', 'dismiss_gate'] as const;
 export type EdgeActionKind = (typeof EDGE_ACTION_TYPES)[number];
 
-export const EXPECT_KEYS = ['screen', 'focused', 'visible', 'not_visible', 'text_present'] as const;
+export const EXPECT_KEYS = ['screen', 'focused', 'visible', 'not_visible', 'text_present', 'value'] as const;
 export type ExpectKey = (typeof EXPECT_KEYS)[number];
 
 export const SWIPE_DIRECTIONS = ['up', 'down', 'left', 'right'] as const;
@@ -166,12 +178,12 @@ export type DriftStatus = (typeof DRIFT_STATUSES)[number];
 export const HEAL_REASONS = ['accepted', 'low_score', 'ambiguous', 'intent_critical_label_changed', 'no_expect', 'postcondition_failed', 'no_candidates'] as const;
 export type HealReason = (typeof HEAL_REASONS)[number];
 
-export const IDENTIFY_SIGNALS = ['marker', 'route', 'required_ids', 'structural_hash', 'title', 'none'] as const;
+export const IDENTIFY_SIGNALS = ['marker', 'covered', 'route', 'required_ids', 'structural_hash', 'title', 'none'] as const;
 export type IdentifySignalKind = (typeof IDENTIFY_SIGNALS)[number];
 
 /** 03 §5 signal scores */
 export const IDENTIFY_SCORES: Readonly<Record<Exclude<IdentifySignalKind, 'none'>, number>> = {
-  marker: 1.0, route: 0.9, required_ids: 0.8, structural_hash: 0.7, title: 0.4,
+  marker: 1.0, route: 0.9, required_ids: 0.8, covered: 0.75, structural_hash: 0.7, title: 0.4,
 };
 /** required_ids only counts when the present fraction is ≥ this (03 §5 step 4) */
 export const REQUIRED_IDS_MIN_FRACTION = 0.5;
@@ -194,10 +206,28 @@ export interface IdsScreen {
   /** `appmap://…` or `none` */
   deep_link?: string;
 }
+/**
+ * A control of a gate other than its dismiss (issue #24). Registered under the gate rather than in
+ * `elements[]` so architecture §7 decision 2 holds unchanged — gate controls have exactly one home
+ * — while a destructive dialog's confirm button becomes nameable.
+ */
+export interface IdsGateControl {
+  id: ElementId;
+  /**
+   * Required, unlike everywhere else absence means false (decision 26): a gate control is by
+   * construction the non-escape half of an interrupter, so the author must SAY whether pressing it
+   * commits something. It is what makes 04 §7.2's exact-label rule protect the control.
+   */
+  intent_critical: boolean;
+}
 export interface IdsGate {
   id: GateId;
-  /** `gate.<name>.<verb>` — the dismiss control. Registered here, NOT under `elements`. */
+  /** `gate.<name>.<verb>` — the dismiss control, i.e. the SAFE escape. Registered here, NOT under `elements`. */
   dismiss: ElementId;
+  /** 02 §10.6: the dismiss control's criticality; absent means false (decision 26) */
+  dismiss_intent_critical?: boolean;
+  /** other controls of the same dialog — the confirm half of a destructive prompt (issue #24) */
+  controls?: IdsGateControl[];
 }
 export interface IdsElement {
   id: ElementId;
@@ -229,8 +259,14 @@ export interface Manifest {
   schema_version: 1;
   app_id: string;
   platform: Platform;
-  /** fixed by 01 R5; every deep-link pattern (`DEEP_LINK_REGEX`, schemas) hard-codes `appmap://` */
-  deep_link_scheme: 'appmap';
+  /**
+   * The custom URL scheme THIS app registers (01 R5). Defaults to `appmap`; an app installed
+   * beside another instrumented app must pick its own, because iOS routes a scheme both apps
+   * claim to whichever it likes (issue #25). The map itself is scheme-relative — every
+   * `deep_link`/`url` in the YAML is written `appmap://…` (`CANONICAL_DEEP_LINK_SCHEME`) and
+   * rewritten to this scheme at the moment a URL is handed to a driver (`emitDeepLink`).
+   */
+  deep_link_scheme: string;
   build: BuildInfo;
   generated_at: Timestamp;
   /** `app-map-mcp@<semver>` */
@@ -371,6 +407,18 @@ export interface ScreenFile {
 // Recipes (02 §6, 04) — schema `recipe`
 // =============================================================================================
 
+/**
+ * 02 §6 / issue #23: "this element now holds `{param}`". The comparison names the SLOT, never a
+ * literal — the reference lives in the map, the value only in the run (07 §2; validate rule 8
+ * rejects a literal here). Exactly one of `equals`/`contains`.
+ */
+export interface ValueAssertion {
+  element: ElementId;
+  /** a bare `{param}` slot; compared with the compiler's own semantics (recipes/values.ts) */
+  equals?: string;
+  /** a bare `{param}` slot; case-insensitive substring */
+  contains?: string;
+}
 export interface Expect {
   screen?: ScreenId;
   focused?: ElementId;
@@ -378,6 +426,8 @@ export interface Expect {
   not_visible?: ElementId[];
   /** static copy only */
   text_present?: string;
+  /** 02 §6 / issue #23: the element holds the run's value for a `{param}` slot */
+  value?: ValueAssertion[];
 }
 
 export interface RecipeParam {
@@ -418,7 +468,15 @@ export interface StepOpenLink extends StepBase { action: 'open_link'; url: strin
 /** `expect` is required for wait_for */
 export interface StepWaitFor extends StepBase { action: 'wait_for'; expect: Expect; timeout_ms?: number }
 export interface StepDismissGate extends StepBase { action: 'dismiss_gate'; gate: GateId }
-export type RecipeStep = StepTap | StepType | StepSelect | StepSwipe | StepOpenLink | StepWaitFor | StepDismissGate;
+/**
+ * 02 §6 / issue #24: press a NAMED control of a gate — the confirm half of a destructive dialog,
+ * which `dismiss_gate` can never reach because `dismiss` means "the safe escape" and two pieces of
+ * machinery press it unattended (guided auto-dismissal, the Maestro gate guard). `expect` is
+ * required: a committing step with no postcondition can neither be verified nor healed
+ * (`proposeHeal` refuses a step without one, 04 §7.2 rule 3).
+ */
+export interface StepTapGate extends StepBase { action: 'tap_gate'; gate: GateId; control: ElementId; expect: Expect }
+export type RecipeStep = StepTap | StepType | StepSelect | StepSwipe | StepOpenLink | StepWaitFor | StepDismissGate | StepTapGate;
 
 export interface RecipeEntry {
   deep_link?: string;
@@ -683,6 +741,20 @@ export interface Observation {
   scrub_hits?: number;
   /** identification confidence for `screen_after` */
   confidence?: number;
+  /**
+   * 03 §5 signal that decided `screen_after`, as identify reported it (issue #24). Stored rather
+   * than re-derived: `covered` — the remembered answer while a gate occludes the screen's own
+   * marker — is not recoverable from `signature_after` alone, and every placement of a guess for
+   * it in `winningSignal` is shadowed by another rule.
+   */
+  identified_by?: IdentifySignalKind;
+  /**
+   * issue #23: one BOOLEAN per `expect.value` assertion an active run declares, keyed by
+   * `values.assertionKey` (`<element>|<op>|<{param}>`). Decided at ingest against the raw tree —
+   * the only place the typed value still exists — and the only thing about it that is ever
+   * persisted. `checkExpect` reads the bit; the observed string never leaves ingest (07 §2.3).
+   */
+  value_checks?: Record<string, boolean>;
 }
 
 // =============================================================================================
@@ -738,6 +810,15 @@ export interface IdentifyOptions {
   flags?: Readonly<Record<string, boolean | string | number>>;
   /** platform of the tree; defaults to the map's */
   platform?: Platform;
+  /**
+   * 03 §5.1b / issue #24: the screen the session was on before this capture. A modal hides the
+   * presenting screen's subtree INCLUDING its `screen.<id>` marker, so the deepest surviving
+   * marker is an ancestor and the marker rule answers it at full confidence — an answer built on
+   * the absence of the evidence that mattered. When a gate is present and this names a different
+   * screen, it wins at `IDENTIFY_SCORES.covered`. Ignored when no gate is present: a present gate
+   * is the one state in which the tree is a known-unreliable witness of what is underneath it.
+   */
+  covered_screen?: ScreenId;
 }
 
 export interface ResolveHit {
@@ -828,6 +909,18 @@ export interface HealInput {
   tree: AnyTree;
   /** the resolution that triggered healing */
   trigger: ResolveResult;
+  /**
+   * issue #24: the subtree a replacement may be found in (default `tree.root`). For a gate control
+   * this is the gate's own dialog (`resolve.gateDialogRoot`), so a confirm button is never healed
+   * into something outside the dialog it belongs to.
+   */
+  candidateRoot?: TreeNode;
+  /**
+   * issue #24: nodes that may never be proposed, whatever they score — the nodes that currently
+   * resolve to another control of the same gate. This is what makes "heal Cancel into Delete"
+   * impossible rather than merely unlikely.
+   */
+  forbiddenNodes?: ReadonlySet<TreeNode>;
   build: BuildNumber;
   /** guided run this heal belongs to (for the `heal` event's `run_id`) */
   run_id?: RunId;
@@ -876,6 +969,8 @@ export interface RunStep {
   direction?: SwipeDirection;
   url?: string;
   gate?: GateId;
+  /** issue #24: the gate control a `tap_gate` step presses (`element` carries it too) */
+  control?: ElementId;
   expect?: Expect;
   intent_critical?: boolean;
   /** 07 §3: candidate recipes announce intent_critical steps to the user before acting */
@@ -894,6 +989,15 @@ export interface FallbackPayload {
   step: StepId;
   reason: FallbackReason;
   screen_seen: ScreenId | typeof UNKNOWN_SCREEN;
+  /**
+   * issue #24: the observation `screen_seen` was read from, and the 03 §5 signal that decided it.
+   * `screen_seen` used to be a bare screen id, which read like a live fact — so a reader could not
+   * tell it from what `identify_screen` would answer now, on a fresher capture, and the two
+   * disagreeing looked like a bug in one of them. `covered` in particular means "remembered while
+   * a gate is up", not "seen".
+   */
+  screen_seen_seq?: number;
+  identified_by?: IdentifySignalKind;
   expected?: Expect;
   /** top-3 heal candidates or identify candidates, already compact */
   candidates: string[];
@@ -1390,8 +1494,8 @@ export function focusObservable(platform: Platform): boolean {
 }
 
 export interface ValidationIssue {
-  /** 02 §10 rule number (1–8) */
-  rule: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  /** 02 §10 rule number (1–9) */
+  rule: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
   severity: 'error' | 'warning';
   /** path relative to `APP_MAP_DIR` */
   file: string;
@@ -1522,6 +1626,26 @@ export function screenIdOfMarker(marker: string): ScreenId | undefined {
   const m = MARKER_REGEX.exec(marker);
   return m?.[1];
 }
+/**
+ * The registry entry synthesized for a gate's dismiss control (architecture §7 decision 2).
+ * 02 §10.6: absent `dismiss_intent_critical` means false, as everywhere else.
+ */
+export function dismissRegistryEntry(gate: IdsGate): IdsElement {
+  return { id: gate.dismiss, kind: 'button', intent_critical: gate.dismiss_intent_critical === true, dynamic: false };
+}
+
+/**
+ * Every control a gate registers, dismiss first (issue #24). One definition, because `indexMap`
+ * and `validate` must agree exactly on what counts as a registered gate control — they used to
+ * carry a copy each, which is how the two could have drifted.
+ */
+export function gateControlEntries(gate: IdsGate): IdsElement[] {
+  return [
+    dismissRegistryEntry(gate),
+    ...(gate.controls ?? []).map((c) => ({ id: c.id, kind: 'button' as const, intent_critical: c.intent_critical === true, dynamic: false })),
+  ];
+}
+
 export function markerOfScreen(screenId: ScreenId): string {
   return `screen.${screenId}`;
 }
@@ -1529,6 +1653,28 @@ export function markerOfScreen(screenId: ScreenId): string {
 export function screenIdOfDeepLink(url: string): ScreenId | undefined {
   const m = DEEP_LINK_REGEX.exec(url);
   return m?.[1];
+}
+/**
+ * The map's `appmap://…` form → the scheme the app actually registers (issue #25). Identity when
+ * the app kept the default. Anything that is not a canonical deep link is returned unchanged, so
+ * `none` and a already-rewritten URL both pass through.
+ */
+export function emitDeepLink(url: string, scheme: string | undefined): string {
+  if (typeof url !== 'string' || !url.startsWith(`${CANONICAL_DEEP_LINK_SCHEME}://`)) return url;
+  const to = typeof scheme === 'string' && scheme !== '' ? scheme : CANONICAL_DEEP_LINK_SCHEME;
+  if (to === CANONICAL_DEEP_LINK_SCHEME) return url;
+  return `${to}://${url.slice(CANONICAL_DEEP_LINK_SCHEME.length + 3)}`;
+}
+/**
+ * The inverse (issue #25): a URL the APP reported (a router export, a recorded `open-url` call)
+ * → the canonical form the map stores. A URL in neither the app's scheme nor the canonical one is
+ * returned unchanged, so a production `https://` link is never mistaken for a route.
+ */
+export function canonicalDeepLink(url: string, scheme: string | undefined): string {
+  if (typeof url !== 'string') return url;
+  const from = typeof scheme === 'string' && scheme !== '' ? scheme : CANONICAL_DEEP_LINK_SCHEME;
+  if (from === CANONICAL_DEEP_LINK_SCHEME || !url.startsWith(`${from}://`)) return url;
+  return `${CANONICAL_DEEP_LINK_SCHEME}://${url.slice(from.length + 3)}`;
 }
 /** strip the query so routes index by screen (`appmap://x?y=1` → `appmap://x`) */
 export function routeKey(url: string): string {
@@ -1545,6 +1691,11 @@ export function stepElement(step: RecipeStep): ElementId | undefined {
     case 'tap': case 'type': return step.element;
     case 'select': return selectTarget(step);
     case 'swipe': return step.element;
+    // issue #24: the control a `tap_gate` names is right there in the step, so every consumer of
+    // this function — the intent_critical mirror (validate rule 6, compile step 7), the
+    // touched-elements set, drift — sees the destructive control without a map lookup.
+    // `dismiss_gate` still answers `undefined`: its control is only derivable from ids.yaml.
+    case 'tap_gate': return step.control;
     default: return undefined;
   }
 }

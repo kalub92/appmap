@@ -52,6 +52,9 @@ verify:
   screen: invoice_detail
   visible:
     - invoice.detail.amount.text
+  value:
+    - element: invoice.detail.amount.text
+      equals: "{amount}"
 status: verified
 provenance:
   compiled_from: traj_2026-09-01_0007

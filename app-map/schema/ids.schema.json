@@ -63,7 +63,35 @@
           "dismiss": {
             "type": "string",
             "pattern": "^gate\\.[a-z0-9_]+\\.[a-z0-9_]+$",
-            "description": "01 R2: gate.<name>.<verb> — the dismiss control; registered here, not under elements"
+            "description": "01 R2: gate.<name>.<verb> — the dismiss control, i.e. the SAFE escape; registered here, not under elements. Guided replay and the Maestro gate guard press it unattended, so it must never mean anything else."
+          },
+          "dismiss_intent_critical": {
+            "type": "boolean",
+            "description": "02 §10.6: the dismiss control's criticality; absent means false"
+          },
+          "controls": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^gate\\.[a-z0-9_]+\\.[a-z0-9_]+$",
+                  "description": "01 R2: gate.<name>.<verb> — another control of the same dialog, e.g. the confirm half of a destructive prompt (issue #24). Reachable from a recipe only through `action: tap_gate`, never through dismiss_gate."
+                },
+                "intent_critical": {
+                  "type": "boolean",
+                  "description": "REQUIRED, unlike elsewhere where absence means false: a gate control is by construction the non-escape half of an interrupter, so the author must state whether pressing it commits something."
+                }
+              },
+              "required": [
+                "id",
+                "intent_critical"
+              ]
+            },
+            "description": "01 R7 / issue #24: controls of this gate other than `dismiss`. Without these a destructive confirmation is unautomatable — the Delete button is neither a gate control (only `dismiss` existed) nor an element (the `gate.` prefix is reserved)."
           }
         },
         "required": [

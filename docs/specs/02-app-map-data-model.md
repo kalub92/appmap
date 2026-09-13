@@ -190,8 +190,14 @@ Never committed. Retention: 14 days, then deleted by the server on start.
  "tool":"mcp__argent__gesture-tap","input":{"id":"invoice.add.button"},
  "screen_before":"invoice_list","screen_after":"invoice_new",
  "signature_after":{"marker":"screen.invoice_new","structural_hash":"sha1:…","required_present":1.0},
+ "identified_by":"marker",
  "snapshot":{"…scrubbed compact tree…"},"ok":true,"latency_ms":420}
 ```
+
+Two optional fields carry decisions that cannot be re-derived from the line later:
+
+- `identified_by` — the 03 §5 signal that produced `screen_after`. Needed because `covered` (03 §5.1b: the screen the session remembers, while a gate occludes its marker) leaves no trace in `signature_after`, so a reader cannot otherwise tell a remembered screen from a seen one.
+- `value_checks` — one BOOLEAN per `expect.value` assertion an active run declares (§6), keyed `<element>|<equals|contains>|<{param}>`. The comparison happens here, at ingest, because it is the only point at which the typed value still exists: the scrubber drops `value`/`text` from every node and drops `label` under every `dynamic` id, which is exactly what such an assertion targets. **Only the boolean is written** — never the observed string, which dies with the ingest call. 07 §2.3 states the rule.
 
 ```jsonl
 // app-map/.local/events.jsonl — metrics feed (08 §2)

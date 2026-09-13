@@ -141,7 +141,19 @@ function loadRegistry(path) {
       if (!g.dismiss.startsWith(`${g.id}.`)) err(`${where}: dismiss "${g.dismiss}" must be "${g.id}.<verb>"`);
       claim(g.dismiss, `${where}.dismiss`);
     }
-    return { id: g.id, dismiss: g.dismiss };
+    // issue #24: a gate's other controls — the confirm half of a destructive prompt — are
+    // registered ids under the gate, so they get constants like the dismiss does
+    const controls = [];
+    (Array.isArray(g.controls) ? g.controls : []).forEach((c, ci) => {
+      const cw = `${where}.controls[${ci}]`;
+      if (!c || typeof c !== 'object' || typeof c.id !== 'string') { err(`${cw}: needs a string id`); return; }
+      if (!ID_RE.test(c.id)) err(`${cw}: control id "${c.id}" violates ${ID_RE}`);
+      if (!c.id.startsWith(`${g.id}.`)) err(`${cw}: control "${c.id}" must be "${g.id}.<verb>"`);
+      if (typeof c.intent_critical !== 'boolean') err(`${cw}: control "${c.id}" needs an explicit boolean intent_critical`);
+      claim(c.id, cw);
+      controls.push({ id: c.id });
+    });
+    return { id: g.id, dismiss: g.dismiss, controls };
   }).filter(Boolean);
 
   const elements = list('elements').map((e, i) => {
@@ -201,6 +213,7 @@ function buildGroups(reg) {
     element: reg.elements.map((e) => ({ id: e.id, swift: lowerCamel(e.id), kotlin: upperSnake(e.id), note: e })),
     gate: reg.gates.map((g) => ({ id: g.id, swift: lowerCamel(stripPrefix(g.id, 'gate.')), kotlin: upperSnake(stripPrefix(g.id, 'gate.')) })),
     dismiss: reg.gates.map((g) => ({ id: g.dismiss, swift: lowerCamel(stripPrefix(g.dismiss, 'gate.')), kotlin: upperSnake(stripPrefix(g.dismiss, 'gate.')) })),
+    control: reg.gates.flatMap((g) => (g.controls ?? []).map((c) => ({ id: c.id, swift: lowerCamel(stripPrefix(c.id, 'gate.')), kotlin: upperSnake(stripPrefix(c.id, 'gate.')) }))),
   };
   for (const [k, entries] of Object.entries(groups)) {
     assertUniqueNames(`${k} (swift)`, entries.map((e) => ({ name: e.swift, id: e.id })));
@@ -247,6 +260,14 @@ function renderSwift(groups) {
   for (const d of groups.dismiss) L.push(`            public static let ${d.swift} = "${d.id}"`);
   L.push(`            public static let all: [String] = [${groups.dismiss.map((d) => `${d.swift}`).join(', ')}]`);
   L.push('        }');
+  if (groups.control.length > 0) {
+    L.push('');
+    L.push('        /// Controls other than the dismiss — the committing half of a destructive prompt (issue #24).');
+    L.push('        public enum Control {');
+    for (const c of groups.control) L.push(`            public static let ${c.swift} = "${c.id}"`);
+    L.push(`            public static let all: [String] = [${groups.control.map((c) => `${c.swift}`).join(', ')}]`);
+    L.push('        }');
+  }
   L.push('    }');
   L.push('}');
   return `${L.join('\n')}\n`;
@@ -283,6 +304,14 @@ function renderKotlin(groups) {
   for (const d of groups.dismiss) L.push(`            const val ${d.kotlin} = "${d.id}"`);
   L.push(`            val ALL: List<String> = listOf(${groups.dismiss.map((d) => d.kotlin).join(', ')})`);
   L.push('        }');
+  if (groups.control.length > 0) {
+    L.push('');
+    L.push('        /** Controls other than the dismiss — the committing half of a destructive prompt (issue #24). */');
+    L.push('        object Control {');
+    for (const c of groups.control) L.push(`            const val ${c.kotlin} = "${c.id}"`);
+    L.push(`            val ALL: List<String> = listOf(${groups.control.map((c) => c.kotlin).join(', ')})`);
+    L.push('        }');
+  }
   L.push('    }');
   L.push('}');
   return `${L.join('\n')}\n`;

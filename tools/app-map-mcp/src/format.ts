@@ -48,7 +48,7 @@
  * Layer: map (imports types + token). Pure.
  */
 import type { DriverTarget, Expect, FallbackPayload, FindElementResult, LoadedMap, RecipeFile, RunStep, ScreenFile, ScreenId, SummaryResult } from './types.ts';
-import { edgeElement, isUnlearnedEdgeElement, routeKey, screenIdOfDeepLink, stepElement } from './types.ts';
+import { edgeElement, emitDeepLink, isUnlearnedEdgeElement, routeKey, screenIdOfDeepLink, stepElement } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { capTokens } from './token.ts';
 
@@ -95,7 +95,10 @@ function recipeScreens(map: LoadedMap, recipe: RecipeFile): Set<ScreenId> {
   for (const step of recipe.steps ?? []) {
     addExpect(step.expect);
     const element = stepElement(step);
-    if (element !== undefined) for (const ref of map.elements.get(element) ?? []) out.add(ref.screen);
+    // `map.elements` indexes gate files too, and `stepElement` answers a `tap_gate`'s control
+    // (issue #24) — a gate is dismissed, never navigated to, so it is not a screen this recipe
+    // visits. `drift.ciGateScreens` has carried the same guard all along.
+    if (element !== undefined) for (const ref of map.elements.get(element) ?? []) if (map.screens.has(ref.screen)) out.add(ref.screen);
   }
   addExpect(recipe.verify);
   return out;
@@ -115,7 +118,9 @@ export function formatGetScreen(map: LoadedMap, screenId: ScreenId, opts: { conf
   const header: string[] = [`screen ${screen.id}`];
   if (typeof o.confidence === 'number' && Number.isFinite(o.confidence)) header.push(`conf ${fixed2(o.confidence)}`);
   if (typeof screen.title === 'string' && screen.title !== '') header.push(`title ${q(screen.title)}`);
-  const link = typeof screen.deep_link === 'string' && screen.deep_link !== '' ? screen.deep_link : 'none';
+  // the map writes every link `appmap://`; the LLM is going to OPEN this one, so it must read in
+  // the scheme the app registers (issue #25)
+  const link = typeof screen.deep_link === 'string' && screen.deep_link !== '' ? emitDeepLink(screen.deep_link, map.manifest?.deep_link_scheme) : 'none';
   header.push(`deep_link ${link}`);
   const lines: string[] = [header.join('  '), 'elements'];
 
@@ -295,7 +300,9 @@ export function formatMatchCandidates(candidates: ReadonlyArray<{ id: string; de
 /** `fallback at s4 (heal_rejected): screen_seen invoice_new; expected screen client_picker; candidates: …` */
 export function formatFallback(fb: FallbackPayload): string {
   if (!fb || typeof fb !== 'object') return 'fallback';
-  const parts: string[] = [`fallback at ${fb.step} (${fb.reason}): screen_seen ${fb.screen_seen}`];
+  const seen = [fb.screen_seen_seq !== undefined ? `seq ${fb.screen_seen_seq}` : undefined, fb.identified_by]
+    .filter((x): x is string => typeof x === 'string' && x !== '');
+  const parts: string[] = [`fallback at ${fb.step} (${fb.reason}): screen_seen ${fb.screen_seen}${seen.length > 0 ? ` (${seen.join(', ')})` : ''}`];
   const expected = formatExpect(fb.expected);
   if (expected !== undefined) parts.push(expected.replace(/^expect /, 'expected '));
   if (Array.isArray(fb.candidates) && fb.candidates.length > 0) parts.push(`candidates: ${fb.candidates.join(', ')}`);

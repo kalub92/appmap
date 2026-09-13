@@ -55,12 +55,13 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, join, relative, sep } from 'node:path';
 import type { AppMapConfig, Platform } from './config.ts';
 import { PLATFORMS } from './config.ts';
-import type { BuildNumber, Condition, ElementId, Expect, IdsElement, IdsRegistry, Manifest, RecipeFile, ScreenFile, UnlearnedEdgeElementReason, ValidateResult, ValidationIssue } from './types.ts';
-import { ID_REGEX, PREVIOUS_SCREEN, focusObservable, isNewerBuild, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
+import type { BuildNumber, Condition, ElementId, Expect, IdsElement, IdsRegistry, Manifest, RecipeFile, RecipeParam, ScreenFile, UnlearnedEdgeElementReason, ValidateResult, ValidationIssue } from './types.ts';
+import { ID_REGEX, PREVIOUS_SCREEN, focusObservable, gateControlEntries, isNewerBuild, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
 import { AppMapError } from './errors.ts';
 import { allowlistFile, idsFile, kindForPath, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from './paths.ts';
 import type { YamlKind } from './paths.ts';
 import { PII_PATTERNS } from './scrub.ts';
+import { assertionOp, observedParams, paramOfSlot } from './recipes/values.ts';
 import { isCanonical, parseYamlDoc } from './yaml/canonical.ts';
 import { schemaIssueDetail, validateAgainstSchema } from './yaml/schemas.ts';
 
@@ -338,8 +339,15 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
   const gateIds = new Set(ids.gates.map((g) => g.id));
   const registry = new Map<string, IdsElement>();
   for (const e of ids.elements) registry.set(e.id, e);
-  // gate dismiss controls are registered through gates[].dismiss (architecture §7 decision 2)
-  for (const g of ids.gates) registry.set(g.dismiss, { id: g.dismiss, kind: 'button', intent_critical: false, dynamic: false });
+  // gate controls are registered under the gate, never in elements[] (architecture §7 decision 2;
+  // issue #24 widened it from the one dismiss to `dismiss` + `controls[]`)
+  const gateControlIds = new Map<string, string>();
+  for (const g of ids.gates) {
+    for (const c of gateControlEntries(g)) {
+      registry.set(c.id, c);
+      gateControlIds.set(c.id, g.id);
+    }
+  }
   const idsScreenById = new Map(ids.screens.map((s) => [s.id, s]));
   // rule 8 over the registry itself (screen titles); validateMap dedupes it across platforms
   issues.push(...forbiddenContentIssues('ids.yaml', ids));
@@ -351,8 +359,22 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
   const knownScreen = (id: string, allowPrevious: boolean): boolean => screenFilesById.has(id) || (allowPrevious && id === PREVIOUS_SCREEN);
   const critical = (id: string): boolean => registry.get(id)?.intent_critical === true; // absent = false (decision 26)
 
-  const checkExpect = (file: string, x: Expect | undefined, loc: string, where: string): void => {
+  const checkExpect = (file: string, x: Expect | undefined, loc: string, where: string, params?: readonly RecipeParam[]): void => {
     if (!x) return;
+    // issue #23: a value assertion names an element and a `{param}` SLOT. The schema pins the slot
+    // shape (rule 1) and rule 8 rejects a literal; here we check the two references resolve.
+    (x.value ?? []).forEach((v, vi) => {
+      if (typeof v?.element === 'string' && !registry.has(v.element)) {
+        issues.push(issue(2, file, `${where}: expect.value element ${v.element} is not registered in ids.yaml`, `${loc}/value/${vi}/element`));
+      }
+      const parsed = assertionOp(v);
+      if (parsed === undefined) return;
+      const name = paramOfSlot(parsed.slot);
+      if (name === undefined) return; // rule 1/8 report the literal; do not double-report it here
+      if (params !== undefined && !params.some((p) => p.name === name)) {
+        issues.push(issue(2, file, `${where}: expect.value ${parsed.op} {${name}} names a parameter the recipe does not declare`, `${loc}/value/${vi}/${parsed.op}`));
+      }
+    });
     if (x.screen !== undefined && !knownScreen(x.screen, false)) issues.push(issue(3, file, `expect.screen ${x.screen}: no such screen file`, `${loc}/screen`));
     for (const id of [x.focused, ...(x.visible ?? []), ...(x.not_visible ?? [])]) {
       if (id !== undefined && !registry.has(id)) issues.push(issue(2, file, `element ${id} is not registered in ids.yaml`, loc));
@@ -568,14 +590,64 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
           issues.push(issue(6, file, `${st.id}: intent_critical ${st.intent_critical === true} must mirror ids.yaml (${critical(el)}) for ${el} (04 §3.7)`, `${loc}/intent_critical`));
         }
       }
+      // issue #24: a gate control now has its own actions, so a plain `tap` naming one is a
+      // mistake with teeth — guided treats the gate as blocking and auto-dismisses it (pressing
+      // the SAFE escape) immediately before the step meant to press the other button.
+      if (st.action === 'tap' && gateControlIds.has(st.element)) {
+        issues.push(issue(2, file, `${st.id}: ${st.element} is a control of ${gateControlIds.get(st.element)} — a plain tap on it is dismissed by the runner before it happens. Use \`action: dismiss_gate\` for the safe escape, or \`action: tap_gate\` with \`control:\` for any other control (issue #24)`, `${loc}/element`));
+      }
       if (st.action === 'dismiss_gate' && !gateIds.has(st.gate)) issues.push(issue(2, file, `${st.id}: gate ${st.gate} is not registered in ids.yaml gates[]`, `${loc}/gate`));
-      checkExpect(file, st.expect, `${loc}/expect`, st.id);
+      if (st.action === 'tap_gate') {
+        const gate = ids.gates.find((g) => g.id === st.gate);
+        if (gate === undefined) {
+          issues.push(issue(2, file, `${st.id}: gate ${st.gate} is not registered in ids.yaml gates[]`, `${loc}/gate`));
+        } else if (!(gate.controls ?? []).some((c) => c.id === st.control)) {
+          // naming the dismiss here is the specific mistake worth its own message: it is the one
+          // control that IS registered, and pressing it does the opposite of what the step means
+          const isDismiss = gate.dismiss === st.control;
+          issues.push(issue(2, file, isDismiss
+            ? `${st.id}: ${st.control} is ${st.gate}'s dismiss control — the safe escape. Use action: dismiss_gate to press it; tap_gate names a control from gates[].controls[] (issue #24)`
+            : `${st.id}: ${st.control} is not declared in ids.yaml gates[].controls[] for ${st.gate}`, `${loc}/control`));
+        }
+      }
+      checkExpect(file, st.expect, `${loc}/expect`, st.id, doc.params);
     });
-    checkExpect(file, doc.verify, '/verify', 'verify');
+    checkExpect(file, doc.verify, '/verify', 'verify', doc.params);
+    issues.push(...unobservedParamIssues(file, doc));
     issues.push(...forbiddenContentIssues(file, doc));
   }
 
   return issues;
+}
+
+/**
+ * Rule 9 (issue #23): a recipe must ASSERT on every parameter it declares.
+ *
+ * Rule 8 polices what an assertion may contain; this polices whether one exists. Without it
+ * `expect.value` is merely available, and the failure the issue describes stands: a `type` step
+ * whose text never reached the field, a recipe that saves whatever was already in the box, and a
+ * PASS. `lifecycle.recompile` promotes on successful replays, so such a recipe keeps passing, keeps
+ * being promoted and keeps being trusted.
+ *
+ * What counts as observing a param is `values.observedParams`: an `expect.value`/`verify.value`
+ * slot, or a `select {match.text}` slot — the latter because the row is addressed BY that text at
+ * replay and the step genuinely fails when nothing matches. A `type` step's slot does NOT count:
+ * typing is not observing.
+ *
+ * Severity by status: a WARNING while `candidate` (a draft under review, and 04 §3.8 puts the
+ * assertions in at review time), an ERROR at `verified`/`ci_gate` — those are claims that CI is
+ * gated on something real.
+ */
+function unobservedParamIssues(file: string, doc: RecipeFile): ValidationIssue[] {
+  const declared = doc.params ?? [];
+  if (declared.length === 0) return [];
+  const observed = observedParams(doc);
+  const severity = doc.status === 'verified' || doc.status === 'ci_gate' ? 'error' : 'warning';
+  return declared
+    .filter((p) => !observed.has(p.name))
+    .map((p, i) => issue(9, file,
+      `parameter {${p.name}} is never asserted on: no expect.value/verify.value names it and no select matches on it, so the recipe passes whatever the app did with it (02 §10.9, issue #23). Add \`value: [{element: <the element that shows it>, equals: "{${p.name}}"}]\` to a step's expect or to verify`,
+      `/params/${declared.indexOf(p) === -1 ? i : declared.indexOf(p)}/name`, severity));
 }
 
 /** `{amount}`-style parameter slots are exempt from the sweep (07 §2.3.5: slots, never values). */
@@ -612,6 +684,20 @@ export function forbiddenContentIssues(file: string, doc: ScreenFile | RecipeFil
     const unescaped = source.replace(/\\(.)/g, '$1');
     if (unescaped !== source && forbiddenPatternIndexes(source).length === 0) sweep(unescaped, loc, what);
   };
+  /**
+   * issue #23: `expect.value` may only compare against a `{param}` SLOT. A literal there is a
+   * committed data value — rule 8's own subject — and a STRICTLY stronger check than the sweep
+   * above: the sweep only rejects strings that look like PII, so `equals: "Acme Corp"` would sail
+   * through while being exactly what 07 §2.3.5 forbids. The map stores the reference; the value
+   * lives in the run.
+   */
+  const literalValueAssertions = (x: Expect | undefined, loc: string, what: string): void => {
+    (x?.value ?? []).forEach((v, vi) => {
+      const parsed = assertionOp(v);
+      if (parsed === undefined || paramOfSlot(parsed.slot) !== undefined) return;
+      issues.push(issue(8, file, `${what}[${vi}] ${parsed.op} ${JSON.stringify(parsed.slot)} is a literal — a value assertion may only compare against a {param} slot, so the value lives in the run and never in the map (02 §10.8, 07 §2.3.5)`, `${loc}/value/${vi}/${parsed.op}`));
+    });
+  };
   if ('schema_version' in doc && 'screens' in doc) {
     doc.screens.forEach((s, i) => sweep(s.title, `/screens/${i}/title`, `title of ${s.id}`));
     // `label_regex` is author-written free text like any other label (07 §2.3 rule 6 backstop)
@@ -638,8 +724,10 @@ export function forbiddenContentIssues(file: string, doc: ScreenFile | RecipeFil
     if (st.action === 'type') sweep(st.text, `/steps/${si}/text`, `${st.id} text`);
     if (st.action === 'select') sweep(st.match.text, `/steps/${si}/match/text`, `${st.id} match text`);
     sweep(st.expect?.text_present, `/steps/${si}/expect/text_present`, `${st.id} text_present`);
+    literalValueAssertions(st.expect, `/steps/${si}/expect`, `${st.id} expect.value`);
   });
   sweep(doc.verify.text_present, '/verify/text_present', 'verify text_present');
+  literalValueAssertions(doc.verify, '/verify', 'verify.value');
   return issues;
 }
 

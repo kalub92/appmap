@@ -93,7 +93,12 @@ const ids = parseYaml(readFileSync(join(MAP, 'ids.yaml'), 'utf8'));
 const screenIds = new Set(ids.screens.map((s) => s.id));
 const gateIds = new Set(ids.gates.map((g) => g.id));
 const elementIds = new Map(ids.elements.map((e) => [e.id, e]));
-for (const g of ids.gates) elementIds.set(g.dismiss, { id: g.dismiss, kind: 'button', intent_critical: false, dynamic: false });
+// gate controls are registered under the gate, never in elements[] (decision 2; issue #24 widened
+// it from the one dismiss to `dismiss` + `controls[]`)
+for (const g of ids.gates) {
+  elementIds.set(g.dismiss, { id: g.dismiss, kind: 'button', intent_critical: g.dismiss_intent_critical === true, dynamic: false });
+  for (const c of g.controls ?? []) elementIds.set(c.id, { id: c.id, kind: 'button', intent_critical: c.intent_critical === true, dynamic: false });
+}
 for (const platform of platforms) {
   const dir = join(MAP, platform);
   const screens = new Map();
@@ -132,10 +137,16 @@ for (const platform of platforms) {
       if (!x) return;
       if (x.screen && !knownScreen(x.screen)) errs.push(`${where}: expect.screen ${x.screen} unknown`);
       for (const id of [x.focused, ...(x.visible ?? []), ...(x.not_visible ?? [])].filter(Boolean)) if (!elementIds.has(id)) errs.push(`${where}: ${id} not in ids.yaml`);
+      // issue #23: a value assertion names an element and a `{param}` SLOT, never a literal
+      for (const v of x.value ?? []) {
+        if (v?.element && !elementIds.has(v.element)) errs.push(`${where}: ${v.element} not in ids.yaml`);
+        const slot = typeof v?.equals === 'string' ? v.equals : v?.contains;
+        if (typeof slot === 'string' && !/^\{[a-z][a-z0-9_]*\}$/.test(slot)) errs.push(`${where}: expect.value must compare against a {param} slot, not ${JSON.stringify(slot)} (07 §2.3.5)`);
+      }
     };
     for (const st of doc.steps) {
       // `list` and `cell` are the element keys of the two `select` forms (issue #19)
-      for (const id of [st.element, st.list, st.cell].filter(Boolean)) if (!elementIds.has(id)) errs.push(`${st.id}: ${id} not in ids.yaml`);
+      for (const id of [st.element, st.list, st.cell, st.control].filter(Boolean)) if (!elementIds.has(id)) errs.push(`${st.id}: ${id} not in ids.yaml`);
       if (st.gate && !gateIds.has(st.gate)) errs.push(`${st.id}: gate ${st.gate} unknown`);
       const el = st.element ? elementIds.get(st.element) : undefined;
       if (el && (el.intent_critical === true) !== (st.intent_critical === true)) errs.push(`${st.id}: intent_critical must mirror ids.yaml for ${st.element}`);

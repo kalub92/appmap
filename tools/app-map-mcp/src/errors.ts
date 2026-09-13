@@ -31,6 +31,8 @@ export const ERROR_CODES = {
   RECIPE_UNAVAILABLE: 'recipe_unavailable',
   /** 07 §3: connected app is a Release build or not the sandbox */
   RELEASE_BUILD_REFUSED: 'release_build_refused',
+  /** 01 R5 / issue #25: another installed app registers this app's `deep_link_scheme` */
+  DEEP_LINK_SCHEME_COLLISION: 'deep_link_scheme_collision',
   /** 04 §6.2: a step's only viable locator is path/geometry */
   NOT_HEADLESS_ELIGIBLE: 'not_headless_eligible',
   /** maestro binary missing / wrong version (03 §13) */

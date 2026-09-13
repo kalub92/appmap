@@ -30,7 +30,7 @@
  *
  * Layer: map (imports types + tree + signature).
  */
-import type { AnyTree, DriverTarget, ElementDef, ElementId, FindElementResult, Fingerprint, LoadedMap, Locator, ResolveHit, ResolveMiss, ResolveResult, ScreenId, TreeNode } from './types.ts';
+import type { AnyTree, DriverTarget, ElementDef, ElementId, GateId, FindElementResult, Fingerprint, LoadedMap, Locator, ResolveHit, ResolveMiss, ResolveResult, ScreenId, TreeNode } from './types.ts';
 import { DEGRADED_THRESHOLD, DEFAULT_LOCATOR_WEIGHTS, LOCATOR_STRATEGIES, REDACTED, isGateId } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { centerOf, labelOf, nodeAtPath, parentOf, pathOf, screenRoot, siblingIndex, walk } from './tree.ts';
@@ -70,6 +70,24 @@ function isGateElement(map: LoadedMap, element: ElementDef): boolean {
  * Nodes under an `alert`/`sheet` (other than the screen root itself) whose subtree satisfies the
  * signature of a gate that is present — those never satisfy a screen element (header).
  */
+/**
+ * The subtree node of the dialog `gateId` is showing, or `undefined` when it is not up. The
+ * one-gate variant of `gateDialogNodes`, exported so healing can scope its candidate search to the
+ * dialog a gate control lives in (issue #24) instead of walking the whole screen.
+ */
+export function gateDialogRoot(map: LoadedMap, tree: AnyTree, gateId: GateId): TreeNode | undefined {
+  const gate = map.gates.get(gateId);
+  if (gate === undefined || !tree?.root) return undefined;
+  let found: TreeNode | undefined;
+  walk(tree, (n) => {
+    if (found !== undefined) return false;
+    if (n.role !== 'alert' && n.role !== 'sheet') return undefined;
+    if (gateSignatureMatches({ ...tree, root: n } as AnyTree, gate)) { found = n; return false; }
+    return undefined;
+  });
+  return found;
+}
+
 function gateDialogNodes(map: LoadedMap, tree: AnyTree, root: TreeNode, opts: ResolveOptions): Set<TreeNode> {
   const excluded = new Set<TreeNode>();
   const present = opts.gatesPresent !== undefined

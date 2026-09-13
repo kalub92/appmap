@@ -38,7 +38,7 @@
  */
 import type { AppMapContext } from './context.ts';
 import type { BuildInfo, Edge, IdsRegistry, ImportRouterResult, Manifest, RecipeFile, RecipeId, RouterExport, RouterExportScreen, ScreenFile, ScreenId, ScreenSource } from './types.ts';
-import { isNewerBuild } from './types.ts';
+import { canonicalDeepLink, isNewerBuild } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { schemaDir, screenFile } from './paths.ts';
 import { PLATFORMS } from './config.ts';
@@ -110,7 +110,23 @@ function withSource(sources: readonly ScreenSource[] | undefined, source: Screen
   return { sources: list, changed: true };
 }
 
-/** Pure: a fresh candidate screen from one export entry. */
+/**
+ * The export is app-produced, so its routes carry the scheme the APP registers (issue #25); the
+ * map stores every link in the canonical `appmap://` form. Rewrite on the way in so a per-app
+ * scheme never reaches the committed YAML — otherwise the same app-map, pointed at a rebuilt app
+ * with a different scheme, would rewrite every screen file.
+ */
+function canonicalizeRoutes(screens: readonly RouterExportScreen[], scheme: string | undefined): RouterExportScreen[] {
+  return screens.map((rs) => {
+    const route = typeof rs.route === 'string' ? canonicalDeepLink(rs.route, scheme) : rs.route;
+    const edges = (rs.edges ?? []).map((e) => (
+      e.action.type === 'open_link' ? { ...e, action: { ...e.action, url: canonicalDeepLink(e.action.url, scheme) } } : e
+    ));
+    return { ...rs, ...(route !== undefined ? { route } : {}), ...(rs.edges !== undefined ? { edges } : {}) };
+  });
+}
+
+/** Pure: a fresh candidate screen from one export entry. *//** Pure: a fresh candidate screen from one export entry. */
 export function routerScreenToScreenFile(rs: RouterExportScreen, build: BuildInfo): ScreenFile {
   // `build` is deliberately not stamped anywhere: a screen seeded from the router export has
   // never been verified against a hierarchy, so it carries no `last_verified_build` (02 §8).
@@ -211,7 +227,7 @@ export function importRouter(ctx: AppMapContext, doc: RouterExport, opts: Import
 
   const result: ImportRouterResult = { created: [], updated: [], retired: [], unchanged: [], edges_added: 0, unregistered: [], purged: [], purged_recipes: [], build_updated: false };
   const exported = new Map<ScreenId, RouterExportScreen>();
-  for (const rs of doc.screens) exported.set(rs.id, rs);
+  for (const rs of canonicalizeRoutes(doc.screens, ctx.map.manifest?.deep_link_scheme)) exported.set(rs.id, rs);
 
   const unregistered: RouterExportScreen[] = [];
   const writes: Array<{ screen: ScreenFile; reason: string }> = [];

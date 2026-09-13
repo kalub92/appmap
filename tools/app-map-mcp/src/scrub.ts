@@ -48,8 +48,8 @@ const STATIC_ROLE_SET: ReadonlySet<string> = new Set(STATIC_LABEL_ROLES);
  * Build the policy from the registry and the static string table (`.local/strings.<platform>.txt`
  * ∪ labels/titles declared in screen files, i.e. `LoadedMap.staticLabels`).
  *
- * Gate dismiss controls (`ids.gates[].dismiss`, architecture.md decision 2) count as registered
- * static ids. An element with `label_regex` is in `labelRegexById` only (its label survives
+ * Gate controls (`ids.gates[].dismiss` and `gates[].controls[]`, architecture.md decision 2 and
+ * issue #24) count as registered static ids. An element with `label_regex` is in `labelRegexById` only (its label survives
  * solely through the regex, rule a'); one whose regex does not compile is treated as dynamic
  * (label dropped, id still registered — the safe direction for a privacy filter; validate rule
  * 1 reports it).
@@ -80,6 +80,11 @@ export function buildScrubPolicy(ids: IdsRegistry, staticLabels: ReadonlySet<str
   const gates = Array.isArray(ids?.gates) ? ids.gates : [];
   for (const g of gates) {
     if (g && typeof g.dismiss === 'string' && g.dismiss !== '') staticIds.add(g.dismiss);
+    // issue #24: a gate's other controls are registered too, or the scrubber would treat the id as
+    // unregistered, drop it with its label, and make the control unresolvable
+    for (const c of g?.controls ?? []) {
+      if (typeof c?.id === 'string' && c.id !== '') staticIds.add(c.id);
+    }
   }
   const screens = Array.isArray(ids?.screens) ? ids.screens : [];
   for (const s of screens) {

@@ -34,6 +34,8 @@ function registryKind(ids: IdsRegistry, id: string): IdKind | undefined {
   if (ids.gates.some((g) => g.id === id)) return 'gate';
   if (ids.elements.some((e) => e.id === id)) return 'element';
   if (ids.gates.some((g) => g.dismiss === id)) return 'dismiss';
+  // issue #24: a gate's other controls are registered ids too, and rename the same way
+  if (ids.gates.some((g) => (g.controls ?? []).some((c) => c.id === id))) return 'dismiss';
   return undefined;
 }
 
@@ -81,7 +83,7 @@ export function migrateId(config: AppMapConfig, oldId: string, newId: string, op
   if (registryKind(ids, newId)) {
     throw new AppMapError(ERROR_CODES.BAD_INPUT, `id ${newId} already exists in ids.yaml`, 'pick an unused id; merging two ids is not a migration (02 §8)');
   }
-  if (kind === 'gate' && ids.gates.some((g) => g.dismiss.startsWith(`${newId}.`))) {
+  if (kind === 'gate' && ids.gates.some((g) => g.dismiss.startsWith(`${newId}.`) || (g.controls ?? []).some((c) => c.id.startsWith(`${newId}.`)))) {
     throw new AppMapError(ERROR_CODES.BAD_INPUT, `dismiss controls under ${newId}. already exist`, 'pick an unused gate name');
   }
 

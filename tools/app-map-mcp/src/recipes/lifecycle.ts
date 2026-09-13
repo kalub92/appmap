@@ -207,6 +207,7 @@ import type { ParsedYaml } from '../yaml/canonical.ts';
 import { canonicalYaml, parseYamlDoc } from '../yaml/canonical.ts';
 import { formatSchemaIssue, validateAgainstSchema } from '../yaml/schemas.ts';
 import { compileRecipe, compilerCanEmit, isNormalisationWarning } from './compile.ts';
+import { keyOf as keyOfValueAssertion } from './values.ts';
 
 // `conditionKey` used to live here; it moved to types.ts so the COMPILER can dedupe the
 // conditions it carries forward on the very key this guard compares them with (see its doc
@@ -374,6 +375,10 @@ export function stepIdentity(step: RecipeStep): string {
     case 'open_link': return `open_link:${step.url}`;
     case 'wait_for': return `wait_for:${step.expect.screen ?? '-'}`;
     case 'dismiss_gate': return `dismiss_gate:${step.gate}`;
+    // issue #24: keyed on the CONTROL, not just the gate — a rebuild that came back pressing a
+    // different control of the same dialog (Cancel where the reviewer wrote Delete) is a different
+    // step, and 04 §8's guard must refuse it rather than call it a match.
+    case 'tap_gate': return `tap_gate:${step.gate}:${step.control}`;
   }
 }
 
@@ -390,6 +395,13 @@ function expectCovers(a: Expect | undefined, b: Expect | undefined): boolean {
   if (a.text_present !== undefined && b.text_present !== a.text_present) return false;
   for (const id of a.visible ?? []) if (!(b.visible ?? []).includes(id)) return false;
   for (const id of a.not_visible ?? []) if (!(b.not_visible ?? []).includes(id)) return false;
+  // issue #23: a value assertion is an assertion like any other — a rebuild that drops the one
+  // check proving the recipe exercised its own parameter has weakened it.
+  const bKeys = new Set((b.value ?? []).map(keyOfValueAssertion).filter((k): k is string => k !== undefined));
+  for (const v of a.value ?? []) {
+    const key = keyOfValueAssertion(v);
+    if (key !== undefined && !bKeys.has(key)) return false;
+  }
   return true;
 }
 

@@ -387,7 +387,7 @@ export interface TranslateResult { steps: TranslatedStep[]; warnings: string[] }
  * THE DAY A PRODUCER EXISTS — a `wait`/`waitForElement` driver verb translated in step 3, say —
  * add its action here and the exemption disappears by itself, with no change in lifecycle.ts.
  */
-export const COMPILABLE_STEP_ACTIONS: readonly StepAction[] = ['tap', 'type', 'select', 'swipe', 'open_link', 'dismiss_gate'];
+export const COMPILABLE_STEP_ACTIONS: readonly StepAction[] = ['tap', 'type', 'select', 'swipe', 'open_link', 'dismiss_gate', 'tap_gate'];
 
 /** Pure: can the compiler produce a step of this kind at all? See `COMPILABLE_STEP_ACTIONS`. */
 export function compilerCanEmit(action: StepAction): boolean {
@@ -471,6 +471,28 @@ export function translateSteps(map: LoadedMap, observations: readonly Observatio
       const dismissed = before.find((g) => !after.includes(g) && map.ids.gates.some((x) => x.id === g && x.dismiss === element));
       if (dismissed !== undefined) {
         push({ id, action: 'dismiss_gate', gate: dismissed });
+        continue;
+      }
+      // issue #24: a tap on a gate's OTHER control — the confirm half of a destructive prompt.
+      // Same shape as the dismissal above (the gate was up before and is gone after) but the
+      // element is one of `gates[].controls[]`, so it compiles to `tap_gate`, never to
+      // `dismiss_gate`: the two press opposite buttons and only one of them commits.
+      //
+      // This must be emittable, not merely expressible. `lifecycle`'s 04 §8 write guard exempts
+      // reviewed steps of kinds the compiler cannot produce, so a `tap_gate` outside
+      // `COMPILABLE_STEP_ACTIONS` would be DROPPED by every automatic recompile — leaving a
+      // recipe named "delete the team" passing while deleting nothing (issue #13's erosion,
+      // aimed at the one step where it matters most).
+      const confirmedGate = before.find((g) => !after.includes(g) && map.ids.gates.some((x) => x.id === g && (x.controls ?? []).some((c) => c.id === element)));
+      if (confirmedGate !== undefined) {
+        // 02 §6 requires `expect` on `tap_gate`: a committing step with no postcondition can be
+        // neither verified nor healed (04 §7.2 rule 3). The screen the dialog left behind is the
+        // honest one; `unknown` means the trajectory cannot support the step at all.
+        if (obs.screen_after === UNKNOWN_SCREEN) {
+          drop(`tapped ${element} to confirm ${confirmedGate}, but the screen it left behind was not identified, and 02 §6 requires an expect on tap_gate (04 §3.6)`);
+          continue;
+        }
+        push({ id, action: 'tap_gate', gate: confirmedGate, control: element, expect: { screen: obs.screen_after } });
         continue;
       }
       // a tap on a `dynamic` cell is a `select` (04 §3.3)

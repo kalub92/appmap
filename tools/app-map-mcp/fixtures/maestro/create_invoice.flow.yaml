@@ -39,3 +39,6 @@ appId: com.example.app
     timeout: 10000
 - assertVisible:
     id: invoice.detail.amount.text
+- assertVisible:
+    id: invoice.detail.amount.text
+    text: "50"

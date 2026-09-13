@@ -96,11 +96,62 @@
           "type": "string",
           "minLength": 1,
           "description": "static copy only (02 §6)"
+        },
+        "value": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/valueAssertion"
+          },
+          "description": "02 §6 / issue #23: the element now holds the run's value for a {param} slot. `visible` proves a thing is on screen; this proves it is the RIGHT thing, without ever putting the value in the map."
         }
       },
       "required": [],
       "minProperties": 1,
       "description": "02 §6 expect conditions (closed)"
+    },
+    "valueAssertion": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "element": {
+              "$ref": "#/definitions/elementId"
+            },
+            "equals": {
+              "type": "string",
+              "pattern": "^\\{[a-z][a-z0-9_]*\\}$",
+              "description": "a bare {param} slot — NEVER a literal (07 §2.3.5, validate rule 8). Compared with the compiler's own semantics: money/number numerically, everything else trimmed and case-insensitive, so a recipe compiled from a run that typed 50 still verifies a screen rendering $50.00."
+            }
+          },
+          "required": [
+            "element",
+            "equals"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "element": {
+              "$ref": "#/definitions/elementId"
+            },
+            "contains": {
+              "type": "string",
+              "pattern": "^\\{[a-z][a-z0-9_]*\\}$",
+              "description": "a bare {param} slot — NEVER a literal; case-insensitive substring"
+            }
+          },
+          "required": [
+            "element",
+            "contains"
+          ]
+        }
+      ],
+      "description": "02 §6 / issue #23: one data assertion naming a parameter. Exactly one of `equals`/`contains`."
     },
     "build": {
       "type": "string",
@@ -378,6 +429,41 @@
             "action",
             "gate"
           ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^s[0-9]+$"
+            },
+            "expect": {
+              "$ref": "#/definitions/expect"
+            },
+            "intent_critical": {
+              "type": "boolean"
+            },
+            "action": {
+              "const": "tap_gate"
+            },
+            "gate": {
+              "$ref": "#/definitions/gateId"
+            },
+            "control": {
+              "type": "string",
+              "pattern": "^gate\\.[a-z0-9_]+\\.[a-z0-9_]+$",
+              "description": "01 R2 / issue #24: a control the gate declares in ids.yaml `gates[].controls[]` — the confirm half of a destructive prompt. NOT the gate's `dismiss`, which is the safe escape `dismiss_gate` presses and which guided replay and the Maestro gate guard press unattended."
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "gate",
+            "control",
+            "expect"
+          ],
+          "description": "02 §6 / issue #24: press a named control of a gate. `expect` is required — a committing step with no postcondition can be neither verified nor healed (04 §7.2 rule 3)."
         }
       ]
     }

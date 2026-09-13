@@ -29,10 +29,10 @@
  *
  * Layer: map (imports types + tree + signature). Pure.
  */
-import type { BuildNumber, Condition, IdentifyCandidate, IdentifyOptions, IdentifyResult, IdentifySignal, LoadedMap, AnyTree, ScreenFile, Variant } from './types.ts';
+import type { BuildNumber, Condition, IdentifyCandidate, IdentifyOptions, IdentifyResult, IdentifySignal, LoadedMap, AnyTree, ScreenFile, ScreenId, Variant } from './types.ts';
 import {
   IDENTIFY_AGREEMENT_BONUS, IDENTIFY_SCORES, IDENTIFY_UNKNOWN_THRESHOLD, REQUIRED_IDS_MIN_FRACTION, UNKNOWN_SCREEN,
-  routeKey, screenIdOfMarker,
+  canonicalDeepLink, routeKey, screenIdOfMarker,
 } from './types.ts';
 import { deepestMarker, walk } from './tree.ts';
 import { gateSignatureMatches, structuralHash, titleOf } from './signature.ts';
@@ -92,7 +92,9 @@ function regionsFor(map: LoadedMap, screen: ScreenFile, variant?: Variant): stri
 function resolveRoute(map: LoadedMap, tree: AnyTree, opts: IdentifyOptions): string | undefined {
   const raw = opts.route ?? tree.route;
   if (typeof raw !== 'string' || raw === '' || raw === 'none') return undefined;
-  return map.routes.get(routeKey(raw));
+  // the driver reports the URL it opened, which is in the scheme the APP registers; `map.routes`
+  // is keyed on the canonical `appmap://` form the map writes (issue #25)
+  return map.routes.get(routeKey(canonicalDeepLink(raw, map.manifest?.deep_link_scheme)));
 }
 
 /** Signals 3–6 against a prebuilt index (the public `scoreScreen` builds the index itself). */
@@ -140,6 +142,22 @@ export function identify(map: LoadedMap, tree: AnyTree, opts: IdentifyOptions = 
 
   const index = indexTree(tree);
   const marker = deepestMarker(tree)?.a11y_id;
+
+  // 1b. covered screen (03 §5.1b, issue #24). A modal hides the presenting screen's subtree
+  // INCLUDING its `screen.<id>` marker, so the deepest surviving marker is an ANCESTOR — and rule
+  // 2 below would answer it at confidence 1.0, an answer built on the absence of the evidence
+  // that mattered. While a gate is up the tree is a known-unreliable witness of what is underneath
+  // it, which is the one licence to prefer what the session remembers. The marker-named ancestor
+  // is not hidden: it travels in `candidates`, so both readings are visible.
+  const covered = coveredScreen(map, opts, gates_present, marker);
+  if (covered !== undefined) {
+    const signal: IdentifySignal = { kind: 'covered', screen: covered.id, score: IDENTIFY_SCORES.covered, detail: gates_present.join(',') };
+    const result = finish(map, covered, undefined, IDENTIFY_SCORES.covered, [signal], gates_present, marker, index, opts);
+    if (covered.ancestor !== undefined) {
+      result.candidates = [{ screen_id: covered.ancestor, confidence: IDENTIFY_SCORES.marker, signals: ['marker'] }];
+    }
+    return result;
+  }
 
   // 2. marker (03 §5.2): the deepest marker whose suffix is a known `kind: screen` file (gates
   // never win identification — architecture §7 decision 19)
@@ -201,7 +219,26 @@ export function identify(map: LoadedMap, tree: AnyTree, opts: IdentifyOptions = 
   return result;
 }
 
-/** deterministic order: score desc, then screen id, then base screen before its variants */
+/**
+ * 03 §5.1b / issue #24: the screen the session says it was on, when a gate is up and the tree's
+ * deepest marker names a DIFFERENT screen. `undefined` (i.e. fall through to the normal rules)
+ * when no gate is present, when nothing was remembered, when the memory is not a live screen, or
+ * when the marker already agrees — a memory must never override evidence that is still there.
+ */
+function coveredScreen(
+  map: LoadedMap, opts: IdentifyOptions, gates_present: readonly string[], marker: string | undefined,
+): (ScreenFile & { ancestor?: ScreenId }) | undefined {
+  if (gates_present.length === 0) return undefined;
+  const remembered = opts.covered_screen;
+  if (typeof remembered !== 'string' || remembered === '' || remembered === UNKNOWN_SCREEN) return undefined;
+  const screen = map.screens.get(remembered);
+  if (screen === undefined || screen.meta?.status === 'retired') return undefined;
+  const markerScreen = marker !== undefined ? (map.markers.get(marker) ?? screenIdOfMarker(marker)) : undefined;
+  if (markerScreen === remembered) return undefined; // the marker survived; it is better evidence
+  return markerScreen !== undefined && map.screens.has(markerScreen) ? { ...screen, ancestor: markerScreen } : screen;
+}
+
+/** deterministic order: score desc, then screen id, then base screen before its variants *//** deterministic order: score desc, then screen id, then base screen before its variants */
 function compareScored(a: Scored, b: Scored): number {
   if (b.score !== a.score) return b.score - a.score;
   if (a.screen.id !== b.screen.id) return a.screen.id < b.screen.id ? -1 : 1;

@@ -121,6 +121,9 @@ function elementDefFor(map: LoadedMap, id: ElementId, screen?: ScreenId): Elemen
 function elementOfStep(step: RecipeStep): ElementId | undefined {
   if ('element' in step && typeof step.element === 'string') return step.element;
   if (step.action === 'select') return selectTarget(step);
+  // issue #24: without this the headless rung can neither resolve nor heal the one step that
+  // commits a destructive action — every safety rule below would be dead code for it
+  if (step.action === 'tap_gate') return step.control;
   return undefined;
 }
 
@@ -278,7 +281,10 @@ export async function runHeadless(ctx: AppMapContext, input: HeadlessInput, opts
       step,
       screen: screenId ?? (map.elements.get(def.id)?.[0]?.screen ?? UNKNOWN_SCREEN),
       element: def,
-      intent_critical: step.intent_critical === true || def.intent_critical === true,
+      // the REGISTRY is the third source, as guided.isIntentCritical reads it (02 §10.6): a gate
+      // control declares its criticality in ids.yaml `gates[].controls[]`, not in the screen file,
+      // so without this 04 §7.2's exact-label protection never fires on the headless rung (issue #24)
+      intent_critical: step.intent_critical === true || def.intent_critical === true || map.elementRegistry.get(def.id)?.intent_critical === true,
       tree,
       trigger: resolveElement(map, def, tree),
       build,
