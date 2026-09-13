@@ -50,6 +50,56 @@ describe('validateMap on the pilot (positive cases)', () => {
   });
 });
 
+describe('rule 2 — `expect.focused` on a platform whose driver reports no focus (issue #18)', () => {
+  it('warns, naming the step, when a platform: ios recipe expects focus Argent never reports', () => {
+    const t = makeTempAppMapDir();
+    try {
+      editYaml<RecipeFile>(t, 'ios/recipes/create_invoice.yaml', 'recipe', (d) => { d.steps[0]!.expect = { focused: 'invoice.amount.field' }; });
+      const r = validateMap(t.config, { platforms: ['ios'] });
+      const warned = r.issues.filter((i) => i.rule === 2 && i.severity === 'warning' && i.message.includes('expect.focused'));
+      assert.equal(warned.length, 1, formatIssues(r.issues));
+      assert.equal(warned[0]!.file, 'ios/recipes/create_invoice.yaml');
+      assert.equal(warned[0]!.location, '/steps/0/expect/focused');
+      assert.match(warned[0]!.message, /^s1: /, 'the step the author has to go and fix');
+      assert.match(warned[0]!.message, /can never be satisfied on ios/);
+      assert.match(warned[0]!.message, /Android\/Maestro-only/);
+      assert.match(warned[0]!.message, /visible: \[invoice\.amount\.field\]/, 'and what to write instead');
+      // a warning, never an error: the file is well-formed and Maestro satisfies it, so 06 R1
+      // must not block the PR and recipe.schema.json keeps accepting the key
+      assert.ok(r.ok);
+      assert.deepEqual(errors(r.issues), [], formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('stays silent on android, where the Maestro hierarchy carries a `focused` attribute (04 §10)', () => {
+    const t = makeTempAppMapDir({ platform: 'android' });
+    try {
+      // guard the premise: the android pilot legitimately keeps `focused`, so this test fails
+      // loudly if someone strips it along with the ios one
+      const android = parse(readFileSync(join(t.dir, 'android/recipes/create_invoice.yaml'), 'utf8')) as RecipeFile;
+      assert.deepEqual(android.steps[0]!.expect, { focused: 'invoice.amount.field' });
+      const r = validateMap(t.config, { platforms: ['android'] });
+      assert.deepEqual(r.issues.filter((i) => i.message.includes('expect.focused')), [], formatIssues(r.issues));
+      assert.deepEqual(errors(r.issues), [], formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('the shipped ios pilot no longer teaches the pattern (issue #18 acceptance criterion 2)', () => {
+    const t = makeTempAppMapDir({ copyPilot: false });
+    try {
+      const r = validateMap({ ...t.config, dir: PILOT_APP_MAP_DIR }, { platforms: ['ios'] });
+      assert.deepEqual(r.issues.filter((i) => i.message.includes('expect.focused')), [], formatIssues(r.issues));
+      assert.deepEqual(errors(r.issues), [], formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
 describe('rule 2 — a `kind: list` element no capture has ever produced (issue #19)', () => {
   it('warns on a registered kind: list element that no screen file declares', () => {
     const t = makeTempAppMapDir();

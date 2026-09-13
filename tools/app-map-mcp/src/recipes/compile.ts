@@ -16,16 +16,18 @@
  *  3. translate: each driver call is classified by `recipes/verbs.ts` (a table keyed on
  *     `APP_MAP_DRIVER`, 03 §3, generic patterns for anything untabled). A tap with `element` →
  *     `tap`; a type (Argent `keyboard`/`paste`, older `type_text`) → `type` on the focused
- *     element of the previous snapshot (else the last tapped field); tap on a `dynamic` cell →
- *     `select` with `match.text` = the tapped text, on the enclosing dynamic `list` when the screen
- *     declares one and otherwise on the CELL itself (`select {cell, match}`) — a SwiftUI list
- *     container is not an accessibility element, so no list id can exist (issue #19); an open-link
- *     (Argent `open-url`) → `open_link`; `swipe` → `swipe`; a tap that dismissed a gate (gate
- *     present before, absent after, element is a gate dismiss id) → `dismiss_gate`. Perception
- *     and wait/lifecycle calls are KNOWN non-steps and pass silently; every other call that
- *     yields no step is dropped WITH a warning naming its seq and tool, because a step that
- *     disappears quietly turns a recipe into a test that passes while exercising nothing
- *     (issue #9);
+ *     element of the previous snapshot (else the element the call named, else the last tapped
+ *     field) — and when that primary rule did not apply the compiler SAYS which one did rather
+ *     than falling back in silence, because on ios no snapshot ever reports focus (issue #18);
+ *     tap on a `dynamic` cell → `select` with `match.text` = the tapped text, on the enclosing
+ *     dynamic `list` when the screen declares one and otherwise on the CELL itself
+ *     (`select {cell, match}`) — a SwiftUI list container is not an accessibility element, so no
+ *     list id can exist (issue #19); an open-link (Argent `open-url`) → `open_link`; `swipe` →
+ *     `swipe`; a tap that dismissed a gate (gate present before, absent after, element is a gate
+ *     dismiss id) → `dismiss_gate`. Perception and wait/lifecycle calls are KNOWN non-steps and
+ *     pass silently; every other call that yields no step is dropped WITH a warning naming its
+ *     seq and tool, because a step that disappears quietly turns a recipe into a test that
+ *     passes while exercising nothing (issue #9);
  *  4. parameterize: every typed/selected value equal (case-insensitive, trimmed; money values
  *     compared numerically) to a declared param's value becomes `{name}`; values come from
  *     `input.values` (the LLM/CLI knows what it typed) and, for params without one, from
@@ -36,7 +38,10 @@
  *     (`?fixture=logged_in` appended when the recipe has `auth: logged_in`) and the leading
  *     navigation steps become `entry.fallback_path` (screen ids);
  *  6. postconditions: `expect.screen` when the screen changed, else `focused`/`visible` inferred
- *     from the next observation's snapshot; a step whose outcome cannot be expressed →
+ *     from the next observation's snapshot — `focused` ONLY where the platform's driver reports
+ *     focus (`types.focusObservable`, 04 §10), elsewhere the observed focus is written as the
+ *     weaker satisfiable `visible` assertion, because an expectation that can never be checked is
+ *     not a postcondition (issue #18); a step whose outcome cannot be expressed →
  *     `missing_postcondition`;
  *  7. `intent_critical: true` on steps touching `intent_critical` elements;
  *  8. emit `RecipeFile` (version 1, or `revision_of + 1` for revisions) with provenance
@@ -52,7 +57,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppMapContext } from '../context.ts';
 import type { CompileRecipeInput, CompileRecipeResult, ElementId, Expect, LoadedMap, Observation, RecipeEntry, RecipeFile, RecipeParam, RecipeStep, ScreenId, ScrubbedTree, StepId } from '../types.ts';
-import { PARAM_SLOT_REGEX, UNKNOWN_SCREEN, screenIdOfDeepLink, stepElement } from '../types.ts';
+import { PARAM_SLOT_REGEX, UNKNOWN_SCREEN, focusObservable, screenIdOfDeepLink, stepElement } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { PACKAGE_ROOT } from '../paths.ts';
 import { walk } from '../tree.ts';
@@ -73,9 +78,11 @@ const MAX_MATCH_SOURCE = 200;
  * - **incompleteness** — a driver call was dropped (step 3), a call failed and left the slice
  *   (step 1), prose is still a placeholder (step 8). Each says the rebuild is not a faithful
  *   record of the run, so it must never overwrite a reviewed recipe unattended.
- * - **normalisation** — THIS one. Collapsing an A→B→A excursion is what the compiler does to
+ * - **normalisation** — THIS one, and the 04 §3.3 secondary-attach note below
+ *   (`focusFallbackWarning`). Collapsing an A→B→A excursion is what the compiler does to
  *   every trajectory by design, including the one the reviewer approved; it removes nothing the
  *   run achieved. It is a note so a human can find the excursion, not a defect report.
+ *   `isNormalisationWarning` is the union both sides key on.
  *
  * The predicate lives next to the producer so the two can never drift; never match the text
  * anywhere else.
@@ -86,6 +93,43 @@ export const collapseWarning = (removed: readonly number[]): string =>
 /** Pure: is this `CompileRecipeResult.warnings` line the 04 §3.2 normalisation note above? */
 export function isCollapseWarning(warning: string): boolean {
   return /^collapsed \d+ backtracking observation\(s\): seq /.test(warning);
+}
+
+/**
+ * The 04 §3.3 secondary-attach note (issue #18): step 3's PRIMARY rule for a `type` is "the
+ * focused element of the previous snapshot", and it did not apply.
+ *
+ * On iOS that is not an accident, it is permanent: Argent's `native-describe-screen` carries no
+ * focus flag at all (`types.FOCUS_OBSERVABLE_PLATFORMS`), so `focusedElement` is always
+ * `undefined` and EVERY iOS `type` is attached by the secondary rule. That is usually right — the
+ * driver taps the field and then types — but a `type` that follows anything other than a tap on
+ * the field itself lands on the last field tapped, which may not be the field the text went into.
+ * Saying so is the whole point: the compiler must never pick a target by fallback in silence.
+ *
+ * This is a NORMALISATION note, not incompleteness: the step is in the recipe and records what
+ * was typed and where, only the strategy that chose the target was the secondary one. It must
+ * therefore NOT block the 04 §8 automatic recompile — see `isNormalisationWarning` and
+ * `recipes/lifecycle.ts`. The wording deliberately omits the driver tool name and uses a prefix
+ * distinct from `drop()`'s `seq N: <tool> …`, so the two can never be confused by eye or by regex.
+ */
+export const focusFallbackWarning = (seq: number, element: ElementId, via: 'call' | 'last_tap'): string =>
+  `seq ${seq}: the previous snapshot reports no focus, so \`type\` was attached to ${element} (${via === 'call' ? 'the element the call itself named' : 'the last field tapped'}) — 04 §3.3's secondary rule. On ios the accessibility snapshot carries no focus flag at all (issue #18), so this is the only rule available there; check the target if the driver typed without tapping the field first`;
+
+/** Pure: is this `CompileRecipeResult.warnings` line the 04 §3.3 secondary-attach note above? */
+export function isFocusFallbackWarning(warning: string): boolean {
+  return /^seq \d+: the previous snapshot reports no focus, so `type` was attached to /.test(warning);
+}
+
+/**
+ * Pure: is this warning NORMALISATION (something the compiler does to every trajectory by design)
+ * rather than INCOMPLETENESS (the rebuild is not a faithful record of the run)?
+ *
+ * The 04 §8 recompile write guard keys on exactly this distinction, so the two classes are named
+ * in one place — adding a normalisation note without adding it here silently stops every
+ * automatic recompile (issue #13's guard, issue #18's note).
+ */
+export function isNormalisationWarning(warning: string): boolean {
+  return isCollapseWarning(warning) || isFocusFallbackWarning(warning);
 }
 
 /** `app-map-mcp@<semver>` for `provenance.compiled_by` (read once, falls back to the declared version). */
@@ -288,11 +332,16 @@ export function translateSteps(map: LoadedMap, observations: readonly Observatio
         continue;
       }
       // 04 §3.3: `type` lands on the focused element of the previous snapshot, else the last tapped field
-      const element = (prev !== undefined ? focusedElement(map, prev) : undefined) ?? obs.element ?? lastTypedTarget;
+      const focused = prev !== undefined ? focusedElement(map, prev) : undefined;
+      const element = focused ?? obs.element ?? lastTypedTarget;
       if (element === undefined) {
         drop('typed into no determinable element: the previous snapshot reports no focus and no field was tapped (04 §3.3)');
         continue;
       }
+      // the primary rule did not apply: say which one did. A target chosen by fallback is still a
+      // guess, and a guess nobody is told about is how a recipe ends up typing into the wrong
+      // field while passing (issue #18).
+      if (focused === undefined) warnings.push(focusFallbackWarning(obs.seq, element, obs.element !== undefined ? 'call' : 'last_tap'));
       push({ id, action: 'type', element, text });
       continue;
     }
@@ -507,7 +556,13 @@ export function inferPostconditions(map: LoadedMap, steps: readonly TranslatedSt
     const prev = ordered[ordered.findIndex((o) => o.seq === obs.seq) - 1];
     const focusedNow = focusedElement(map, obs);
     const focusedBefore = prev !== undefined ? focusedElement(map, prev) : undefined;
-    if (focusedNow !== undefined && focusedNow !== focusedBefore) step.expect = { focused: focusedNow };
+    // …but only where the driver REPORTS focus. Authoring `expect.focused` on a platform whose
+    // snapshot carries no focus flag writes a step that can never verify — it fails on every
+    // replay however well the tap worked (issue #18). The observation is still worth keeping, so
+    // it degrades to the weaker satisfiable form: the element was there to be focused (04 §10).
+    if (focusedNow !== undefined && focusedNow !== focusedBefore) {
+      step.expect = focusObservable(map.platform) ? { focused: focusedNow } : { visible: [focusedNow] };
+    }
     out.push(step);
   }
   // a `wait_for` step is meaningless without `expect` (types.ts StepWaitFor)

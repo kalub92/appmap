@@ -34,6 +34,14 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
   `type_text` nor `open_url` exists — the compiler's mapping lives in
   `tools/app-map-mcp/src/recipes/verbs.ts` (`ARGENT_VERBS`), which the old regexes missed so
   `keyboard` and `open-url` observations were dropped from compiled recipes (issue #9).
+- **`native-describe-screen` reports no focus and no enabled flag.** Each element carries exactly
+  `frame`, `normalizedFrame`, `normalizedTapPoint`, `tapPoint`, `traits`, `value`, `identifier`,
+  `viewClassName`; `traits` carries `button`, `staticText`, `header`, `image`, `selected` and
+  never a focus trait. There is no `hasFocus` and no `focused` key, so nothing in an iOS capture
+  can tell the harness that a tap focused a field and raised the keyboard. `expect.focused` is
+  therefore Android/Maestro-only — `validate` warns on one in an `ios` recipe and the compiler
+  writes `visible` instead (04 §10, issue #18). The `focused`/`enabled` fields `tree.ts` reads
+  belong to the nested XCUITest-like shape and to Maestro's hierarchy, not to Argent.
 
 ## 3. Verified against https://code.claude.com/docs/en/skills
 

@@ -1328,6 +1328,33 @@ export interface ExportResult {
   /** `--check` mode: paths whose canonical form differs from disk (06 R1) */
   non_canonical: string[];
 }
+
+/**
+ * 04 §10 / issue #18: the platforms whose driver reports FOCUS in the accessibility tree it hands
+ * the harness, so `expect.focused` (02 §6) is a verification there rather than a guaranteed
+ * fallback.
+ *
+ * - **android** — Maestro's hierarchy carries a `focused` attribute on every node, which
+ *   `tree.ts`'s maestro branch reads straight into `ScrubbedNode.focused`.
+ * - **ios** — Argent's `native-describe-screen` exposes `frame`, `normalizedFrame`, `tapPoint`,
+ *   `normalizedTapPoint`, `traits`, `value`, `identifier` and `viewClassName`, and nothing else.
+ *   `traits` carries `button`/`staticText`/`header`/`image`/`selected` — never a focus trait, and
+ *   there is no `hasFocus`/`focused` key (tree.ts §1, harness-notes §2). A tap can focus a field
+ *   and raise the keyboard and the snapshot still says nothing, so an `expect.focused` on iOS can
+ *   never be satisfied and every replay of that step falls back with `expect_failed`.
+ *
+ * ONE list, so `validate` (02 §10 rule 2) and the compiler's postconditions (04 §3.6) can never
+ * disagree about what a platform is able to verify. It states the rule — "does this driver report
+ * focus" — rather than hard-coding a platform name at each site, so a future iOS driver that does
+ * report focus (XCUITest does) is a one-line change here.
+ */
+export const FOCUS_OBSERVABLE_PLATFORMS: ReadonlySet<Platform> = new Set<Platform>(['android']);
+
+/** Pure: does this platform's driver report focus, so `expect.focused` can be verified? (04 §10) */
+export function focusObservable(platform: Platform): boolean {
+  return FOCUS_OBSERVABLE_PLATFORMS.has(platform);
+}
+
 export interface ValidationIssue {
   /** 02 §10 rule number (1–8) */
   rule: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;

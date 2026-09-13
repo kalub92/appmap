@@ -587,6 +587,29 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     decision 58's: a HAND-AUTHORED `elements[]` entry is taken at face value, so a list id typed
     into a screen file by a human silences the warning without any capture behind it — the same
     trust the rest of rule 2 places in a committed screen file. Issue #19.
+62. **An expectation a platform's driver cannot report is a warning, and the compiler never
+    writes one.** `expect.focused` is in the recipe schema because Maestro's Android hierarchy
+    carries a `focused` attribute on every node, which `tree.ts`'s maestro branch reads straight
+    into `ScrubbedNode.focused`. Argent's iOS `native-describe-screen` carries no focus flag of
+    any kind — `frame`, `normalizedFrame`, `tapPoint`, `normalizedTapPoint`, `traits`, `value`,
+    `identifier`, `viewClassName`, and `traits` is `button`/`staticText`/`header`/`image`/
+    `selected` — so on iOS the assertion fails on every replay however well the tap worked
+    (issue #18's `FALLBACK at s1 (expect_failed)` on a field that WAS focused). Three
+    consequences, all keyed on ONE list, `types.FOCUS_OBSERVABLE_PLATFORMS`, so the validator and
+    the compiler cannot disagree about what a platform can verify. (a) `validate` WARNS, for
+    decision 58's reason: the file is well-formed and the other platform satisfies it, so 06 R1
+    must not block the PR and the schema must keep accepting the key. (b) `inferPostconditions`
+    writes `visible: [e]` instead of `focused: e` where focus is unobservable — the observation is
+    real, only the strongest form of it is uncheckable, and this is what keeps "the committed
+    trajectory compiles to the committed pilot recipe" true after the pilot was fixed. That branch
+    is not dead code on a platform that one day reports focus (XCUITest does); it states the rule
+    rather than a platform's current gap. (c) The `type`-attach fallback is now NAMED in
+    `warnings` (`compile.focusFallbackWarning`) instead of being silent, because a target picked
+    by fallback is a guess, and 04 §3.3's primary rule is unavailable on iOS forever. That note is
+    classified NORMALISATION (`compile.isNormalisationWarning`), not incompleteness — the step is
+    in the recipe with what was typed and where, only the strategy that chose the target was the
+    secondary one — because decision 57's write guard blocks on any unclassified warning and
+    would otherwise refuse EVERY iOS recompile of a recipe containing a `type`. Issue #18.
 
 ## 8. How to implement your module
 

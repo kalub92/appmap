@@ -71,7 +71,8 @@
         },
         "focused": {
           "type": "string",
-          "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
+          "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$",
+          "description": "Android/Maestro ONLY (04 §10, issue #18): the Maestro hierarchy carries a `focused` attribute, but Argent's iOS accessibility snapshot carries no focus flag of any kind, so on `platform: ios` this can never be satisfied and every replay of the step falls back — `app-map validate` warns (02 §10 rule 2). Assert `visible` there instead."
         },
         "visible": {
           "type": "array",

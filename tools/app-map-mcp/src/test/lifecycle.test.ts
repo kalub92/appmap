@@ -20,7 +20,7 @@ import {
   markScreen, markVerified, recompileCovers, recompileCoversEntry, recordRunOutcome,
   retireRecipesForScreen, screensReferenced, shouldRecompile, stepIdentity,
 } from '../recipes/lifecycle.ts';
-import { isCollapseWarning } from '../recipes/compile.ts';
+import { isCollapseWarning, isFocusFallbackWarning } from '../recipes/compile.ts';
 import { canonicalYaml } from '../yaml/canonical.ts';
 import { loadTrajectoryFixture, makeTempAppMapDir } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
@@ -364,7 +364,10 @@ const REPLAY_PARAMS = { amount: 50, client: 'Acme Corp' };
 
 /**
  * The reporter's shape (#13): a REVIEWED 3-step recipe over pilot ids whose middle step is the
- * one a degraded rebuild drops. Steps s1/s3 are what seqs 4 and 8 of the fixture compile to.
+ * one a degraded rebuild drops. Steps s1/s3 are what seqs 4 and 8 of the fixture compile to —
+ * so s1's `expect` tracks the ios pilot's, which asserts `visible` rather than the unsatisfiable
+ * `focused` (issue #18). Were it left as `focused`, every rebuild would look like a WEAKENING
+ * (`stepKeeps`, correctly) and the write guard would refuse before the gate under test was reached.
  */
 const reviewedThreeStep = (over: Partial<RecipeFile> = {}): RecipeFile => ({
   id: 'create_invoice', version: 3, platform: 'ios',
@@ -373,7 +376,7 @@ const reviewedThreeStep = (over: Partial<RecipeFile> = {}): RecipeFile => ({
   params: [{ name: 'amount', type: 'money', required: true }, { name: 'client', type: 'string', required: true }],
   entry: { deep_link: 'appmap://invoice_new', fallback_path: ['invoice_new'] },
   steps: [
-    { id: 's1', action: 'tap', element: 'invoice.amount.field', expect: { focused: 'invoice.amount.field' } },
+    { id: 's1', action: 'tap', element: 'invoice.amount.field', expect: { visible: ['invoice.amount.field'] } },
     { id: 's2', action: 'type', element: 'invoice.amount.field', text: '{amount}' },
     { id: 's3', action: 'tap', element: 'invoice.save.button', expect: { screen: 'invoice_detail' }, intent_critical: true },
   ],
@@ -838,6 +841,39 @@ describe('recompileFrom — the 04 §8 recompile write guard (issue #13)', () =>
     assert.equal(isCollapseWarning(decision!.recompile!.warnings[0]!), true, 'and it is the note the compiler produces, matched by the shared predicate');
     const next = ctx.db.getRecipe('create_invoice') as RecipeFile;
     assert.equal(next.steps.length, 5);
+    assert.equal(next.provenance.reviewed_by, 'caleb');
+  });
+
+  // the same classification question for the OTHER normalisation note, and the one that decides
+  // whether 04 §9's automatic recompile works on a real device at all: Argent's iOS snapshot has
+  // no focus flag (issue #18), so 04 §3.3's primary `type`-attach rule never fires and EVERY iOS
+  // rebuild of a recipe containing a `type` carries the secondary-attach note. Blocking on it
+  // would refuse every one of them.
+  it('the 04 §3.3 secondary-attach note is normalisation too, so a trajectory with no focus flag still recompiles (issue #18)', () => {
+    // s1 asserts nothing, because with no focus reported there is no focus to infer (04 §3.6);
+    // the reviewed `expect.screen` on s3 still has to come back, and does
+    ctx.db.putRecipe(reviewedThreeStep({
+      steps: [
+        { id: 's1', action: 'tap', element: 'invoice.amount.field' },
+        { id: 's2', action: 'type', element: 'invoice.amount.field', text: '{amount}' },
+        { id: 's3', action: 'tap', element: 'invoice.save.button', expect: { screen: 'invoice_detail' }, intent_critical: true },
+      ],
+    }), { dirty: false });
+    // the covering seqs 4-8, re-recorded as REAL Argent would: no `focused` anywhere in the tree
+    for (const o of loadTrajectoryFixture('create_invoice.session')) {
+      if (![4, 5, 6, 7, 8].includes(o.seq)) continue;
+      const snapshot = o.snapshot === null ? null : JSON.parse(JSON.stringify(o.snapshot, (k, v) => (k === 'focused' ? undefined : v))) as typeof o.snapshot;
+      ctx.db.insertObservation({ ...o, snapshot });
+    }
+    const decision = forceRecompile();
+
+    const note = decision?.recompile?.warnings.find(isFocusFallbackWarning);
+    assert.ok(note, `the note is reported: ${decision?.recompile?.warnings.join(' | ')}`);
+    assert.deepEqual(decision?.recompile?.refusals, [], 'and it does not veto the write');
+    assert.equal(decision?.recompile?.written, true);
+    const next = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    assert.deepEqual(next.steps.map((x) => x.action), ['tap', 'type', 'tap', 'select', 'tap']);
+    assert.equal(next.steps[1]?.action === 'type' && next.steps[1].element, 'invoice.amount.field', 'the secondary rule still found the right field');
     assert.equal(next.provenance.reviewed_by, 'caleb');
   });
 

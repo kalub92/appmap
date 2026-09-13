@@ -50,14 +50,18 @@
  *      record of the run, so it never overwrites a reviewed file unattended. Note this blocks on
  *      dropped calls the reviewed recipe never had: the coverage rule below cannot see those,
  *      which is exactly why this gate exists beside it.
- *    - *normalisation* — the 04 §3.2 backtracking-collapse note (`compile.isCollapseWarning`,
- *      the one predicate both sides share). Collapsing an A→B→A excursion is what the compiler
- *      does to EVERY trajectory by design, including the one the reviewer approved; it is a note
- *      so a human can find the excursion, not evidence of loss. Anything it removed that the
- *      reviewed recipe needs is caught by name by rule 2. Blocking on it instead would refuse
- *      the pilot's own trajectory and make the 04 §9 automatic recompile true only on paper.
- *      The note still travels on `RecompileOutcome.warnings` and into the `recipe recompiled`
- *      log line.
+ *    - *normalisation* — the 04 §3.2 backtracking-collapse note and the 04 §3.3 secondary-attach
+ *      note for a `type` whose target came from the tapped field rather than a reported focus
+ *      (`compile.isNormalisationWarning`, the one predicate both sides share). Each is what the
+ *      compiler does to EVERY trajectory by design, including the one the reviewer approved: the
+ *      collapse removes an excursion the run did not need, and the attach note names the rule
+ *      that chose a target which is still in the step. They are notes so a human can find the
+ *      spot, not evidence of loss. Anything the collapse removed that the reviewed recipe needs
+ *      is caught by name by rule 2. Blocking on either would refuse the pilot's own trajectory —
+ *      and, since Argent reports no focus at all (issue #18), would refuse EVERY iOS recompile
+ *      of a recipe containing a `type` — making the 04 §9 automatic recompile true only on
+ *      paper. The notes still travel on `RecompileOutcome.warnings` and into the
+ *      `recipe recompiled` log line.
  * 2. **the rebuilt step list COVERS the reviewed one** (`recompileCovers`).
  * 3. **the rebuilt `preconditions` and `entry` cover the reviewed ones** (`recompileCoversEntry`).
  *
@@ -158,7 +162,7 @@ import { crossReferenceIssues } from '../validate.ts';
 import { unifiedDiff } from '../store/export.ts';
 import { canonicalYaml, parseYamlText } from '../yaml/canonical.ts';
 import { validateAgainstSchema } from '../yaml/schemas.ts';
-import { compileRecipe, isCollapseWarning } from './compile.ts';
+import { compileRecipe, isNormalisationWarning } from './compile.ts';
 
 /** 08 §5 thresholds. */
 export const THRESHOLDS = {
@@ -591,9 +595,9 @@ function recompileFrom(ctx: AppMapContext, recipe: RecipeFile, decision: Lifecyc
     const refusals: RecompileRefusal[] = [];
     // 1. a warning that says the rebuild is INCOMPLETE — a dropped driver call, a failed call,
     //    placeholder prose — means it is not a faithful record of the run and must not overwrite
-    //    a reviewed file unattended. The 04 §3.2 collapse note is not one of those: see
-    //    `compile.isCollapseWarning` and the module header.
-    const blocking = result.warnings.filter((w) => !isCollapseWarning(w));
+    //    a reviewed file unattended. The NORMALISATION notes are not those: see
+    //    `compile.isNormalisationWarning` and the module header.
+    const blocking = result.warnings.filter((w) => !isNormalisationWarning(w));
     if (blocking.length > 0) refusals.push('warnings');
     // 2. the rebuilt steps must cover the reviewed ones …
     const coverage = recompileCovers(recipe, next);

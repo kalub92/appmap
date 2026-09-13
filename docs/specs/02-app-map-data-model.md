@@ -157,7 +157,7 @@ entry:
   deep_link: appmap://invoice_new?fixture=logged_in
   fallback_path: [invoice_list, invoice_new]        # screen ids; edges resolved at run time
 steps:
-  - {id: s1, action: tap,   element: invoice.amount.field,  expect: {focused: invoice.amount.field}}
+  - {id: s1, action: tap,   element: invoice.amount.field,  expect: {visible: [invoice.amount.field]}}
   - {id: s2, action: type,  element: invoice.amount.field,  text: "{amount}"}
   - {id: s3, action: tap,   element: invoice.client.picker, expect: {screen: client_picker}}
   - {id: s4, action: select, list: client.picker.list, match: {text: "{client}"}, expect: {screen: invoice_new}}
@@ -174,7 +174,7 @@ provenance:
 last_verified_build: "4412"
 ```
 
-Step actions: `tap`, `type`, `select`, `swipe`, `open_link`, `wait_for`, `dismiss_gate`. `select` picks one row out of repeated content and has two forms carrying the same `match.text`: `{list, match}` names a container that is itself an accessibility element, and `{cell, match}` names the repeated row id every row shares — the only form a SwiftUI list can express, since its container never reaches the driver (01 R4). Exactly one of `list`/`cell` is present; a step carrying both matches no branch of the schema. `expect` conditions: `screen`, `focused`, `visible`, `not_visible`, `text_present` (static copy only). Every step with an `expect` is a verification point; steps without one inherit "screen unchanged".
+Step actions: `tap`, `type`, `select`, `swipe`, `open_link`, `wait_for`, `dismiss_gate`. `select` picks one row out of repeated content and has two forms carrying the same `match.text`: `{list, match}` names a container that is itself an accessibility element, and `{cell, match}` names the repeated row id every row shares — the only form a SwiftUI list can express, since its container never reaches the driver (01 R4). Exactly one of `list`/`cell` is present; a step carrying both matches no branch of the schema. `expect` conditions: `screen`, `focused`, `visible`, `not_visible`, `text_present` (static copy only). Every step with an `expect` is a verification point; steps without one inherit "screen unchanged". `focused` is **Android/Maestro-only**: the Maestro hierarchy carries a `focused` attribute, while Argent's iOS accessibility snapshot carries no focus flag at all, so an `expect.focused` on `platform: ios` can never be satisfied however well the tap worked — `validate` warns (rule 2 below, 04 §10) and the compiler writes `visible` there instead.
 
 `provenance.machine_recompile: true` means this version's *steps* were rebuilt by the automatic recompile (04 §8), not authored or approved by a human. It sits directly above `reviewed_by` because that is what it qualifies: the signature is historical, carried over from the version the reviewer actually read. `mark(ci_gate, reviewer)` deletes the key (07 §7).
 
@@ -231,7 +231,9 @@ on the loaded map (`summary` names them), but never block either.
    unloadable before exploration can start: the map would not load, so no observation could be
    ingested, so `name_screen` could never populate `elements[]`. It is an error again as soon as the
    screen declares any element or leaves `candidate`. An element missing from `ids.yaml` altogether
-   is always an error — that is a typo, not a gap.
+   is always an error — that is a typo, not a gap. Also a **warning** for an `expect.focused` on a
+   platform whose driver reports no focus: Argent's iOS snapshot carries no focus flag, so the
+   assertion can never be satisfied and every replay of the step falls back (04 §10).
 3. Every edge `to`, every recipe `entry.fallback_path` entry, every `expect.screen` references an existing screen.
 4. Every committed element has ≥2 locators and an `a11y_id` locator unless `role_label` is the only possible strategy (OS gates).
 5. No `text` strategy stands alone.

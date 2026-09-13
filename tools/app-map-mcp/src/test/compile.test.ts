@@ -21,8 +21,9 @@ import { canonicalYaml, isCanonical } from '../yaml/canonical.ts';
 import { validateAgainstSchema } from '../yaml/schemas.ts';
 import { forbiddenContentIssues } from '../validate.ts';
 import {
-  collapseBacktracking, compileRecipe, focusedElement, inferPostconditions, markIntentCritical,
-  optimizeEntry, parameterize, sliceTrajectory, translateSteps,
+  collapseBacktracking, compileRecipe, focusedElement, inferPostconditions, isFocusFallbackWarning,
+  isNormalisationWarning, markIntentCritical, optimizeEntry, parameterize, sliceTrajectory,
+  translateSteps,
 } from '../recipes/compile.ts';
 import type { TranslatedStep } from '../recipes/compile.ts';
 import { loadFixtureTree, loadTrajectoryFixture, makeTempAppMapDir } from './helpers.ts';
@@ -258,6 +259,40 @@ describe('translateSteps — 04 §3.3', () => {
     assert.equal(typeStep.action === 'type' && typeStep.element, 'invoice.amount.field');
   });
 
+  it('a `type` attached by the secondary rule says so instead of falling back in silence (issue #18)', () => {
+    // the shape every real Argent session has: `native-describe-screen` reports no focus, so
+    // 04 §3.3's PRIMARY rule ("the focused element of the previous snapshot") can never fire and
+    // the target comes from the last field tapped. The step is right; being told is the point.
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, snapshot: null, tool: 'mcp__argent__gesture-tap', input: { id: 'invoice.amount.field' }, element: 'invoice.amount.field', screen_before: 'invoice_new', screen_after: 'invoice_new' }),
+      obs({ seq: 2, snapshot: null, tool: 'mcp__argent__keyboard', input: { text: '50' }, screen_before: 'invoice_new', screen_after: 'invoice_new' }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps.map((s) => s.step.action), ['tap', 'type'], 'the step is still written');
+    const typed = r.steps[1]!.step;
+    assert.equal(typed.action === 'type' && typed.element, 'invoice.amount.field');
+    assert.equal(r.warnings.length, 1, r.warnings.join(' | '));
+    assert.match(r.warnings[0]!, /^seq 2: /);
+    assert.match(r.warnings[0]!, /invoice\.amount\.field/);
+    assert.match(r.warnings[0]!, /the last field tapped/);
+    assert.equal(isFocusFallbackWarning(r.warnings[0]!), true, 'matched by the shared predicate, never by the text');
+    // …and it is NORMALISATION, so the 04 §8 automatic recompile still writes (issue #13's guard
+    // would otherwise refuse every ios recompile of a recipe containing a `type`)
+    assert.equal(isNormalisationWarning(r.warnings[0]!), true);
+  });
+
+  it('a `type` with no determinable target is dropped WITH a warning, never in silence (issue #9, issue #18)', () => {
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, snapshot: null, tool: 'mcp__argent__keyboard', input: { text: '50' }, screen_before: 'invoice_new', screen_after: 'invoice_new' }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps, [], 'nothing in the recipe reproduces it');
+    assert.equal(r.warnings.length, 1, r.warnings.join(' | '));
+    assert.match(r.warnings[0]!, /^seq 1: /);
+    assert.match(r.warnings[0]!, /no determinable element/);
+    // a DROPPED call is incompleteness, not normalisation: the rebuild is not a faithful record
+    // of the run, so it must not overwrite a reviewed recipe unattended (04 §8)
+    assert.equal(isNormalisationWarning(r.warnings[0]!), false);
+  });
+
   it('a tap that dismissed a gate becomes dismiss_gate (04 §3.3)', () => {
     const { steps } = translateSteps(ctx.map, [
       obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', gates_present: ['gate.push_permission'], input: { id: 'invoice.add.button' }, element: 'invoice.add.button' }),
@@ -287,7 +322,9 @@ describe('translateSteps — 04 §3.3', () => {
       obs({ seq: 5, screen_before: 'invoice_new', screen_after: 'invoice_new', tool: 'mcp__argent__gesture-swipe', input: { direction: 'down' } }),
     ], ctx.config.driver);
     assert.deepEqual(r.steps.map((s) => s.step.action), ['open_link', 'tap', 'type', 'type', 'swipe']);
-    assert.deepEqual(r.warnings, []);
+    // these observations carry no snapshot, so both `type`s were attached by 04 §3.3's SECONDARY
+    // rule and say so (issue #18); the point of this test is that no translated call is dropped
+    assert.deepEqual(r.warnings.filter((w) => !isFocusFallbackWarning(w)), []);
     const typed = r.steps[2]!.step;
     assert.equal(typed.action === 'type' && typed.element, 'invoice.amount.field', 'the field tapped by `gesture-tap` is the target');
     assert.equal(typed.action === 'type' && typed.text, '50');
@@ -657,18 +694,24 @@ describe('sliceTrajectory — 04 §3.1', () => {
 });
 
 describe('inferPostconditions and markIntentCritical — 04 §3.6, 04 §3.7', () => {
-  it('screen change → expect.screen; new focus → expect.focused; neither → no expect (02 §6)', () => {
+  it('screen change → expect.screen; new focus → `visible` on ios / `focused` on android; neither → no expect (02 §6, 04 §10)', () => {
     const observations = collapseBacktracking(trajectory(), ctx.config.driver).observations;
     const steps = translateSteps(ctx.map, observations, ctx.config.driver).steps.slice(1);
     const { steps: withExpect, missing } = inferPostconditions(ctx.map, steps, observations);
     assert.deepEqual(missing, []);
+    // s1 newly focused the amount field. On ios that is real but UNCHECKABLE — Argent's snapshot
+    // carries no focus flag — so the compiler must never author `focused` there (issue #18).
     assert.deepEqual(withExpect.map((s) => s.expect), [
-      { focused: 'invoice.amount.field' },
+      { visible: ['invoice.amount.field'] },
       undefined,
       { screen: 'client_picker' },
       { screen: 'invoice_new' },
       { screen: 'invoice_detail' },
     ]);
+    // …and on android, where Maestro's hierarchy does carry `focused`, the strong form stands
+    const onAndroid = inferPostconditions({ ...ctx.map, platform: 'android' }, steps, observations);
+    assert.deepEqual(onAndroid.steps[0]!.expect, { focused: 'invoice.amount.field' });
+    assert.deepEqual(onAndroid.steps.slice(1).map((s) => s.expect), withExpect.slice(1).map((s) => s.expect), 'only the focus rule differs');
   });
 
   it('marks only steps touching an intent_critical element (02 §10.6: absent means false)', () => {

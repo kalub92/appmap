@@ -17,7 +17,10 @@
  *     file's values (two sources of truth otherwise — `plan_path`, `routes`, drift); and a
  *     WARNING for a registered `kind: list` element that no screen file records as observed —
  *     a SwiftUI list container is not an accessibility element, so it never reaches the driver
- *     and a `select {list, match}` against it can never resolve (01 R4, issue #19)
+ *     and a `select {list, match}` against it can never resolve (01 R4, issue #19); and a WARNING
+ *     for an `expect.focused` on a platform whose driver reports no focus — Argent's iOS snapshot
+ *     carries no focus flag of any kind, so the assertion can never be satisfied and every replay
+ *     of the step falls back (`types.focusObservable`, 04 §10, issue #18)
  *  3. every edge `to`, `entry.fallback_path` entry, `expect.screen`, condition `screen` references
  *     an existing screen file (`_previous` allowed on gates)
  *  4. every committed element has ≥2 locators and an `a11y_id` locator, unless the file is a
@@ -43,7 +46,7 @@ import { basename, join, relative, sep } from 'node:path';
 import type { AppMapConfig, Platform } from './config.ts';
 import { PLATFORMS } from './config.ts';
 import type { Condition, ElementId, Expect, IdsElement, IdsRegistry, RecipeFile, ScreenFile, ValidateResult, ValidationIssue } from './types.ts';
-import { ID_REGEX, PREVIOUS_SCREEN, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
+import { ID_REGEX, PREVIOUS_SCREEN, focusObservable, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
 import { AppMapError } from './errors.ts';
 import { allowlistFile, idsFile, kindForPath, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from './paths.ts';
 import type { YamlKind } from './paths.ts';
@@ -325,11 +328,21 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
   const knownScreen = (id: string, allowPrevious: boolean): boolean => screenFilesById.has(id) || (allowPrevious && id === PREVIOUS_SCREEN);
   const critical = (id: string): boolean => registry.get(id)?.intent_critical === true; // absent = false (decision 26)
 
-  const checkExpect = (file: string, x: Expect | undefined, loc: string): void => {
+  const checkExpect = (file: string, x: Expect | undefined, loc: string, where: string): void => {
     if (!x) return;
     if (x.screen !== undefined && !knownScreen(x.screen, false)) issues.push(issue(3, file, `expect.screen ${x.screen}: no such screen file`, `${loc}/screen`));
     for (const id of [x.focused, ...(x.visible ?? []), ...(x.not_visible ?? [])]) {
       if (id !== undefined && !registry.has(id)) issues.push(issue(2, file, `element ${id} is not registered in ids.yaml`, loc));
+    }
+    // An assertion this platform's driver cannot report is not a verification, it is a guaranteed
+    // fallback: the step's `expect` fails on every replay however well the action worked
+    // (issue #18's `FALLBACK at s1 (expect_failed)` on a field that WAS focused). A WARNING, not
+    // an error — the file is still well-formed and Maestro satisfies it, so 06 R1 must not block
+    // the PR and recipe.schema.json must keep accepting the key (`focusObservable`, 04 §10).
+    if (x.focused !== undefined && !focusObservable(input.platform)) {
+      issues.push(issue(2, file,
+        `${where}: expect.focused ${x.focused} can never be satisfied on ${input.platform} — its accessibility snapshot carries no focus flag, so every replay of this step falls back (04 §10, issue #18). Assert \`visible: [${x.focused}]\` instead; \`focused\` is Android/Maestro-only`,
+        `${loc}/focused`, 'warning'));
     }
   };
   const checkConditions = (file: string, cs: Condition[] | undefined, loc: string, allowPrevious: boolean): void => {
@@ -479,9 +492,9 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
         }
       }
       if (st.action === 'dismiss_gate' && !gateIds.has(st.gate)) issues.push(issue(2, file, `${st.id}: gate ${st.gate} is not registered in ids.yaml gates[]`, `${loc}/gate`));
-      checkExpect(file, st.expect, `${loc}/expect`);
+      checkExpect(file, st.expect, `${loc}/expect`, st.id);
     });
-    checkExpect(file, doc.verify, '/verify');
+    checkExpect(file, doc.verify, '/verify', 'verify');
     issues.push(...forbiddenContentIssues(file, doc));
   }
 
