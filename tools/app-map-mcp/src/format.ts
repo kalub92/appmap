@@ -31,6 +31,11 @@
  * recipes:
  *   create_invoice (verified) — Create an invoice for a client with an amount and save it
  * ```
+ * A `warning:` line follows the `gates:` line when `.local/strings.<platform>.txt` is missing
+ * (07 §2.1) and/or when `map.validationWarnings` carries 02 §10 rule 2's candidate carve-out —
+ * router-export seeds whose edges point at elements exploration has not learned yet (issue #12).
+ * Both are emitted only when they apply, so a clean map's summary is byte-identical.
+ *
  * `sessionStartPreamble` is the fixed block from 05 §3 with `<platform>`, `<build>` and the
  * recipe list substituted; `formatSessionStartContext` = summary + blank line + preamble,
  * capped to `maxTokens`.
@@ -43,7 +48,7 @@
  * Layer: map (imports types + token). Pure.
  */
 import type { DriverTarget, Expect, FallbackPayload, FindElementResult, LoadedMap, RecipeFile, RunStep, ScreenFile, ScreenId, SummaryResult } from './types.ts';
-import { edgeElement, routeKey, screenIdOfDeepLink } from './types.ts';
+import { edgeElement, isUnlearnedEdgeElement, routeKey, screenIdOfDeepLink } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { capTokens } from './token.ts';
 
@@ -149,6 +154,14 @@ export function formatSummary(map: LoadedMap, opts: { maxTokens?: number } = {})
   // detection stops working. Say so rather than reporting a healthy map.
   if (!map.stringTablePresent) {
     lines.push(`warning: .local/strings.${map.platform}.txt is missing — gate detection and label-based resolution are degraded; run scripts/app-map/strings-export.sh`);
+  }
+  // 02 §10 rule 2's candidate carve-out (issue #12): the map loaded, but a router-seeded screen
+  // still points its edges at elements nobody has learned. A warning nobody reads is a warning that
+  // never turns into exploration, so name the screens rather than only counting the edges.
+  const unlearned = map.validationWarnings.filter(isUnlearnedEdgeElement);
+  if (unlearned.length > 0) {
+    const seeded = [...new Set(unlearned.map((w) => w.file.replace(/^.*\//, '').replace(/\.ya?ml$/, '')))].sort();
+    lines.push(`warning: ${unlearned.length} edge(s) on ${seeded.join(', ')} reference elements not learned yet (router-export seeds); explore each screen and call name_screen (02 §10 rule 2)`);
   }
   if (recipes.length > 0) {
     lines.push('recipes:');

@@ -3,8 +3,10 @@
  *
  * `loadMap(config)` must finish in <500 ms for 300 screens (03 §11): parse with `yaml.parse`,
  * validate each file against its schema (yaml/schemas.ts), run the cross-reference rules
- * (validate.ts) and index. Failures throw `AppMapError(invalid_map)` whose message lists every
- * issue — the server reports it through `summary` rather than crashing (03 §11).
+ * (validate.ts) and index. Cross-reference ERRORS throw `AppMapError(invalid_map)` whose message
+ * lists every one — the server reports it through `summary` rather than crashing (03 §11).
+ * WARNINGS never block the load; they ride on `LoadedMap.validationWarnings` so `formatSummary`
+ * can surface them (02 §10 rule 2's candidate carve-out, issue #12).
  *
  * Layer: yaml (imports types/config/paths/errors + yaml/schemas + validate).
  */
@@ -13,7 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, join, relative, sep } from 'node:path';
 import type { AppMapConfig, Platform } from '../config.ts';
-import type { BuildNumber, IdsElement, IdsGate, IdsRegistry, IdsScreen, LoadedFile, LoadedMap, Manifest, McpAllowlist, RecipeFile, ScreenFile, ElementRef } from '../types.ts';
+import type { BuildNumber, IdsElement, IdsGate, IdsRegistry, IdsScreen, LoadedFile, LoadedMap, Manifest, McpAllowlist, RecipeFile, ScreenFile, ElementRef, ValidationIssue } from '../types.ts';
 import { now, routeKey } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { allowlistFile, idsFile, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from '../paths.ts';
@@ -149,6 +151,8 @@ export interface IndexMapInput {
   treeHash?: string;
   /** relative path → provenance (`loadMap` fills it from `readScreenFiles`/`readRecipeFiles` paths + `gitBlobHash`); empty map when absent */
   files?: ReadonlyMap<string, LoadedFile>;
+  /** 02 §10 warnings that did not block the load (issue #12); `[]` when absent */
+  validationWarnings?: ValidationIssue[];
 }
 
 /** The registry entry synthesized for a gate dismiss control (architecture §7 decision 2). */
@@ -225,6 +229,7 @@ export function indexMap(input: IndexMapInput): LoadedMap {
     routes,
     staticLabels,
     stringTablePresent: input.stringTablePresent === true,
+    validationWarnings: [...(input.validationWarnings ?? [])],
     build: input.build ?? input.manifest.build.build_number,
     loadedAt: now(),
   };
@@ -278,12 +283,17 @@ export function loadMap(config: AppMapConfig, opts: LoadMapOptions = {}): Loaded
     recipeByRel.set(relPath(config, path), recipe);
   }
 
+  let validationWarnings: ValidationIssue[] = [];
   if (opts.validate !== false) {
     // rules 2–6 and 8 (rule 1 already ran per file above; rule 7 belongs to `export --check`)
-    const issues = crossReferenceIssues({ platform, ids, screens: screenByRel, recipes: recipeByRel }).filter((i) => i.severity === 'error');
+    const found = crossReferenceIssues({ platform, ids, screens: screenByRel, recipes: recipeByRel });
+    const issues = found.filter((i) => i.severity === 'error');
     if (issues.length) {
       throw new AppMapError(ERROR_CODES.INVALID_MAP, `app-map has ${issues.length} validation error${issues.length === 1 ? '' : 's'} (02 §10):\n${formatIssues(issues)}`, 'run `app-map validate` and fix every listed issue before starting the server');
     }
+    // 02 §10 rule 2's candidate carve-out means a map can now load WITH warnings (issue #12); keep
+    // them so `formatSummary` can say so instead of reporting a healthy map.
+    validationWarnings = found.filter((i) => i.severity === 'warning');
   }
 
   const build = opts.build ?? (config.build !== 'auto' && config.build !== '' ? config.build : manifest.build.build_number);
@@ -298,6 +308,7 @@ export function loadMap(config: AppMapConfig, opts: LoadMapOptions = {}): Loaded
     stringTablePresent: existsSync(stringsFile(cfg, platform)),
     build,
     files,
+    validationWarnings,
   };
   if (treeHash !== undefined) input.treeHash = treeHash;
   return indexMap(input);

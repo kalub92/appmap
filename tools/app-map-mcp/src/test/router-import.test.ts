@@ -10,8 +10,10 @@ import type { AppMapContext } from '../context.ts';
 import { schemaDir } from '../paths.ts';
 import { validateAgainstSchema } from '../yaml/schemas.ts';
 import { importRouter, mergeRouterScreen, routerScreenToScreenFile } from '../router-import.ts';
+import { recordHookPayload } from '../observe.ts';
 import { exportMap } from '../store/export.ts';
-import { loadRouterExportFixture, makeTempAppMapDir } from './helpers.ts';
+import { validateMap } from '../validate.ts';
+import { loadHookFixture, loadRouterExportFixture, makeTempAppMapDir } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
 let t: TempAppMapDir;
@@ -55,6 +57,34 @@ describe('importRouter — seeding (01 R6, decision 40)', () => {
     assert.deepEqual(validateAgainstSchema(schemaDir(t.config), 'screen', settings), []);
     // the cache row is dirty so `export` writes the file (06 R7 PR)
     assert.ok(ctx.db.listDirty().some((d) => d.kind === 'screen' && d.key === 'settings'));
+  });
+
+  it('a freshly imported router map validates, loads and can ingest an observation (issue #12 criterion 1)', () => {
+    // The reporter's deadlock: the seed carries the app's edges with `elements: []`, 02 §10 rule 2
+    // errored on every one, the server refused the map (`invalid_map`), and `record` — the only way
+    // elements are ever learned — could not run. The fixture's `settings` has no edges, so give it
+    // the one the bug needs; `invoice.add.button` IS in ids.yaml, so the only gap is "not declared
+    // on this screen", which is the case the carve-out relaxes (issue #12).
+    doc.screens.find((s) => s.id === 'settings')!.edges = [{ action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list' }];
+    importRouter(ctx, doc, spy);
+    exportMap(ctx);
+    ctx.close();
+
+    const r = validateMap(t.config, { platforms: ['ios'] });
+    assert.deepEqual(r.issues.filter((i) => i.severity === 'error'), [], 'a fresh seed must not fail validate');
+    assert.ok(r.issues.some((i) => i.rule === 2 && i.severity === 'warning' && i.file === 'ios/screens/settings.yaml'), 'but the gap is still reported');
+
+    // reopening is the server path: it must load the map rather than fall back to `emptyMap`
+    const reopened = openContext(t.config, { logSink: 'none', skipRetention: true, dbPath: ':memory:' });
+    try {
+      assert.equal(reopened.loadError, null, 'the map the import just wrote must load (03 §11)');
+      assert.ok(reopened.map.screens.has('settings'));
+      assert.equal(reopened.map.validationWarnings.length, 1);
+      // …and the cycle is broken: an observation can now be ingested, which is what fills elements[]
+      assert.equal(recordHookPayload(reopened, loadHookFixture('post-tool-use.tap'))?.seq, 1);
+    } finally {
+      reopened.close(); // `afterEach` closes `ctx` again — `close()` is idempotent
+    }
   });
 
   it('appends the unregistered screen to ids.yaml and reports it (06 R7 carries both changes)', () => {

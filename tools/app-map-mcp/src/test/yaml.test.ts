@@ -12,6 +12,7 @@ import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { kindForPath, schemaDir } from '../paths.ts';
 import type { YamlKind } from '../paths.ts';
 import type { IdsRegistry, RecipeFile, ScreenFile } from '../types.ts';
+import { isUnlearnedEdgeElement } from '../types.ts';
 import { KEY_ORDER, canonicalYaml, canonicalize, isCanonical, parseYamlText } from '../yaml/canonical.ts';
 import { gitBlobHash, gitTreeHash, indexMap, loadMap, parseYamlFile, readAllowlist, readIds, readManifest, readRecipeFiles, readScreenFiles, readStaticStrings } from '../yaml/load.ts';
 import { assertValid, loadSchemas, validateAgainstSchema, validateEventLine } from '../yaml/schemas.ts';
@@ -289,6 +290,37 @@ describe('loader and index (03 §4)', () => {
       writeFileSync(p, canonicalYaml('screen', doc));
       assert.throws(() => loadMap(t.config), (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.INVALID_MAP && /login\.ghost\.button/.test(e.message) && /rule 2/.test(e.message));
       assert.equal(loadMap(t.config, { validate: false }).screens.size, 5);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('loadMap keeps rule 2 warnings on validationWarnings instead of throwing (issue #12)', () => {
+    const t = makeTempAppMapDir();
+    try {
+      // the `import-router` shape: the app's edges, `elements: []`, nothing learned yet (01 R6)
+      const idsPath = join(t.dir, 'ids.yaml');
+      const ids = parse(readFileSync(idsPath, 'utf8')) as IdsRegistry;
+      ids.screens.push({ id: 'settings', title: 'Settings', deep_link: 'appmap://settings' });
+      ids.screens.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      writeFileSync(idsPath, canonicalYaml('ids', ids));
+      const seed: ScreenFile = {
+        id: 'settings', kind: 'screen', title: 'Settings', deep_link: 'appmap://settings',
+        signature: { marker: 'screen.settings', route: 'appmap://settings', nav_class: 'SettingsView' },
+        elements: [],
+        edges: [
+          { action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list', status: 'candidate' },
+          { action: { type: 'tap', element: 'invoice.list.cell' }, to: 'invoice_detail', status: 'candidate' },
+        ],
+        meta: { sources: ['router_export'], status: 'candidate' },
+      };
+      writeFileSync(join(t.dir, 'ios/screens/settings.yaml'), canonicalYaml('screen', seed));
+      const map = loadMap(t.config);
+      assert.equal(map.screens.size, 6);
+      assert.equal(map.validationWarnings.length, 2, JSON.stringify(map.validationWarnings));
+      for (const w of map.validationWarnings) assert.equal(w.severity, 'warning');
+      assert.equal(map.validationWarnings.filter(isUnlearnedEdgeElement).length, 2);
+      assert.deepEqual(loadMap(t.config, { validate: false }).validationWarnings, [], 'nothing ran, so nothing is reported');
     } finally {
       t.cleanup();
     }

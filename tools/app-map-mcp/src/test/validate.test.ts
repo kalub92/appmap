@@ -9,7 +9,9 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { parse } from 'yaml';
 import type { IdsRegistry, RecipeFile, ScreenFile, ValidationIssue } from '../types.ts';
+import { isUnlearnedEdgeElement } from '../types.ts';
 import { canonicalYaml } from '../yaml/canonical.ts';
+import { loadMap } from '../yaml/load.ts';
 import type { YamlKind } from '../paths.ts';
 import { crossReferenceIssues, forbiddenContentIssues, formatIssues, nonCanonicalFiles, safeRegexIssue, validateMap } from '../validate.ts';
 import { PILOT_APP_MAP_DIR, loadRouterExportFixture, makeTempAppMapDir } from './helpers.ts';
@@ -184,6 +186,97 @@ describe('rule 2 — every id is registered in ids.yaml', () => {
     const screen: ScreenFile = { id: 'x', kind: 'screen', deep_link: 'none', signature: { marker: 'screen.x' }, elements: [{ id: 'Bad', role: 'button', status: 'candidate', locators: [{ strategy: 'a11y_id', value: 'Bad', weight: 1 }, { strategy: 'path', value: 'button', weight: 0.25 }] }], edges: [], meta: { sources: ['manual'], status: 'candidate' } };
     const issues = crossReferenceIssues({ platform: 'ios', ids, screens: new Map([['ios/screens/x.yaml', screen]]), recipes: new Map() });
     assert.ok(issues.some((i) => i.rule === 2 && /01 R2/.test(i.message)), formatIssues(issues));
+  });
+});
+
+describe('rule 2 — a router-export seed warns until exploration learns its elements (02 §10 rule 2, issue #12)', () => {
+  /** Exactly what `router-import.routerScreenToScreenFile` writes: the app's edges, nothing learned. */
+  const seededScreen = (over: Partial<ScreenFile> = {}): ScreenFile => ({
+    id: 'settings',
+    kind: 'screen',
+    title: 'Settings',
+    deep_link: 'appmap://settings',
+    signature: { marker: 'screen.settings', route: 'appmap://settings', nav_class: 'SettingsView' },
+    elements: [],
+    edges: [
+      { action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list', status: 'candidate' },
+      { action: { type: 'tap', element: 'invoice.list.cell' }, to: 'invoice_detail', status: 'candidate' },
+    ],
+    meta: { sources: ['router_export'], status: 'candidate' },
+    ...over,
+  });
+  /** the pilot registry plus `settings`, so only the EDGE ELEMENTS are undeclared, never unregistered */
+  const idsWithSettings = (): IdsRegistry => ({
+    schema_version: 1,
+    screens: [{ id: 'invoice_detail' }, { id: 'invoice_list' }, { id: 'settings', title: 'Settings', deep_link: 'appmap://settings' }],
+    gates: [],
+    elements: [{ id: 'invoice.add.button', kind: 'button' }, { id: 'invoice.list.cell', kind: 'cell', dynamic: true }],
+  });
+  const stub = (id: string): ScreenFile => ({ id, kind: 'screen', deep_link: `appmap://${id}`, signature: { marker: `screen.${id}` }, elements: [], edges: [], meta: { sources: ['manual'], status: 'candidate' } });
+  const crossRef = (screen: ScreenFile): ValidationIssue[] => crossReferenceIssues({
+    platform: 'ios',
+    ids: idsWithSettings(),
+    screens: new Map([['ios/screens/settings.yaml', screen], ['ios/screens/invoice_list.yaml', stub('invoice_list')], ['ios/screens/invoice_detail.yaml', stub('invoice_detail')]]),
+    recipes: new Map(),
+  });
+  const edgeElementIssues = (issues: ValidationIssue[]): ValidationIssue[] => issues.filter((i) => i.rule === 2 && i.location?.endsWith('/action/element') === true);
+  /** the seed on disk in a pilot copy, registered in ids.yaml so the elements are the only gap */
+  const writeSeed = (t: TempAppMapDir, screen: ScreenFile): void => {
+    editYaml<IdsRegistry>(t, 'ids.yaml', 'ids', (d) => {
+      d.screens.push({ id: 'settings', title: 'Settings', deep_link: 'appmap://settings' });
+      d.screens.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    });
+    writeFileSync(join(t.dir, 'ios/screens/settings.yaml'), canonicalYaml('screen', screen));
+  };
+
+  it('a candidate screen with no elements warns instead of erroring, and the map still loads (issue #12 criterion 1)', () => {
+    const t = makeTempAppMapDir();
+    try {
+      writeSeed(t, seededScreen());
+      const r = validateMap(t.config, { platforms: ['ios'] });
+      assert.deepEqual(errors(r.issues), [], formatIssues(r.issues));
+      assert.ok(r.ok, 'a seed that has never been explored must not fail validate');
+      const warned = edgeElementIssues(r.issues);
+      assert.equal(warned.length, 2, formatIssues(r.issues));
+      assert.deepEqual(warned.map((i) => i.location), ['/edges/0/action/element', '/edges/1/action/element']);
+      for (const w of warned) assert.equal(w.severity, 'warning', formatIssues([w]));
+      assert.ok(warned[0]!.message.includes('invoice.add.button') && warned[1]!.message.includes('invoice.list.cell'), formatIssues(warned));
+      // and the loader agrees: it throws on errors only, and carries the warnings (issue #12)
+      const map = loadMap(t.config);
+      assert.ok(map.screens.has('settings'));
+      assert.equal(map.validationWarnings.filter(isUnlearnedEdgeElement).length, 2);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('errors again for the other edge element once ONE element is declared (the carve-out needs elements to be empty)', () => {
+    const issues = edgeElementIssues(crossRef(seededScreen({
+      elements: [{ id: 'invoice.add.button', role: 'button', label: 'New Invoice', status: 'candidate', locators: [{ strategy: 'a11y_id', value: 'invoice.add.button', weight: 1 }, { strategy: 'path', value: 'button[0]', weight: 0.25 }] }],
+    })));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error');
+    assert.equal(issues[0]!.location, '/edges/1/action/element');
+    assert.equal(issues[0]!.message, 'edge element invoice.list.cell is not declared on this screen');
+    assert.equal(isUnlearnedEdgeElement(issues[0]!), false, 'an observed screen is past "not learned yet"');
+  });
+
+  it('a screen past candidate with elements: [] still errors — verified and retired are both beyond "not learned yet"', () => {
+    for (const status of ['verified', 'retired'] as const) {
+      const issues = edgeElementIssues(crossRef(seededScreen({ meta: { sources: ['router_export'], status } })));
+      assert.equal(issues.length, 2, `${status}: ${formatIssues(issues)}`);
+      for (const i of issues) assert.equal(i.severity, 'error', `${status}: ${formatIssues([i])}`);
+    }
+  });
+
+  it('an edge element absent from ids.yaml is still an ERROR on a seeded screen — a typo is not a gap (issue #12 criterion 4)', () => {
+    const issues = edgeElementIssues(crossRef(seededScreen({
+      edges: [{ action: { type: 'tap', element: 'settings.ghost.button' }, to: 'invoice_list', status: 'candidate' }],
+    })));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error');
+    assert.equal(issues[0]!.message, 'edge element settings.ghost.button is not registered in ids.yaml');
+    assert.equal(isUnlearnedEdgeElement(issues[0]!), false);
   });
 });
 

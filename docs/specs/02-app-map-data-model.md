@@ -213,8 +213,19 @@ SQLite (`cache.sqlite`, WAL mode) holds the loaded map plus volatile counters: p
 
 ## 10. Validation rules (`app-map validate`)
 
+Rules produce **errors** and **warnings**. `app-map validate` exits non-zero on any error and the
+server refuses to load a map that has one (`invalid_map`); warnings are printed, counted and carried
+on the loaded map (`summary` names them), but never block either.
+
 1. Every file validates against its JSON Schema.
-2. Every element id, screen id, gate id exists in `ids.yaml`.
+2. Every element id, screen id, gate id exists in `ids.yaml`, and every edge `action.element` is
+   also declared in its own screen's `elements[]`. The second half is a **warning, not an error**
+   while that screen is `meta.status: candidate` with `elements: []` — that is a router-export seed
+   (01 R6) whose elements exploration has not learned yet (03 §5), and erroring would make the seed
+   unloadable before exploration can start: the map would not load, so no observation could be
+   ingested, so `name_screen` could never populate `elements[]`. It is an error again as soon as the
+   screen declares any element or leaves `candidate`. An element missing from `ids.yaml` altogether
+   is always an error — that is a typo, not a gap.
 3. Every edge `to`, every recipe `entry.fallback_path` entry, every `expect.screen` references an existing screen.
 4. Every committed element has ≥2 locators and an `a11y_id` locator unless `role_label` is the only possible strategy (OS gates).
 5. No `text` strategy stands alone.

@@ -5,7 +5,11 @@
  *     on every user-authored regex source (`matches[]`, `label_regex`): ≤200 chars, no nested
  *     quantifiers (`(a+)+`, `(a*)*`, `(a|aa)+`-style) — `safeRegexIssue` (07 §4 malicious YAML)
  *  2. every element id, screen id, gate id exists in ids.yaml (gate dismiss controls count as
- *     registered via `gates[].dismiss`; screen markers via `screens[].id`); element ids in
+ *     registered via `gates[].dismiss`; screen markers via `screens[].id`); an edge
+ *     `action.element` must also be DECLARED on its own screen — a WARNING instead of an error
+ *     while that screen is `meta.status: candidate` with `elements: []` (a router-export seed
+ *     exploration has not reached yet, 01 R6/03 §5, issue #12), an error everywhere else; an
+ *     element missing from ids.yaml entirely stays an error on every screen; element ids in
  *     screen files match `ID_REGEX` (2+ segments; `ELEMENT_ID_REGEX` applies to ids.yaml only);
  *     when ids.yaml carries `title`/`deep_link` for a screen they must agree with the screen
  *     file's — `title` exactly, `deep_link` on `routeKey` (query stripped: the registry records
@@ -36,7 +40,7 @@ import { basename, join, relative, sep } from 'node:path';
 import type { AppMapConfig, Platform } from './config.ts';
 import { PLATFORMS } from './config.ts';
 import type { Condition, Expect, IdsElement, IdsRegistry, RecipeFile, ScreenFile, ValidateResult, ValidationIssue } from './types.ts';
-import { ID_REGEX, PREVIOUS_SCREEN, markerOfScreen, routeKey, stepElement } from './types.ts';
+import { ID_REGEX, PREVIOUS_SCREEN, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
 import { AppMapError } from './errors.ts';
 import { allowlistFile, idsFile, kindForPath, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from './paths.ts';
 import type { YamlKind } from './paths.ts';
@@ -350,6 +354,13 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
     }
 
     const declared = new Set(doc.elements.map((e) => e.id));
+    // 02 §10 rule 2 carve-out (issue #12): a screen the router export seeded carries the app's
+    // edges and nothing else — `elements: []` is by design until exploration learns them, and
+    // erroring makes the seed unloadable before exploration can start. The moment ONE element is
+    // known the screen HAS been observed, so a still-undeclared edge element is a real gap again;
+    // and a screen past `candidate` is past the point where "not learned yet" explains anything.
+    // Both conditions, not either. `meta` is schema-required, so no optional chaining.
+    const unexplored = doc.elements.length === 0 && doc.meta.status === 'candidate';
     doc.elements.forEach((el, ei) => {
       const loc = `/elements/${ei}`;
       if (!ID_REGEX.test(el.id)) issues.push(issue(2, file, `element id ${el.id} violates 01 R2 (${ID_REGEX.source})`, `${loc}/id`));
@@ -383,7 +394,14 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
       const a = e.action;
       if ('element' in a && a.element !== undefined) {
         if (!registry.has(a.element)) issues.push(issue(2, file, `edge element ${a.element} is not registered in ids.yaml`, `${loc}/action/element`));
-        else if (!declared.has(a.element)) issues.push(issue(2, file, `edge element ${a.element} is not declared on this screen`, `${loc}/action/element`));
+        else if (!declared.has(a.element)) {
+          // registered in ids.yaml but absent from this screen's `elements[]`: a warning only on an
+          // unexplored candidate (above), an error everywhere else. The "not registered in ids.yaml"
+          // branch above is NEVER relaxed — that is a typo, not a gap (issue #12 criterion 4).
+          issues.push(unexplored
+            ? issue(2, file, unlearnedEdgeElementMessage(a.element), `${loc}/action/element`, 'warning')
+            : issue(2, file, `edge element ${a.element} is not declared on this screen`, `${loc}/action/element`));
+        }
       }
       if (a.type === 'dismiss_gate' && !gateIds.has(a.gate)) issues.push(issue(2, file, `edge gate ${a.gate} is not registered in ids.yaml gates[]`, `${loc}/action/gate`));
       checkConditions(file, e.preconditions, `${loc}/preconditions`, false);

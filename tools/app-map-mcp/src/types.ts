@@ -1140,6 +1140,13 @@ export interface LoadedMap {
    * surface this instead of letting it look like a clean load (03 §5, 03 §7).
    */
   stringTablePresent: boolean;
+  /**
+   * 02 §10 warnings that survived the load — errors throw `invalid_map`, warnings ride along
+   * (issue #12). Empty under `loadMap({validate:false})`. `formatSummary` surfaces the rule 2
+   * candidate carve-out from here so a seeded-but-unexplored map is discoverable on the SERVER
+   * path too, not only in `app-map validate` output.
+   */
+  validationWarnings: ValidationIssue[];
   /** git tree hash of `app-map/` at load time (03 §4 reload check); `undefined` outside a git repo */
   treeHash?: string;
   /** effective build number (config, driver or manifest) */
@@ -1277,6 +1284,27 @@ export interface ValidationIssue {
   message: string;
 }
 export interface ValidateResult { ok: boolean; issues: ValidationIssue[]; files_checked: number }
+
+/**
+ * 02 §10 rule 2's candidate carve-out (issue #12). A screen seeded by `import-router` carries the
+ * app's edges and `elements: []` — exploration is what learns the elements (01 R6 seeds, 03 §5
+ * fills in). Erroring on an edge element that IS registered in `ids.yaml` but is not yet declared
+ * on such a screen deadlocks first-run setup: the map will not load, so no observation can be
+ * ingested, so `name_screen` can never populate `elements[]`. Producer and predicate live together
+ * so the message text cannot drift from the matcher (the `compile.collapseWarning` /
+ * `compile.isCollapseWarning` pattern); never match the text anywhere else.
+ */
+export const UNLEARNED_EDGE_ELEMENT = 'is not declared on this screen yet';
+
+/** The 02 §10 rule 2 WARNING message for an edge element on an unexplored candidate screen. */
+export function unlearnedEdgeElementMessage(element: ElementId): string {
+  return `edge element ${element} ${UNLEARNED_EDGE_ELEMENT} — the screen is a candidate with no elements; explore it and call name_screen (01 R6 seeds, 03 §5 learns)`;
+}
+
+/** Pure: is this the warning `unlearnedEdgeElementMessage` produces? (summary/report consumers) */
+export function isUnlearnedEdgeElement(i: ValidationIssue): boolean {
+  return i.rule === 2 && i.severity === 'warning' && i.message.includes(UNLEARNED_EDGE_ELEMENT);
+}
 export interface MigrateIdResult { old_id: ElementId | ScreenId; new_id: string; files_changed: string[]; references: number }
 export interface ImportRouterResult {
   created: ScreenId[];

@@ -5,7 +5,7 @@
  *
  * | command                                                     | used by            | body                                              |
  * |-------------------------------------------------------------|--------------------|---------------------------------------------------|
- * | validate [--platform p] [--router path]                     | CI, pre-commit     | validate.validateMap → issues, exit 1 on error     |
+ * | validate [--platform p] [--router path]                     | CI, pre-commit     | validate.validateMap → issues + warning count, exit 1 on error |
  * | export [--force] [--check]                                  | dev, Stop hook, CI | store/export.exportMap                            |
  * | record --stdin                                              | PostToolUse hook   | ingest-socket.postToIngestSocket ‖ observe.recordHookPayload; ALWAYS exit 0 |
  * | summary [--max-tokens N] [--hook-json]                      | SessionStart hook  | format.formatSessionStartContext; `--hook-json` wraps in `SessionStartHookOutput` |
@@ -383,7 +383,10 @@ function cmdValidate(args: ParsedArgs, io: CliIo): number {
     ...(platforms !== undefined ? { platforms } : {}),
     ...(routerExports.length > 0 ? { routerExports } : {}),
   });
-  emit(io, args, result, `${formatIssues(result.issues)}\n${result.ok ? 'ok' : 'FAILED'} — ${result.files_checked} file(s) checked`);
+  // `formatIssues` already prefixes each warning line with `warning: `; the count keeps a 02 §10
+  // rule 2 candidate carve-out (issue #12) from being buried under the per-file lines.
+  const warnings = result.issues.filter((i) => i.severity === 'warning').length;
+  emit(io, args, result, `${formatIssues(result.issues)}\n${result.ok ? 'ok' : 'FAILED'} — ${result.files_checked} file(s) checked${warnings > 0 ? `, ${warnings} warning(s)` : ''}`);
   return result.ok ? 0 : 1;
 }
 

@@ -501,6 +501,26 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     (`store/db.RECOMPILE_DIRTY_PREFIX`), which is what lets `export` report
     `written_from[].machine_recompile` and the CLI name it on stderr. Issue #13.
 
+58. **A validation rule may be a warning where the lifecycle guarantees the gap is temporary.**
+    02 §10 rule 2's "edge element is declared on this screen" half is a warning, not an error, on a
+    screen that is `meta.status: candidate` AND has `elements: []` (`validate.crossReferenceIssues`'s
+    `unexplored`). `import-router` seeds exactly that shape — the app's edges with nothing learned
+    yet (01 R6) — and erroring on it deadlocked first-run setup: the map would not load, so the
+    server could not ingest an observation, so `name_screen` could never populate `elements[]`, so
+    the map never became loadable. Both conditions, not either: one declared element means the
+    screen HAS been observed and a still-undeclared edge target is a real gap; a status past
+    `candidate` is past the point where "not learned yet" explains anything. The sibling branch —
+    the element is not in `ids.yaml` at all — is never relaxed, on any screen: that is a typo, and
+    01 R1/R8 gen-ids is what registers element ids (`import-router` registers screens only). The
+    carve-out is keyed on status and emptiness, not on `meta.sources` containing `router_export`,
+    because `mergeRouterScreen` and `nameScreen` both rewrite `sources`; a hand-authored empty
+    candidate is in the same "not learned yet" state and gets the same relaxation. `loadMap` throws
+    `invalid_map` on errors only and carries the survivors on `LoadedMap.validationWarnings`, which
+    `formatSummary` names and `app-map validate` counts, so the state is discoverable rather than
+    silently tolerated. Known limit: `nameScreen` only records elements the snapshot carried, so a
+    screen whose edge target was off-screen at naming time ends up non-empty but still missing that
+    target, and rule 2 errors again — correct per the rule, but worth a better message. Issue #12.
+
 ## 8. How to implement your module
 
 Tests live in `src/test/<module>.test.ts` (node:test, `node --disable-warning=ExperimentalWarning

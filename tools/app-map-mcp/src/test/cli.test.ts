@@ -72,6 +72,26 @@ describe('app-map validate (03 §10, 06 R1)', () => {
       assert.equal(runCli(['validate', '--platform', 'android'], { dir: t.dir }).code, 0);
     });
   });
+
+  it('a router-seeded screen is reported as a warning and does not fail the run (issue #12 criterion 3)', () => {
+    withTemp((t) => {
+      // the exact shape `import-router` writes: the app's edges, `elements: []` (01 R6 seeds,
+      // 03 §5 learns). Before issue #12 this exited 1 and the map would not load at all.
+      const ids = join(t.dir, 'ids.yaml');
+      writeFileSync(ids, readFileSync(ids, 'utf8').replace('gates:\n', "  - id: settings\n    title: Settings\n    deep_link: appmap://settings\ngates:\n"));
+      writeFileSync(join(t.dir, 'ios/screens/settings.yaml'), [
+        'id: settings', 'kind: screen', 'title: Settings', 'deep_link: appmap://settings',
+        'signature:', '  marker: screen.settings', '  route: appmap://settings', '  nav_class: SettingsView',
+        'elements: []',
+        'edges:', '  - action:', '      type: tap', '      element: invoice.add.button', '    to: invoice_list', '    status: candidate',
+        'meta:', '  sources:', '    - router_export', '  status: candidate', '',
+      ].join('\n'));
+      const r = runCli(['validate', '--platform', 'ios'], { dir: t.dir });
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /warning: edge element invoice\.add\.button is not declared on this screen yet/, r.stdout);
+      assert.match(r.stdout, /warning\(s\)/, 'the count must not be buried under the per-file lines');
+    });
+  });
 });
 
 describe('app-map export (03 §4, 06 R1, harness-notes §4)', () => {
