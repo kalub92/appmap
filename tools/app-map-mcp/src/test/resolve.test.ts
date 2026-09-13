@@ -2,15 +2,15 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { ElementDef, LoadedMap, Tree, TreeNode } from '../types.ts';
-import { DEFAULT_LOCATOR_WEIGHTS, DEGRADED_THRESHOLD } from '../types.ts';
+import { DEFAULT_LOCATOR_WEIGHTS, DEGRADED_THRESHOLD, roleHintsFor } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { loadMap } from '../yaml/load.ts';
-import { findByA11yId, pathOf, walk } from '../tree.ts';
+import { findByA11yId, nodesWithRole, normalizeTree, pathOf, screenRoot, walk } from '../tree.ts';
 import { estimateTokens } from '../token.ts';
 import {
   DISAMBIGUATION_FACTOR, FIND_ELEMENT_ALTERNATIVES_MAX, MISS_CANDIDATES_MAX, disambiguate, findElement, findElementDef, queryLocator, resolve, targetFor,
 } from '../resolve.ts';
-import { PILOT_SCREEN_TREES, cloneTree, loadFixtureTree, makeTempAppMapDir } from './helpers.ts';
+import { PILOT_SCREEN_TREES, cloneTree, doubledMarkerXcuiFixture, loadFixtureTree, makeTempAppMapDir, readJsonFixture } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
 let t: TempAppMapDir;
@@ -277,6 +277,58 @@ describe('resolve — miss (03 §6)', () => {
   });
 });
 
+describe('resolve \u2014 the flat Argent capture (03 \u00a75, follow-up to #10)', () => {
+  /** the real committed `argent run native-describe-screen --json` capture of the pilot */
+  const flatInvoiceList = (): Tree => normalizeTree(
+    readJsonFixture('raw/argent-native-describe-screen.invoice_list.json'),
+    { platform: 'ios', roleHints: roleHintsFor(map) },
+  );
+
+  it('resolves a registered tab to the tab itself, never to the screen container by geometry', () => {
+    const tree = flatInvoiceList();
+    // the tabs must be inside the scope `resolve` searches (`screenRoot`), not beside it
+    assert.equal(nodesWithRole(screenRoot(tree), 'tab').length, 3);
+    const screen = map.screens.get('invoice_list')!;
+    const expected = [
+      ['nav.invoices.tab', 'tabBar/tab[0]'],
+      ['nav.clients.tab', 'tabBar/tab[1]'],
+      ['nav.settings.tab', 'tabBar/tab[2]'],
+    ] as const;
+    for (const [id, path] of expected) {
+      const def = screen.elements.find((e) => e.id === id)!;
+      assert.ok(def, id);
+      const r = resolve(map, def, tree);
+      assert.equal(r.status, 'hit', id);
+      if (r.status !== 'hit') continue;
+      // the bug: all four real locators scored zero out of scope and the weight-0.1 geometry
+      // fallback matched the full-screen marker container, so `run_recipe` tapped the screen
+      // overlay and called it a success
+      assert.notDeepEqual(r.target, { by: 'id', id: 'screen.invoice_list' }, `${id} must not tap the screen overlay`);
+      assert.notEqual(r.strategy, 'geometry', id);
+      assert.deepEqual(r.target, { by: 'id', id }, id);
+      assert.equal(r.strategy, 'a11y_id', id);
+      assert.equal(r.confidence, 1, id);
+      assert.equal(r.degraded, false, id);
+      assert.equal(r.node.a11y_id, id, id);
+      assert.equal(r.path, path, id);
+      assert.equal(pathOf(tree, r.node), path, id);
+    }
+  });
+
+  it('the learned rank-3 `path` locator also counts in scope now (it was rejected as out of scope)', () => {
+    const tree = flatInvoiceList();
+    const def = map.screens.get('invoice_list')!.elements.find((e) => e.id === 'nav.clients.tab')!;
+    const pathLocator = def.locators.find((l) => l.strategy === 'path')!;
+    assert.equal(pathLocator.value, 'tabBar/tab[1]', 'the pilot locator, unchanged by the move');
+    assert.deepEqual(queryLocator(tree, pathLocator).map((n) => n.a11y_id), ['nav.clients.tab']);
+    assert.deepEqual(
+      queryLocator(tree, { strategy: 'role_label', value: { role: 'tab', label_regex: '^(Clients|Settings)$' }, weight: 0.6 })
+        .map((n) => n.a11y_id),
+      ['nav.clients.tab', 'nav.settings.tab'],
+    );
+  });
+});
+
 describe('queryLocator and targetFor', () => {
   it('queries are scoped to the screen root and honour each strategy', () => {
     const tree = loadFixtureTree('invoice_list');
@@ -380,5 +432,26 @@ describe('resolve — the tree is never mutated', () => {
     assert.equal(JSON.stringify(tree), before);
     const c = cloneTree(tree);
     assert.equal(JSON.stringify(c), before);
+  });
+});
+
+describe('resolve — a nested capture whose screen marker is doubled (follow-up to #15 and #10)', () => {
+  it('scopes to the marker CONTAINER, so every invoice_list element still resolves', () => {
+    // `appMapScreen(_:)` stamps `screen.invoice_list` on the container AND on the 1 pt overlay
+    // inside it; nesting survives every capture but the flat Argent one, and resolve scopes to
+    // `screenRoot` — the childless overlay would leave it a subtree with zero children.
+    const tree = normalizeTree(doubledMarkerXcuiFixture(), { platform: 'ios' });
+    assert.ok(screenRoot(tree).children.length > 0, 'the screen root must not be the 1 pt overlay');
+    const add = map.screens.get('invoice_list')!.elements.find((e) => e.id === 'invoice.add.button')!;
+    const r = resolve(map, add, tree);
+    assert.equal(r.status, 'hit');
+    if (r.status !== 'hit') return;
+    assert.equal(r.strategy, 'a11y_id');
+    assert.equal(r.node.a11y_id, 'invoice.add.button');
+    assert.equal(r.node.label, 'New Invoice', 'a real element, not the unlabeled marker');
+    assert.deepEqual(r.target, { by: 'id', id: 'invoice.add.button' });
+    for (const el of map.screens.get('invoice_list')!.elements) {
+      assert.equal(resolve(map, el, tree).status, 'hit', el.id);
+    }
   });
 });

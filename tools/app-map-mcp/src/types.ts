@@ -65,12 +65,39 @@ export type BuildNumber = string;
 /** RFC 3339 UTC timestamp, e.g. `2026-09-10T17:02:11Z` */
 export type Timestamp = string;
 
+/**
+ * Pure: is `candidate` a strictly NEWER build than `current`? Build numbers compare numerically
+ * only when both parse as integers (architecture decision 18) — an app that versions its builds
+ * some other way gets `false` and every caller falls back to its conservative branch. An undefined
+ * `current` is older than anything (`import-router` treats "never stamped" as refreshable); an
+ * undefined `candidate` is never newer. `identify.buildsSince` is the decay-flavoured variant: it
+ * answers HOW MANY builds, clamped at zero, for 02 §8 confidence.
+ */
+export function isNewerBuild(candidate: BuildNumber | undefined, current: BuildNumber | undefined): boolean {
+  if (candidate === undefined) return false;
+  if (current === undefined) return true;
+  const a = Number(candidate);
+  const b = Number(current);
+  if (!Number.isInteger(a) || !Number.isInteger(b)) return false;
+  return a > b;
+}
+
 // =============================================================================================
 // Closed vocabularies
 // =============================================================================================
 
 export const ELEMENT_KINDS = ['button', 'field', 'list', 'cell', 'toggle', 'tab', 'picker', 'link', 'text', 'sheet'] as const;
 export type ElementKind = (typeof ELEMENT_KINDS)[number];
+
+/**
+ * `ids.yaml` `kind` (01 R2) → tree `role` (02 §3). Identical spellings apart from `text` →
+ * `staticText`. Used by `roleHintsFor` to give a capture that carries no element type at all
+ * (the real Argent flat shape, 03 §5) the role the registry already declares.
+ */
+export const ROLE_FOR_KIND: Readonly<Record<ElementKind, Role>> = {
+  button: 'button', field: 'field', list: 'list', cell: 'cell', toggle: 'toggle',
+  tab: 'tab', picker: 'picker', link: 'link', text: 'staticText', sheet: 'sheet',
+};
 
 /** Normalized accessibility roles shared by both platforms (schema `role` enum). */
 export const ROLES = [
@@ -311,6 +338,16 @@ export interface Signature {
 export interface ScreenMeta {
   sources: ScreenSource[];
   status: ScreenStatus;
+  /**
+   * The status a `name_screen` force-re-learn overrode (02 §8, issue #16). It sits directly above
+   * `reviewed_by` for the reason `provenance.machine_recompile` does (issue #13): read together,
+   * the two lines say "this screen's data was re-learned over a `verified` one — the signature
+   * below is from after that, the reviewer above it signed something else". A human
+   * `mark {screen_id, reviewer}` clears it.
+   */
+  relearned_from?: ScreenStatus;
+  /** the human who last marked this screen by hand (07 §7); recipes carry theirs in `provenance.reviewed_by` */
+  reviewed_by?: string;
   last_verified_build?: BuildNumber;
 }
 
@@ -361,7 +398,21 @@ interface StepBase {
 export interface StepTap extends StepBase { action: 'tap'; element: ElementId }
 /** `text` is literal static copy or a `{param}` slot */
 export interface StepType extends StepBase { action: 'type'; element: ElementId; text: string }
-export interface StepSelect extends StepBase { action: 'select'; list: ElementId; match: { text: string } }
+/**
+ * `select` picks one row out of repeated content (04 §3.3) and comes in two forms, distinguished
+ * by the element the step names:
+ *  - `list`: the row is chosen WITHIN a container that is itself an accessibility element (a
+ *    UIKit table/collection, a Compose lazy list). The original form.
+ *  - `cell`: every row carries the SAME registered id (01 R4) and the row is chosen by its label.
+ *    SwiftUI's `List`/`Section`/`ForEach` are not accessibility elements, so the container never
+ *    reaches the driver at all and no list id can ever be registered for it (01 R4, issue #19) —
+ *    this is the only form such a screen can express, and it is what 04 §3.3's "tap on a dynamic
+ *    cell → `select` with `match.text`" describes.
+ * Both carry the same `match.text`; `selectTarget` is the one accessor for "which element".
+ */
+export interface StepSelectInList extends StepBase { action: 'select'; list: ElementId; match: { text: string } }
+export interface StepSelectCell extends StepBase { action: 'select'; cell: ElementId; match: { text: string } }
+export type StepSelect = StepSelectInList | StepSelectCell;
 export interface StepSwipe extends StepBase { action: 'swipe'; direction: SwipeDirection; element?: ElementId; duration_ms?: number }
 export interface StepOpenLink extends StepBase { action: 'open_link'; url: string }
 /** `expect` is required for wait_for */
@@ -379,6 +430,15 @@ export interface RecipeProvenance {
   compiled_from: string;
   /** `app-map-mcp@<semver>` */
   compiled_by: string;
+  /**
+   * `true` when this version's STEPS were rebuilt by the automatic 04 §8 recompile rather than
+   * authored or approved by a human (issue #13 criterion 4). It is the in-file half of the
+   * signal `export` prints at the terminal: in a PR diff `+  machine_recompile: true` sitting
+   * above a carried-over `reviewed_by` says, without the reviewer having to know what a changed
+   * `compiled_from` implies, that the signature below it is historical. Cleared when a human
+   * signs the recipe again (`markRecipe` with a `reviewer`, 07 §7).
+   */
+  machine_recompile?: boolean;
   reviewed_by?: string;
   /** previous version this revision was compiled from (04 §8) */
   revision_of?: number;
@@ -475,7 +535,13 @@ export interface TreeNode {
   children: TreeNode[];
 }
 
-export const TREE_SOURCES = ['argent', 'maestro', 'normalized', 'synthetic'] as const;
+/**
+ * Which driver the tree was normalized from. `argent` is the real `@swmansion/argent`
+ * `native-describe-screen` flat capture; `xcuitest` is the nested XCUITest-like snapshot some
+ * other drivers emit (tree.ts header, issue #10). Informational only — nothing keys behaviour
+ * off it, so trees written by an older build that spelled the nested shape `argent` stay legible.
+ */
+export const TREE_SOURCES = ['argent', 'maestro', 'normalized', 'synthetic', 'xcuitest'] as const;
 export type TreeSource = (typeof TREE_SOURCES)[number];
 
 /** A raw (unscrubbed) normalized tree. Must never be written to disk (03 §7). */
@@ -558,10 +624,29 @@ export interface ObservedSignature {
 export interface DriverInput {
   id?: string;
   text?: string;
+  /** a named key rather than text (Argent `keyboard --key return`): no step expresses it (04 §3.3) */
+  key?: string;
   url?: string;
+  /**
+   * the swipe direction when the driver names one. Argent's `gesture-swipe` does NOT: it takes
+   * the coordinate pair below and no direction flag at all (docs/dev/harness-notes.md §2), so on
+   * that driver `direction` is absent and the coordinates are the only evidence of which way the
+   * finger went (04 §3.3, `recipes/compile.ts` `swipeDirection`).
+   */
   direction?: SwipeDirection;
+  /** the point a tap/press addressed (`observe.resolveActedElement`) */
   x?: number;
   y?: number;
+  /**
+   * a swipe's start and end point. Argent spells these `--fromX/--fromY/--toX/--toY`, **not**
+   * `startX/startY/endX/endY` (harness-notes §2); `recipes/compile.ts` `swipeDirection` also
+   * accepts the `start*`/`end*` and snake_case spellings other drivers use, via the index
+   * signature below.
+   */
+  fromX?: number;
+  fromY?: number;
+  toX?: number;
+  toY?: number;
   index?: number;
   [k: string]: unknown;
 }
@@ -890,7 +975,8 @@ export interface RunStepRecord {
 }
 
 /**
- * 07 §3 debug-endpoint record (iOS: `defaults read <bundle> app_map_debug_probe`; Android
+ * 07 §3 debug-endpoint record (iOS: the `app_map_debug_probe` UserDefaults record, read via
+ * `defaults export` or the app's container plist — see `recipes/guided.ts`; Android
  * `run-as … files/app_map_debug_probe.json`). Besides the Release/sandbox gate it is the only
  * source of the 02 §4.3 variant facts (`flags`, `auth`, `platform_version`); the last successful
  * probe is cached on `AppMapContext.probe` and turned into `IdentifyOptions.conditions` by
@@ -1112,6 +1198,13 @@ export interface LoadedMap {
    * surface this instead of letting it look like a clean load (03 §5, 03 §7).
    */
   stringTablePresent: boolean;
+  /**
+   * 02 §10 warnings that survived the load — errors throw `invalid_map`, warnings ride along
+   * (issue #12). Empty under `loadMap({validate:false})`. `formatSummary` surfaces the rule 2
+   * candidate carve-out from here so a seeded-but-unexplored map is discoverable on the SERVER
+   * path too, not only in `app-map validate` output.
+   */
+  validationWarnings: ValidationIssue[];
   /** git tree hash of `app-map/` at load time (03 §4 reload check); `undefined` outside a git repo */
   treeHash?: string;
   /** effective build number (config, driver or manifest) */
@@ -1171,8 +1264,22 @@ export interface NameScreenInput {
   /** must equal the registry's `deep_link` when both are present, else `none` */
   deep_link?: string;
   session?: SessionId;
+  /**
+   * Re-learn a screen that is no longer `candidate` (02 §8, issue #16): the signature is rebuilt
+   * from this observation, `meta.status` drops back to `candidate` and `meta.relearned_from`
+   * records what was overridden. Without it a non-candidate screen is `bad_input`.
+   */
+  force?: boolean;
 }
-export interface NameScreenResult { screen: ScreenFile; created: boolean; from_seq: number; /** element ids found on the snapshot */ elements: ElementId[] }
+export interface NameScreenResult {
+  screen: ScreenFile;
+  created: boolean;
+  from_seq: number;
+  /** element ids found on the snapshot */
+  elements: ElementId[];
+  /** set only when `force` overrode a non-candidate screen; the status it had (issue #16) */
+  relearned_from?: ScreenStatus;
+}
 export interface CompileRecipeInput {
   session: SessionId;
   task: string;
@@ -1191,7 +1298,7 @@ export interface CompileRecipeInput {
   /** end of the task slice (inclusive); defaults to the session's `task_end_seq` (finishTask) or the last observation */
   to_seq?: number;
 }
-/** `mark_recipe` tool input (03 §8, 04 §3.8, 07 §7). */
+/** `mark {recipe_id, …}` tool input (03 §8, 04 §3.8, 07 §7). */
 export interface MarkRecipeInput {
   recipe_id: RecipeId;
   status: RecipeStatus;
@@ -1210,9 +1317,42 @@ export type CompileRecipeResult =
   | { ok: true; recipe: RecipeFile; /** canonical YAML for review */ yaml: string; collapsed_observations: number; warnings: string[] }
   | { ok: false; reason: 'unparameterized_value' | 'no_task' | 'no_observations' | 'loops_never_converge' | 'missing_postcondition' | 'unknown_screen'; message: string; offending_values?: string[] };
 export interface MarkRecipeResult { recipe_id: RecipeId; from: RecipeStatus | null; to: RecipeStatus; written: boolean }
+/** `mark {screen_id, status, reviewer?, force?}` tool input (03 §8, 02 §8, issue #16). */
+export interface MarkScreenInput {
+  screen_id: ScreenId | GateId;
+  status: ScreenStatus;
+  /** recorded in `meta.reviewed_by`; REQUIRED to hand-sign `verified` (07 §7) */
+  reviewer?: string;
+  /** hand-sign `verified`, which is otherwise earned by a clean observation (02 §8, 08 §5 row 5) */
+  force?: boolean;
+}
+export interface MarkScreenResult {
+  screen_id: ScreenId | GateId;
+  from: ScreenStatus;
+  to: ScreenStatus;
+  written: boolean;
+  /** recipes retired by the 02 §8 cascade (`status: retired` only) */
+  retired_recipes: RecipeId[];
+}
+/** How one written path was produced (03 §4 write path, 04 §8 recompile guard — issue #13). */
+export interface ExportWrite {
+  /** relative path; the same string appears at the same index in `ExportResult.written` */
+  path: string;
+  /** the `DirtyRow.reason` behind the write (`heal`, `verify`, `mark_recipe:ci_gate`, `mark_screen:candidate`, `name_screen:force`, `recompile:<trigger>`, …) */
+  reason: string;
+  /**
+   * True when this file's CONTENT was rebuilt by an automated recompile (04 §8) rather than
+   * authored by a human, healed, or merely canonicalised — `db.isMachineRecompile(reason)`. The
+   * same "wrote x.yaml" line means something very different in the two cases, and a reviewer
+   * reading a PR diff needs to be told which one this was (issue #13 criterion 4).
+   */
+  machine_recompile: boolean;
+}
 export interface ExportResult {
   /** relative paths written */
   written: string[];
+  /** one entry per `written` path, in the same order, saying how that write was produced (04 §8) */
+  written_from: ExportWrite[];
   /** relative paths unlinked (02 §8 purge of a screen retired on an earlier release) */
   deleted: string[];
   /** paths skipped because unchanged */
@@ -1222,6 +1362,33 @@ export interface ExportResult {
   /** `--check` mode: paths whose canonical form differs from disk (06 R1) */
   non_canonical: string[];
 }
+
+/**
+ * 04 §10 / issue #18: the platforms whose driver reports FOCUS in the accessibility tree it hands
+ * the harness, so `expect.focused` (02 §6) is a verification there rather than a guaranteed
+ * fallback.
+ *
+ * - **android** — Maestro's hierarchy carries a `focused` attribute on every node, which
+ *   `tree.ts`'s maestro branch reads straight into `ScrubbedNode.focused`.
+ * - **ios** — Argent's `native-describe-screen` exposes `frame`, `normalizedFrame`, `tapPoint`,
+ *   `normalizedTapPoint`, `traits`, `value`, `identifier` and `viewClassName`, and nothing else.
+ *   `traits` carries `button`/`staticText`/`header`/`image`/`selected` — never a focus trait, and
+ *   there is no `hasFocus`/`focused` key (tree.ts §1, harness-notes §2). A tap can focus a field
+ *   and raise the keyboard and the snapshot still says nothing, so an `expect.focused` on iOS can
+ *   never be satisfied and every replay of that step falls back with `expect_failed`.
+ *
+ * ONE list, so `validate` (02 §10 rule 2) and the compiler's postconditions (04 §3.6) can never
+ * disagree about what a platform is able to verify. It states the rule — "does this driver report
+ * focus" — rather than hard-coding a platform name at each site, so a future iOS driver that does
+ * report focus (XCUITest does) is a one-line change here.
+ */
+export const FOCUS_OBSERVABLE_PLATFORMS: ReadonlySet<Platform> = new Set<Platform>(['android']);
+
+/** Pure: does this platform's driver report focus, so `expect.focused` can be verified? (04 §10) */
+export function focusObservable(platform: Platform): boolean {
+  return FOCUS_OBSERVABLE_PLATFORMS.has(platform);
+}
+
 export interface ValidationIssue {
   /** 02 §10 rule number (1–8) */
   rule: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
@@ -1233,6 +1400,44 @@ export interface ValidationIssue {
   message: string;
 }
 export interface ValidateResult { ok: boolean; issues: ValidationIssue[]; files_checked: number }
+
+/**
+ * 02 §10 rule 2's "exploration has not reached this yet" carve-out (issue #12). An edge element
+ * that IS registered in `ids.yaml` but is not yet declared on its own screen is a WARNING while
+ * something the lifecycle is guaranteed to fill in is still missing — erroring instead deadlocks
+ * setup: the map will not load, so no observation can be ingested, so `name_screen` can never
+ * populate `elements[]`. Producer and predicate live together so the message text cannot drift
+ * from the matcher (the `compile.collapseWarning` / `compile.isCollapseWarning` pattern); never
+ * match the text anywhere else.
+ */
+export const UNLEARNED_EDGE_ELEMENT = 'is not declared on this screen yet';
+
+/**
+ * WHICH subject of 02 §10 rule 2 exploration has not reached (issue #12):
+ * `screen` — an untouched router seed (`meta.status: candidate` with `elements: []`, 01 R6);
+ * `element` — a still-`candidate` edge whose element no capture has produced on any screen, which
+ * is what a build N+1 router refresh adds to an already-explored screen when the app registered a
+ * brand-new id;
+ * `refresh` — a still-`candidate` edge on a router-written screen whose `elements[]` was captured
+ * on an EARLIER build than the one the manifest names, so that capture could not have contained
+ * the id whatever it is (shared chrome another screen already declares lands here).
+ */
+export type UnlearnedEdgeElementReason = 'screen' | 'element' | 'refresh';
+
+/** The 02 §10 rule 2 WARNING message for an edge element `reason` says is not learned here yet. */
+export function unlearnedEdgeElementMessage(element: ElementId, reason: UnlearnedEdgeElementReason = 'screen'): string {
+  const why = reason === 'screen'
+    ? 'the screen is a candidate with no elements'
+    : reason === 'element'
+      ? 'the edge is a candidate and no capture has produced this id on any screen'
+      : 'the edge is a candidate the router added after this screen was last captured';
+  return `edge element ${element} ${UNLEARNED_EDGE_ELEMENT} — ${why}; explore it and call name_screen (01 R6 seeds, 03 §5 learns)`;
+}
+
+/** Pure: is this the warning `unlearnedEdgeElementMessage` produces? (summary/report consumers) */
+export function isUnlearnedEdgeElement(i: ValidationIssue): boolean {
+  return i.rule === 2 && i.severity === 'warning' && i.message.includes(UNLEARNED_EDGE_ELEMENT);
+}
 export interface MigrateIdResult { old_id: ElementId | ScreenId; new_id: string; files_changed: string[]; references: number }
 export interface ImportRouterResult {
   created: ScreenId[];
@@ -1330,11 +1535,15 @@ export function routeKey(url: string): string {
   const q = url.indexOf('?');
   return q < 0 ? url : url.slice(0, q);
 }
+/** the element a `select` addresses: the container (`list`) or the repeated row (`cell`, issue #19) */
+export function selectTarget(step: StepSelect): ElementId {
+  return 'cell' in step ? step.cell : step.list;
+}
 /** the element a step acts on, if any */
 export function stepElement(step: RecipeStep): ElementId | undefined {
   switch (step.action) {
     case 'tap': case 'type': return step.element;
-    case 'select': return step.list;
+    case 'select': return selectTarget(step);
     case 'swipe': return step.element;
     default: return undefined;
   }
@@ -1347,6 +1556,46 @@ export function edgeElement(action: EdgeAction): ElementId | undefined {
     default: return undefined;
   }
 }
+/**
+ * Pure: a `Condition` as one log-safe line (`auth=logged_in`, `flag=beta,value=true`); 02 §4.1
+ * key order, and total over all five fields, so equal keys are equal conditions.
+ *
+ * It lives here rather than beside its first caller because BOTH sides of the 04 §8 recompile
+ * have to agree on it: `recipes/compile.ts` dedupes the conditions it carries forward on this
+ * key, and `recipes/lifecycle.recompileCoversEntry` refuses a rebuild that dropped one on the
+ * same key. Two notions of "the same condition" would let a carried-forward condition read as a
+ * dropped one.
+ */
+export function conditionKey(c: Condition): string {
+  const order: Array<keyof Condition> = ['auth', 'screen', 'flag', 'value', 'platform_version'];
+  return order.filter((k) => c?.[k] !== undefined).map((k) => `${k}=${String(c[k])}`).join(',');
+}
+/** cached per registry instance: ingest re-normalizes on every driver call (03 §11, <50 ms) */
+const ROLE_HINTS = new WeakMap<object, ReadonlyMap<ElementId, Role>>();
+
+/**
+ * The registry's `kind`s as tree roles, for drivers whose capture carries no element type at all
+ * (03 §5: the flat Argent shape has only `traits`/`viewClassName`). `tree.ts` is a pure tree
+ * layer that must work without a loaded map, so the *policy* — "a registered id is whatever
+ * `ids.yaml` says it is" — is computed here and handed to `normalizeTree` as plain data; the
+ * tree layer consults it only for the shape that has no type of its own, and never lets a hint
+ * demote a more specific derived role (`field` never overwrites `searchField`).
+ */
+export function roleHintsFor(map: LoadedMap): ReadonlyMap<ElementId, Role> {
+  const registry = map.elementRegistry;
+  let hints = ROLE_HINTS.get(registry);
+  if (hints === undefined) {
+    const built = new Map<ElementId, Role>();
+    for (const [id, entry] of registry) {
+      const role = ROLE_FOR_KIND[entry.kind];
+      if (role !== undefined) built.set(id, role);
+    }
+    hints = built;
+    ROLE_HINTS.set(registry, hints);
+  }
+  return hints;
+}
+
 export function isScrubbed(t: AnyTree): t is ScrubbedTree {
   return t.scrubbed === true;
 }

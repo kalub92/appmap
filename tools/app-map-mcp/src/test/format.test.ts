@@ -1,10 +1,12 @@
 /** [B2] format.ts — get_screen block (03 §8), summary (03 §8, decision 25), SessionStart preamble (05 §3), step/fallback/candidate lines (04 §4–5). */
 import assert from 'node:assert/strict';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parse } from 'yaml';
 import { after, before, describe, it } from 'node:test';
-import type { ElementDef, LoadedMap, RecipeFile, ScreenFile } from '../types.ts';
+import type { ElementDef, IdsRegistry, LoadedMap, RecipeFile, ScreenFile } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
+import { canonicalYaml } from '../yaml/canonical.ts';
 import { loadMap } from '../yaml/load.ts';
 import { TRUNCATION_MARKER, estimateTokens } from '../token.ts';
 import {
@@ -183,6 +185,38 @@ describe('formatSummary — a missing static string table is visible (03 §5 ste
       const without = loadMap(t2.config);
       assert.equal(without.stringTablePresent, false);
       assert.match(formatSummary(without).text, /strings\.ios\.txt is missing/);
+    } finally {
+      t2.cleanup();
+    }
+  });
+});
+
+describe('formatSummary — a router-seeded screen that has not been explored is visible (02 §10 rule 2, issue #12)', () => {
+  it('names the screens whose edges reference elements not learned yet, and says nothing on a clean map', () => {
+    const t2 = makeTempAppMapDir();
+    try {
+      // the pilot has no seeds, so the line must not appear — it is conditional, not decoration
+      assert.doesNotMatch(formatSummary(loadMap(t2.config)).text, /not learned yet/);
+      const idsPath = join(t2.dir, 'ids.yaml');
+      const ids = parse(readFileSync(idsPath, 'utf8')) as IdsRegistry;
+      ids.screens.push({ id: 'settings', title: 'Settings', deep_link: 'appmap://settings' });
+      ids.screens.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      writeFileSync(idsPath, canonicalYaml('ids', ids));
+      const seed: ScreenFile = {
+        id: 'settings', kind: 'screen', title: 'Settings', deep_link: 'appmap://settings',
+        signature: { marker: 'screen.settings', route: 'appmap://settings', nav_class: 'SettingsView' },
+        elements: [],
+        edges: [
+          { action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list', status: 'candidate' },
+          { action: { type: 'tap', element: 'invoice.list.cell' }, to: 'invoice_detail', status: 'candidate' },
+        ],
+        meta: { sources: ['router_export'], status: 'candidate' },
+      };
+      writeFileSync(join(t2.dir, 'ios/screens/settings.yaml'), canonicalYaml('screen', seed));
+      const seeded = loadMap(t2.config);
+      const text = formatSummary(seeded).text;
+      assert.match(text, /warning: 2 edge\(s\) on settings reference elements not learned yet/, text);
+      assert.match(text, /name_screen \(02 §10 rule 2\)/, text);
     } finally {
       t2.cleanup();
     }

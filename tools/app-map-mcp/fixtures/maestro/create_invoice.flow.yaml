@@ -9,7 +9,6 @@ appId: com.example.app
     id: invoice.amount.field
 - assertVisible:
     id: invoice.amount.field
-    focused: true
 - tapOn:
     id: invoice.amount.field
 - inputText: "50"

@@ -471,7 +471,8 @@ function entityIntentCriticalIds(doc: ScreenFile | RecipeFile | undefined, regis
   }
   if ('steps' in doc && Array.isArray(doc.steps)) {
     for (const step of doc.steps) {
-      const id = (step as { element?: unknown; list?: unknown }).element ?? (step as { list?: unknown }).list;
+      // both `select` forms, duck-typed because this reads YAML parsed at a git ref (issue #19)
+      const id = (step as { element?: unknown }).element ?? (step as { list?: unknown }).list ?? (step as { cell?: unknown }).cell;
       if (typeof id !== 'string') continue;
       if ((step as { intent_critical?: unknown }).intent_critical === true || registryCritical.has(id)) out.add(id);
     }
@@ -485,7 +486,7 @@ function entityFragment(doc: ScreenFile | RecipeFile | undefined, id: ElementId)
   const parts: unknown[] = [];
   if ('elements' in doc && Array.isArray(doc.elements)) parts.push(...doc.elements.filter((e) => e?.id === id));
   if ('steps' in doc && Array.isArray(doc.steps)) {
-    parts.push(...doc.steps.filter((s) => (s as { element?: unknown }).element === id || (s as { list?: unknown }).list === id));
+    parts.push(...doc.steps.filter((s) => (s as { element?: unknown }).element === id || (s as { list?: unknown }).list === id || (s as { cell?: unknown }).cell === id));
   }
   return parts.length > 0 ? parts : undefined;
 }

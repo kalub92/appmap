@@ -24,7 +24,8 @@ steps:
     action: tap
     element: invoice.amount.field
     expect:
-      focused: invoice.amount.field
+      visible:
+        - invoice.amount.field
   - id: s2
     action: type
     element: invoice.amount.field

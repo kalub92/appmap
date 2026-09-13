@@ -25,8 +25,66 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
   `permissionMode`, `maxTurns`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, …
 - `tools` accepts MCP patterns: `mcp__argent` (whole server) and `mcp__argent__*` (all tools of a
   server). Per-tool globs beyond that are not documented, so `.claude/agents/app-nav-replayer.md`
-  lists the tools explicitly exactly as 05 §5 does. Confirm Argent's actual tool names (`tap`,
-  `type_text`, `open_url`, `swipe`) against `@swmansion/argent@0.25.0` on first run.
+  lists the tools explicitly exactly as 05 §5 does. Both files named `tap`/`type_text`/`open_url`/
+  `swipe` until issue #21 — i.e. the replayer subagent as shipped could not tap, type, swipe or
+  open a deep link — and both now carry the real names below. `verbs.test.ts` pins them to
+  `ARGENT_VERBS` so the two cannot drift apart again.
+- **Argent's tool names are confirmed** against `@swmansion/argent@0.25.0` (`argent tools`,
+  76 tools). This table is what issues #9 and #10 depend on:
+
+  | purpose | actual tool name |
+  |---|---|
+  | tap | `gesture-tap` |
+  | type text | `keyboard` (`--text` types; `--key` presses a named key) |
+  | paste text | `paste` |
+  | swipe | `gesture-swipe` — flags are `fromX`/`fromY`/`toX`/`toY`, **not** `startX`/`startY`/`endX`/`endY`, and there is **no direction flag at all** |
+  | scroll (**Chromium only**) | `gesture-scroll` |
+  | open a URL / deep link | `open-url` |
+  | launch / restart | `launch-app`, `restart-app`, `reinstall-app` |
+  | read the tree | `describe`, `native-describe-screen`, `native-full-hierarchy` |
+  | screenshot | `screenshot` |
+  | wait | `await-ui-element`, `await-screen-idle` |
+  | hardware button | `button` |
+  | batch several actions | `run-sequence` |
+  | network log | `native-network-logs`, `view-network-logs` |
+
+  Neither `type_text` nor `open_url` exists. Note the **hyphens**: the pre-#9 compile regexes
+  assumed underscores, so `keyboard` and `open-url` observations were dropped from compiled
+  recipes in silence (issue #9). The compiler's mapping now lives in
+  `tools/app-map-mcp/src/recipes/verbs.ts` (`ARGENT_VERBS`). `normalizeVerb` folds `-` to `_`
+  before the lookup, so the *classifier* treats `open-url` and `open_url` alike — but the
+  **registered** spelling is hyphenated, and that is the only spelling a `tools:` frontmatter
+  entry or a `--` flag may use, because the harness matches those literally.
+- **`gesture-swipe` names no direction**, only the coordinate pair above, while 02 §6's `swipe`
+  step is `{direction: up|down|left|right}`. The compiler therefore DERIVES the direction from the
+  pair (`recipes/compile.ts` `swipeDirection`): the axis with the larger |delta| wins and its sign
+  picks the direction, with screen coordinates growing down/right and the direction being the one
+  the finger travelled (`toY < fromY` is `up`). Until that conversion existed the compiler wrote
+  `direction: obs.input.direction ?? 'up'` and no `fromX`→direction code existed anywhere, so
+  EVERY swipe compiled to "swipe up": a React Native carousel swiped left and a UIKit row swiped
+  to reveal Delete both replayed as a swipe up, nothing moved, and an inherited "screen unchanged"
+  postcondition passed. A swipe with neither a usable `direction` nor a usable coordinate pair is
+  now dropped with a warning — never given an assumed direction.
+- **A gesture Argent does not register still has to classify.** `ARGENT_VERBS` lists only the two
+  non-tap gestures this table names (`button`, `tv-remote`), so a driver tool called `long-press`,
+  `double-tap` or `touch-and-hold` falls to `verbs.ts`'s generic patterns — where the tap test is
+  a bare `tap|click|press|touch` substring match and used to swallow all three. `HOLD_RE` and
+  `BACK_RE` are tested before it and classify them `unsupported`, together with Android's system
+  Back (`back`, `go-back`, `press-back`, `key-event`, `keycode`): Back changes the screen and 02 §6
+  has no step for it, so it must be dropped *and warned about*, not silently skipped.
+- **Every Argent tool requires `--udid`.** There is no implicit "booted device".
+- **`run-sequence` performs N interactions in one tool call**, so one observation can correspond
+  to several steps. That is exactly why `ARGENT_VERBS` classifies it `batch` and the compiler
+  rejects it with a warning rather than guessing: an observation carries one screen pair and one
+  element (02 §7), so the per-step postconditions of 04 §3.6 cannot be reconstructed from it.
+- **`native-describe-screen` reports no focus and no enabled flag.** Each element carries exactly
+  `frame`, `normalizedFrame`, `normalizedTapPoint`, `tapPoint`, `traits`, `value`, `identifier`,
+  `viewClassName`; `traits` carries `button`, `staticText`, `header`, `image`, `selected` and
+  never a focus trait. There is no `hasFocus` and no `focused` key, so nothing in an iOS capture
+  can tell the harness that a tap focused a field and raised the keyboard. `expect.focused` is
+  therefore Android/Maestro-only — `validate` warns on one in an `ios` recipe and the compiler
+  writes `visible` instead (04 §10, issue #18). The `focused`/`enabled` fields `tree.ts` reads
+  belong to the nested XCUITest-like shape and to Maestro's hierarchy, not to Argent.
 
 ## 3. Verified against https://code.claude.com/docs/en/skills
 
@@ -42,7 +100,7 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
 | `app-map summary --max-tokens N [--hook-json]` | session-start hook | plain text on stdout, exit 0. With `--hook-json` the CLI prints the whole 05 §3 envelope (`{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":…}}`) with the summary **and** the fixed preamble inside — that is what the hook uses, so the preamble exists in exactly one place. Without the flag the hook has no way to render the preamble itself (see D3). |
 | ingest socket `app-map/.local/ingest.sock` | record hook | newline-delimited JSON, one hook payload per line, exactly as Claude Code sent it (`tool_response` or `tool_error`). **Close the connection after reading the line** so `nc -U` exits immediately (it has a 2 s idle cap otherwise). |
 | `app-map record --stdin` | record hook fallback | reads one JSON line from stdin; exit code ignored. Must accept `PostToolUseFailure` payloads (`tool_error`, no `tool_response`). |
-| `app-map export` (no `--force`) | stop hook | prints written file paths, one per line; non-zero + diff on the 03 §4 conflict. Output is relayed to stderr. |
+| `app-map export` (no `--force`) | stop hook | prints written file paths, one per line; non-zero + diff on the 03 §4 conflict. Output is relayed to stderr. A file whose steps came from an automated recompile (04 §8) is named on **stderr** as `machine recompile: <path> (<reason>)` — stdout stays a bare path list so the hook's parser is unaffected (issue #13). |
 | `app-map validate`, `export --check`, `lint-ids`, `gen-configs --check`, `policy-check`, `intent-critical-diff <base-sha> --markdown`, `drift --platform P --router F --out F`, `maestro-export --platform P --status S --out D`, `run --all [--platform P] --status S --headless --report F`, `import-router F` | CI workflow | names/flags as in 06 §3; `policy-check` is the 06 R3 job and `intent-critical-diff` the 07 §7 one (neither is in the 03 §10 table). `drift` prints the 06 R4.4 table on stdout (the PR comment is `tee`'d from it) and exits non-zero only when a `ci_gate` screen is broken. `intent-critical-diff` exits **1** for "an element was downgraded" and other codes for usage/git failures — the workflow distinguishes them. |
 | `scripts/app-map/ci-params.sh --platform P` | CI workflow | writes `app-map/.local/ci-params.<platform>.json` from `$APP_MAP_CI_PARAMS`, `app-map/ci-params.<platform>.json` or `instrumentation/<platform>/fixtures/ci-params.json`. `maestro-export` and `run --all` refuse to guess param values (architecture §7 decision 36), so this step must precede both. |
 | `heal-report.json` | `scripts/app-map/open-heal-pr.sh` | as `app-map/schema/heal-report.schema.json`: `heals[]` = accepted (exported), `needs_human[]` = rejected, `runs[]` per recipe; each heal has `old_strategy`/`new_strategy`, optional `old_locator`/`new_locator {strategy, value, weight}`, `score`, `runner_up_score`, `reason` enum, `intent_critical`, `build`. The PR body renders exactly those. Contains ids and scores only (07 §2.4). |
@@ -78,7 +136,10 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
 - **D5 — router-export.sh handles Android too** (`--platform android`, via the export broadcast) so the
   Android CI job mirrors iOS with one script.
 - **D6 — AppMapDebugEndpoint is a UserDefaults probe, not an HTTP endpoint** (07 §3 leaves the transport
-  open). Read with `xcrun simctl spawn <udid> defaults read <bundle_id> app_map_debug_probe`.
+  open). Read with `xcrun simctl spawn <udid> defaults export <bundle_id> - | plutil -convert json -o - -`,
+  falling back to `plutil -convert xml1 -o - "$(xcrun simctl get_app_container <udid> <bundle_id> data)/Library/Preferences/<bundle_id>.plist"`
+  — on iOS 26 `defaults` no longer resolves a sandboxed app's domain, and `-convert json` refuses any
+  domain holding a `Data` value (#11).
 - **D8 — gen-ids naming rules.** 01 R2 says screens are `snake_case`; `app-map/schema/ids.schema.json` encodes that as `^[a-z][a-z0-9_]*$` and gates as `^gate\.[a-z0-9_]+$`. `gen-ids` and the deep-link parsers use exactly those patterns; the `<feature>.<name>.<kind>` three-segment rule for elements is a warning, not an error, because the schema does not require it.
 - **D7 — Android deep link entry.** 01 R5 says the handler routes through the real router; the library
   cannot know the app's activity, so a debug-only transparent trampoline activity owns the `appmap://`
@@ -86,7 +147,7 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
 
 ## 6. Things to confirm on first real run
 
-- Argent tool names and whether it reports the running build (03 §13) — otherwise set `APP_MAP_BUILD`.
+- Whether Argent reports the running build (03 §13) — otherwise set `APP_MAP_BUILD`. (Its tool names are **confirmed** against the first real integration: see the §2 table, issues #9/#21.)
 - Whether `PostToolUse` can rewrite the driver's tool output (05 §8) — the docs list `updatedInput` for
   PreToolUse only; rely on the driver's snapshot options.
 - Maestro's install script honours `MAESTRO_VERSION` (pinned to 2.10.0 in the workflow; the package

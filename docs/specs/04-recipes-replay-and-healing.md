@@ -18,12 +18,12 @@ Turn one successful exploration into a recipe that replays without the LLM, keep
 
 1. **Slice** observations from task start to the first observation where the LLM's `report_task(ok: true)` or a `verify`-satisfying screen appears.
 2. **Collapse backtracking**: remove `A → B → A` loops where nothing was typed in `B`. Remove repeated identical taps.
-3. **Translate** each observation to a step: tap on element id → `tap`; text entry → `type` on the focused element id; tap on a `dynamic` cell → `select` with `match.text` bound to the typed/selected value; `openLink` → `open_link`.
+3. **Translate** each observation to a step: tap on element id → `tap`; text entry → `type` on the focused element id, or — where the platform's driver reports no focus, which on iOS is always (§10) — on the element the call named, else the last field tapped; the compiler records in `warnings` which rule attached the step, so a target chosen by fallback is never silent; tap on a `dynamic` cell → `select` with `match.text` bound to the typed/selected value — on the enclosing `dynamic` list when the screen declares one, otherwise on the cell itself (`select {cell, match}`), because a SwiftUI list container is not an accessibility element and no list id can ever have been captured (01 R4); `openLink` → `open_link`.
 4. **Parameterize**: any typed or selected value that string-matches a declared `params` argument becomes `{param}`. Values that match nothing stay literal only if they are static copy; otherwise compilation fails with `unparameterized_value` and the LLM is asked to declare the param.
 5. **Entry optimization**: if the first screen where a step is taken has a deep link, replace the leading navigation steps with `entry.deep_link` and keep the navigation as `fallback_path`.
-6. **Postconditions**: each step's `expect` is `screen: <screen_after>` when the screen changed, else `focused`/`visible` inferred from the next observation.
+6. **Postconditions**: each step's `expect` is `screen: <screen_after>` when the screen changed, else `focused`/`visible` inferred from the next observation — `focused` only on a platform that reports focus (§10); elsewhere a newly focused element is written as a `visible` assertion, since an expectation the driver cannot check is not a postcondition.
 7. **Mark** any step touching an `intent_critical` element.
-8. Emit YAML with `status: candidate` and provenance; return it for LLM review. The LLM adds `matches`, `description`, checks params, and calls `mark_recipe(candidate)` to write it. Nothing is written without that call.
+8. Emit YAML with `status: candidate` and provenance; return it for LLM review. The LLM adds `matches`, `description`, checks params, and calls `mark(candidate)` to write it. Nothing is written without that call. A **revision** (`revision_of`) carries the previous recipe's `description`, `matches`, `verify` and `preconditions` forward: §8 recompiles the structure, not the prose, and step 5 can re-derive only one of the conditions a recipe may carry (`{auth: logged_in}`) — a hand-authored `platform_version` or feature-flag condition is unrecoverable from any trajectory.
 
 A recipe that cannot be compiled (loops that never converge, unparameterized values, missing postconditions) fails loudly with the reason; the trajectory stays for a human to inspect.
 
@@ -44,7 +44,7 @@ Protocol between the LLM (or the `app-nav-replayer` subagent, 05 §5) and the se
 LLM   run_recipe(create_invoice, {amount: 50, client: Acme}, mode: guided)
 SRV   → {run_id, step: {id: s0, action: open_link, url: appmap://invoice_new?fixture=logged_in,
                         expect: {screen: invoice_new}}}
-LLM   argent.open_url(...)                     # PostToolUse hook records observation
+LLM   argent.open-url(...)                     # PostToolUse hook records observation
 LLM   report_step(run_id, s0, ok: true)
 SRV   verifies last observation against expect:
         ok   → {step: s1 …}
@@ -81,6 +81,7 @@ Rules:
 | `tap element` | `- tapOn: { id: "<a11y_id>" }` (regex form when the locator is `role_label` with `label_regex`) |
 | `type element text` | `- tapOn: { id }` then `- inputText: "<text>"` |
 | `select list match.text` | `- scrollUntilVisible: { element: { text: "<text>" } }` then `- tapOn: { text: "<text>" }` |
+| `select cell match.text` | the same two commands — neither form addresses the container, so both export identically |
 | `swipe` | `- swipe: { direction, duration }` |
 | `dismiss_gate g` | `- runFlow: { when: { visible: { id: "<gate marker or label regex>" } }, commands: [ - tapOn: { id: "<dismiss>" } ] }` — emitted before every step that lists `g` |
 | `expect screen s` | `- extendedWaitUntil: { visible: { id: "screen.<s>" }, timeout: 10000 }` |
@@ -130,13 +131,58 @@ Rejected → `fallback` to the LLM with the top-3 candidates listed. An `intent_
 
 | transition | condition |
 |---|---|
-| — → `candidate` | `mark_recipe(candidate)` after compile review |
+| — → `candidate` | `mark(candidate)` after compile review |
 | `candidate` → `verified` | ≥3 successful replays (guided or headless) across ≥2 sessions, no unresolved heals |
-| `verified` → `ci_gate` | ≥95% replay success across ≥3 builds; human `mark_recipe(ci_gate)`; CODEOWNERS review (07 §7) |
+| `verified` → `ci_gate` | ≥95% replay success across ≥3 builds; human `mark(ci_gate)`; CODEOWNERS review (07 §7) |
 | any → `candidate` (recompile) | failure rate over the last 10 runs > 50%, or ≥2 heals pending review; the compiler produces a new `version` from the latest successful trajectory |
 | any → `retired` | a referenced screen is retired |
 
 Recipe `version` increments on every structural change (steps, params, entry). Locator heals do not bump the version.
+
+The automatic recompile is **guarded**: it replaces the previous recipe only when all three hold.
+
+1. **No incompleteness warning.** A compile warning that says the rebuild is missing something the
+   run did — a dropped driver call (§3.3), a call that failed and left the slice (§3.1),
+   placeholder prose (§3.8) — blocks the write, including when the missing call was never in the
+   previous recipe (coverage cannot see those). The §3.2 backtracking-collapse note is *not* one
+   of these: collapsing an excursion is what the compiler does to every trajectory by design,
+   including the one the reviewer approved, and anything it removed that the previous recipe needs
+   is caught by name by the coverage rule below. It is reported, not treated as a defect.
+2. **The rebuilt step list covers the previous one** — every previous step still present, in
+   order, matched on `action` plus the element/list/gate/url it acts on (never the data a step
+   carries, so a `{param}` slot and the literal it was compiled from compare equal), with no
+   matched step losing an `expect` assertion or its `intent_critical` mark. Extra steps are fine;
+   a rebuild is allowed to grow, never to shrink. One exemption, narrow and explicit: a previous
+   step whose action §3.3 has no producer for — today only `wait_for`, which §6.2 maps to
+   Maestro's `extendedWaitUntil` and which no driver call translates to — is not "missing", since
+   no rebuild could ever contain one and a step kind with no producer cannot be evidence of
+   erosion. It excuses that kind alone, only where nothing matched, and does not shift the
+   matching of any other step; the exempt step is absent from the recipe the accepted rebuild
+   writes, which the `recipe recompiled` log line names. It disappears on its own the day §3.3
+   learns to emit that kind.
+3. **The rebuilt `preconditions` and `entry` cover the previous ones.** Every previous condition
+   must come back — §3.8 carries them into the revision, because §3.5 re-derives only
+   `{auth: logged_in}` and a rebuild that emitted just what it derived would drop every
+   hand-authored condition and be refused here for ever — and a previous `entry.deep_link` must
+   come back on the same screen with every query parameter it carried — dropping
+   `?fixture=logged_in` is `preconditions: [{auth: logged_in}]` loss in URL form, and a replay
+   whose slice starts after the entry navigation rebuilds the link without it. `entry.fallback_path` is
+   checked only when the previous recipe had no deep link, because §3.5 derives it from whatever
+   leading navigation the slice held.
+
+Otherwise the previous recipe is kept untouched, the refusal is logged and recorded as a `compile`
+event with `ok: false` and a `recompile_refused_*` reason (08 §2), and a diff is surfaced for a
+human to recompile by hand — the same posture as a rejected heal on an `intent_critical` element
+(§7.2). A rebuild can only encode what the driver managed to do, so an unguarded recompile erodes
+recipes towards the subset that always passes.
+
+`provenance.reviewed_by` survives a revision. The demotion to `candidate` stands either way, so a
+`ci_gate` recipe that is recompiled keeps its historical reviewer but must be promoted again by a
+human. Because that signature outlives the steps it was given for, an accepted rebuild also sets
+`provenance.machine_recompile: true` (02 §6) — deleted again when a human signs the recipe with
+`mark(ci_gate, reviewer)`. `APP_MAP_RECOMPILE=off` (03 §3) skips the rebuild entirely:
+replay is then strictly read-only against the map. `export` labels a file written from a machine
+recompile distinctly from one merely canonicalised.
 
 ## 9. Acceptance criteria
 
@@ -149,5 +195,6 @@ Recipe `version` increments on every structural change (steps, params, entry). L
 
 ## 10. Open questions
 
-- Maestro `focused` selectors: confirm support; otherwise `expect.focused` compiles to a `visible` assertion.
+- Maestro `focused` selectors: confirm support; otherwise `expect.focused` compiles to a `visible` assertion (`recipeToMaestroFlow`'s `focusedSelector: false`).
+- **Resolved (issue #18): `expect.focused` is Android/Maestro-only.** Maestro's Android hierarchy carries a `focused` attribute on every node, so the assertion is checkable there. Argent's iOS `native-describe-screen` exposes only `frame`, `normalizedFrame`, `tapPoint`, `normalizedTapPoint`, `traits`, `value`, `identifier` and `viewClassName`; `traits` carries `button`/`staticText`/`header`/`image`/`selected` and never a focus trait, and there is no `hasFocus`/`focused` key. A tap can focus a field and raise the keyboard and the snapshot still says nothing, so an `expect.focused` on `platform: ios` can never be satisfied and every replay of that step falls back with `expect_failed`. `app-map validate` warns on one (02 §10 rule 2), §3 step 6 writes `visible` instead, and the key stays in the schema because Maestro satisfies it. One list — `types.FOCUS_OBSERVABLE_PLATFORMS` — says which platforms report focus, so the validator and the compiler cannot disagree.
 - Whether headless runs should share the simulator with an active Argent session; default no — headless runs use their own booted simulator UDID (`APP_MAP_SIM_UDID`).

@@ -57,9 +57,10 @@ describe('recipeToMaestroFlow — the 04 §6.2 mapping table', () => {
       // entry: open_link + expect screen (04 §5 step 5, 04 §6.2 rows 1 and 7)
       { openLink: 'appmap://invoice_new?fixture=logged_in' },
       { extendedWaitUntil: { visible: { id: 'screen.invoice_new' }, timeout: 10000 } },
-      // s1 tap + expect focused (04 §10: `focused: true` selector)
+      // s1 tap + expect visible (the ios pilot asserts `visible`, not `focused`: Argent reports
+      // no focus, so `focused` there could never be satisfied — issue #18, 04 §10)
       { tapOn: { id: 'invoice.amount.field' } },
-      { assertVisible: { id: 'invoice.amount.field', focused: true } },
+      { assertVisible: { id: 'invoice.amount.field' } },
       // s2 type = tapOn + inputText with `{amount}` substituted
       { tapOn: { id: 'invoice.amount.field' } },
       { inputText: '50' },
@@ -80,6 +81,25 @@ describe('recipeToMaestroFlow — the 04 §6.2 mapping table', () => {
     assert.deepEqual(flow.command_index, { s0: 0, s1: 2, s2: 4, s3: 6, s4: 8, s5: 11 });
   });
 
+  it('a `select` by cell exports to the same scroll-and-tap-by-text commands and stays headless-eligible (04 §6.2, issue #19)', () => {
+    const recipe = map.recipes.get('create_invoice');
+    assert.ok(recipe);
+    // neither form addresses the container, so the cell form needs no export code of its own
+    const cellForm: RecipeFile = {
+      ...recipe,
+      steps: recipe.steps.map((st) => (st.id === 's4'
+        ? { id: 's4', action: 'select', cell: 'client.picker.cell', match: { text: '{client}' }, expect: { screen: 'invoice_new' } }
+        : st)),
+    };
+    const flow = recipeToMaestroFlow(remap(map, { recipes: [cellForm] }), cellForm, PARAMS);
+    assert.equal(flow.eligible, true);
+    assert.deepEqual(flow.ineligible_steps, []);
+    const cmds = parse(flow.flow.split('\n---\n')[1] as string) as Array<Record<string, unknown>>;
+    assert.deepEqual(cmds[8], { scrollUntilVisible: { element: { text: 'Acme Corp' } } });
+    assert.deepEqual(cmds[9], { tapOn: { text: 'Acme Corp' } });
+    assert.deepEqual(flow.command_index, { s0: 0, s1: 2, s2: 4, s3: 6, s4: 8, s5: 11 }, 'byte-identical to the list form');
+  });
+
   it('maps a failing command index back to its step (04 §6.1)', () => {
     const recipe = map.recipes.get('create_invoice');
     assert.ok(recipe);
@@ -91,12 +111,27 @@ describe('recipeToMaestroFlow — the 04 §6.2 mapping table', () => {
     assert.equal(stepForCommandIndex(flow, 13), 's5');
   });
 
-  it('compiles expect.focused to a plain assertVisible when focusedSelector is false (04 §10)', () => {
+  it('compiles expect.focused to a `focused: true` selector, or a plain assertVisible when focusedSelector is false (04 §10)', () => {
     const recipe = map.recipes.get('create_invoice');
     assert.ok(recipe);
-    const flow = recipeToMaestroFlow(map, recipe, PARAMS, { focusedSelector: false });
-    const cmds = parse(flow.flow.split('\n---\n')[1] as string) as Array<Record<string, unknown>>;
-    assert.deepEqual(cmds[3], { assertVisible: { id: 'invoice.amount.field' } });
+    // the shipped ios pilot asserts `visible` (issue #18), so the `focused` form is built here —
+    // it is Maestro's own capability and the export must keep covering both branches
+    const focusedForm: RecipeFile = {
+      ...recipe,
+      steps: recipe.steps.map((st) => (st.id === 's1'
+        ? { id: 's1', action: 'tap', element: 'invoice.amount.field', expect: { focused: 'invoice.amount.field' } }
+        : st)),
+    };
+    const m = remap(map, { recipes: [focusedForm] });
+    const cmdsOf = (f: ReturnType<typeof recipeToMaestroFlow>): Array<Record<string, unknown>> =>
+      parse(f.flow.split('\n---\n')[1] as string) as Array<Record<string, unknown>>;
+    const on = recipeToMaestroFlow(m, focusedForm, PARAMS);
+    assert.deepEqual(cmdsOf(on)[3], { assertVisible: { id: 'invoice.amount.field', focused: true } });
+    const off = recipeToMaestroFlow(m, focusedForm, PARAMS, { focusedSelector: false });
+    assert.deepEqual(cmdsOf(off)[3], { assertVisible: { id: 'invoice.amount.field' } });
+    // the assertion is one command either way, so the step → command mapping is unchanged
+    assert.deepEqual(on.command_index, off.command_index);
+    assert.deepEqual(on.command_index, { s0: 0, s1: 2, s2: 4, s3: 6, s4: 8, s5: 11 });
   });
 
   it('re-exports from step k without the entry (04 §6.1 retry after a heal)', () => {

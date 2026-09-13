@@ -20,6 +20,15 @@
  * - `check`: reload every YAML, re-serialize canonically, report `non_canonical` paths; writes
  *   nothing (06 R1). Exit code for the CLI: 1 when `conflicts` or `non_canonical` is non-empty.
  * - Idempotent: a second export writes nothing (02 §11).
+ * - Write provenance: every `written` path also gets an `ExportWrite` in `written_from` carrying
+ *   the `DirtyRow.reason` behind it and `machine_recompile` (`db.isMachineRecompile`). A recipe
+ *   whose STEPS were rebuilt by an automated recompile (04 §8) is then distinguishable from one
+ *   that was healed, marked or merely canonicalised — the CLI names it on stderr and the
+ *   `export` tool reports it, so silent test erosion is visible at the terminal (issue #13
+ *   criterion 4). The PR diff carries the same signal in the file itself: an accepted recompile
+ *   stamps `provenance.machine_recompile: true` (directly above any carried-over `reviewed_by`)
+ *   and rewrites `provenance.compiled_from` to the replay session it was rebuilt from, adding
+ *   `provenance.revision_of` when the structure actually changed (04 §8).
  *
  * Layer: store (imports context types + yaml/*).
  */
@@ -35,6 +44,7 @@ import { canonicalYaml } from '../yaml/canonical.ts';
 import { gitBlobHash } from '../yaml/load.ts';
 import { nonCanonicalFiles } from '../validate.ts';
 import type { DirtyKind, DirtyRow } from './db.ts';
+import { isMachineRecompile } from './db.ts';
 
 export interface ExportOptions {
   force?: boolean;
@@ -82,7 +92,7 @@ function loadEntity(ctx: AppMapContext, row: DirtyRow): { kind: YamlKind; entity
 }
 
 export function exportMap(ctx: AppMapContext, opts: ExportOptions = {}): ExportResult {
-  const result: ExportResult = { written: [], deleted: [], unchanged: [], conflicts: [], non_canonical: [] };
+  const result: ExportResult = { written: [], written_from: [], deleted: [], unchanged: [], conflicts: [], non_canonical: [] };
   if (opts.check) {
     // 06 R1: every YAML must already be canonical; nothing is written in check mode
     result.non_canonical = nonCanonicalFiles(ctx.config);
@@ -177,6 +187,8 @@ export function exportMap(ctx: AppMapContext, opts: ExportOptions = {}): ExportR
       ctx.db.setBlobSha(row.kind, row.key, blobShaOfText(text));
     }
     result.written.push(rel);
+    // the reason travels with the path so a caller can say HOW the file was produced (04 §8)
+    result.written_from.push({ path: rel, reason: row.reason, machine_recompile: isMachineRecompile(row.reason) });
   }
   return result;
 }

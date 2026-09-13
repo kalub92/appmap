@@ -4,24 +4,26 @@
  * `create_invoice.yaml` (modulo the prose the LLM adds, `status`, `version` and `provenance`).
  */
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { parse } from 'yaml';
 import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
-import type { CompileRecipeInput, Expect, Observation, RecipeFile, RecipeParam, RecipeStep, ScrubbedTree } from '../types.ts';
-import { UNKNOWN_SCREEN, now } from '../types.ts';
+import type { CompileRecipeInput, Expect, Observation, RecipeFile, RecipeParam, RecipeStep, ScreenFile, ScrubbedTree } from '../types.ts';
+import { STEP_ACTIONS, UNKNOWN_SCREEN, now } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { readEvents } from '../events.ts';
-import { schemaDir, trajectoriesDir, trajectoryFile } from '../paths.ts';
+import { schemaDir, screenFile, trajectoriesDir, trajectoryFile } from '../paths.ts';
 import { buildScrubPolicy, scrub } from '../scrub.ts';
 import { observedSignature } from '../signature.ts';
 import { normalizeTree } from '../tree.ts';
-import { isCanonical } from '../yaml/canonical.ts';
+import { canonicalYaml, isCanonical } from '../yaml/canonical.ts';
 import { validateAgainstSchema } from '../yaml/schemas.ts';
 import { forbiddenContentIssues } from '../validate.ts';
 import {
-  collapseBacktracking, compileRecipe, focusedElement, inferPostconditions, markIntentCritical,
-  optimizeEntry, parameterize, sliceTrajectory, translateSteps,
+  COMPILABLE_STEP_ACTIONS, collapseBacktracking, compileRecipe, compilerCanEmit, focusedElement,
+  inferPostconditions, isFocusFallbackWarning, isNormalisationWarning, markIntentCritical,
+  optimizeEntry, parameterize, sliceTrajectory, swipeDirection, translateSteps,
 } from '../recipes/compile.ts';
 import type { TranslatedStep } from '../recipes/compile.ts';
 import { loadFixtureTree, loadTrajectoryFixture, makeTempAppMapDir } from './helpers.ts';
@@ -114,7 +116,7 @@ describe('compileRecipe — 04 §9: the pilot session compiles to create_invoice
     assert.equal(recipe.matches[0]!.includes('Acme'), false);
     assert.ok(recipe.matches[0]!.length <= 200, '07 §4: ≤200 chars');
     assert.deepEqual(forbiddenContentIssues('draft.yaml', recipe), [], 'the compiler\'s own draft passes rule 8');
-    assert.ok(r.warnings.some((w) => w.includes('mark_recipe')));
+    assert.ok(r.warnings.some((w) => w.includes('mark(candidate)')));
   });
 
   it('a task full of data still yields a data-free draft that validates (02 §10.8, 07 §2)', () => {
@@ -139,7 +141,7 @@ describe('compileRecipe — 04 §9: the pilot session compiles to create_invoice
     assert.equal(r.yaml.endsWith('\n'), true);
   });
 
-  it('writes nothing — only `mark_recipe(candidate)` does (04 §3.8)', () => {
+  it('writes nothing — only `mark(candidate)` does (04 §3.8)', () => {
     insert(trajectory());
     const before = ctx.db.getRecipe('create_invoice');
     const r = compile({ values: { amount: 50, client: 'Acme Corp' } });
@@ -189,7 +191,7 @@ describe('collapseBacktracking — 04 §3.2', () => {
   });
 
   it('is pure and reports the removed seqs', () => {
-    const out = collapseBacktracking(trajectory());
+    const out = collapseBacktracking(trajectory(), ctx.config.driver);
     assert.deepEqual(out.removed, [2, 3]);
     assert.deepEqual(out.observations.map((o) => o.seq), [1, 4, 5, 6, 7, 8]);
   });
@@ -200,14 +202,14 @@ describe('collapseBacktracking — 04 §3.2', () => {
       obs({ seq: 1, screen_before: 'invoice_new', screen_after: 'invoice_new', ...tap }),
       obs({ seq: 2, screen_before: 'invoice_new', screen_after: 'invoice_new', ...tap }),
       obs({ seq: 3, screen_before: 'invoice_new', screen_after: 'invoice_new', ...tap }),
-    ]);
+    ], ctx.config.driver);
     assert.deepEqual(out.removed, [2, 3]);
     assert.deepEqual(out.observations.map((o) => o.seq), [1]);
   });
 
   it('leaves a straight-line trajectory alone', () => {
     const straight = trajectory().filter((o) => o.seq !== 2 && o.seq !== 3);
-    assert.deepEqual(collapseBacktracking(straight).removed, []);
+    assert.deepEqual(collapseBacktracking(straight, ctx.config.driver).removed, []);
   });
 
   it('a repeated tap is collapsed end to end and the steps stay contiguous s1…sN', () => {
@@ -240,45 +242,378 @@ describe('collapseBacktracking — 04 §3.2', () => {
 
 describe('translateSteps — 04 §3.3', () => {
   it('maps open_url, tap, type, dynamic-cell select and swipe', () => {
-    const steps = translateSteps(ctx.map, collapseBacktracking(trajectory()).observations);
+    const steps = translateSteps(ctx.map, collapseBacktracking(trajectory(), ctx.config.driver).observations, ctx.config.driver).steps;
     assert.deepEqual(steps.map((s) => s.step.action), ['open_link', 'tap', 'type', 'tap', 'select', 'tap']);
     assert.deepEqual(steps.map((s) => s.screen), [UNKNOWN_SCREEN, 'invoice_new', 'invoice_new', 'invoice_new', 'client_picker', 'invoice_new']);
     assert.deepEqual(steps.map((s) => s.from_seq), [1, 4, 5, 6, 7, 8]);
     const select = steps[4]!.step;
-    assert.equal(select.action === 'select' && select.list, 'client.picker.list', 'the enclosing dynamic list, not the cell');
+    assert.equal(select.action === 'select' && 'list' in select && select.list, 'client.picker.list', 'the enclosing dynamic list, not the cell');
     assert.equal(select.action === 'select' && select.match.text, 'Acme Corp');
   });
 
   it('`type` lands on the focused element of the previous snapshot', () => {
-    const observations = collapseBacktracking(trajectory()).observations;
+    const observations = collapseBacktracking(trajectory(), ctx.config.driver).observations;
     assert.equal(focusedElement(ctx.map, observations[1]!), 'invoice.amount.field', 'seq 4 focused the field');
     assert.equal(focusedElement(ctx.map, observations[0]!), undefined, 'seq 1 focused nothing');
-    const typeStep = translateSteps(ctx.map, observations)[2]!.step;
+    const typeStep = translateSteps(ctx.map, observations, ctx.config.driver).steps[2]!.step;
     assert.equal(typeStep.action === 'type' && typeStep.element, 'invoice.amount.field');
   });
 
+  it('a `type` attached by the secondary rule says so instead of falling back in silence (issue #18)', () => {
+    // the shape every real Argent session has: `native-describe-screen` reports no focus, so
+    // 04 §3.3's PRIMARY rule ("the focused element of the previous snapshot") can never fire and
+    // the target comes from the last field tapped. The step is right; being told is the point.
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, snapshot: null, tool: 'mcp__argent__gesture-tap', input: { id: 'invoice.amount.field' }, element: 'invoice.amount.field', screen_before: 'invoice_new', screen_after: 'invoice_new' }),
+      obs({ seq: 2, snapshot: null, tool: 'mcp__argent__keyboard', input: { text: '50' }, screen_before: 'invoice_new', screen_after: 'invoice_new' }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps.map((s) => s.step.action), ['tap', 'type'], 'the step is still written');
+    const typed = r.steps[1]!.step;
+    assert.equal(typed.action === 'type' && typed.element, 'invoice.amount.field');
+    assert.equal(r.warnings.length, 1, r.warnings.join(' | '));
+    assert.match(r.warnings[0]!, /^seq 2: /);
+    assert.match(r.warnings[0]!, /invoice\.amount\.field/);
+    assert.match(r.warnings[0]!, /the last field tapped/);
+    assert.equal(isFocusFallbackWarning(r.warnings[0]!), true, 'matched by the shared predicate, never by the text');
+    // …and it is NORMALISATION, so the 04 §8 automatic recompile still writes (issue #13's guard
+    // would otherwise refuse every ios recompile of a recipe containing a `type`)
+    assert.equal(isNormalisationWarning(r.warnings[0]!), true);
+  });
+
+  it('a `type` with no determinable target is dropped WITH a warning, never in silence (issue #9, issue #18)', () => {
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, snapshot: null, tool: 'mcp__argent__keyboard', input: { text: '50' }, screen_before: 'invoice_new', screen_after: 'invoice_new' }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps, [], 'nothing in the recipe reproduces it');
+    assert.equal(r.warnings.length, 1, r.warnings.join(' | '));
+    assert.match(r.warnings[0]!, /^seq 1: /);
+    assert.match(r.warnings[0]!, /no determinable element/);
+    // a DROPPED call is incompleteness, not normalisation: the rebuild is not a faithful record
+    // of the run, so it must not overwrite a reviewed recipe unattended (04 §8)
+    assert.equal(isNormalisationWarning(r.warnings[0]!), false);
+  });
+
   it('a tap that dismissed a gate becomes dismiss_gate (04 §3.3)', () => {
-    const steps = translateSteps(ctx.map, [
+    const { steps } = translateSteps(ctx.map, [
       obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', gates_present: ['gate.push_permission'], input: { id: 'invoice.add.button' }, element: 'invoice.add.button' }),
       obs({ seq: 2, screen_before: 'invoice_list', screen_after: 'invoice_list', gates_present: [], input: { id: 'gate.push_permission.deny' }, element: 'gate.push_permission.deny' }),
-    ]);
+    ], ctx.config.driver);
     assert.equal(steps[1]!.step.action, 'dismiss_gate');
     assert.equal(steps[1]!.step.action === 'dismiss_gate' && steps[1]!.step.gate, 'gate.push_permission');
   });
 
+  it("a swipe's direction comes from its from/to coordinate pair when the call names none (issue #9 generality)", () => {
+    // Argent's `gesture-swipe` takes `--fromX/--fromY/--toX/--toY` and NO direction flag
+    // (harness-notes §2), and no conversion existed — so `direction ?? 'up'` compiled a
+    // left-swiped carousel and a swipe-to-delete row alike into "swipe up". Replay then moved
+    // nothing, and an inherited "screen unchanged" postcondition PASSED.
+    // Screen coordinates grow down and right; the direction is the one the FINGER travelled.
+    const cases: Array<{ input: Record<string, number>; expect: string; why: string }> = [
+      { input: { fromX: 200, fromY: 600, toX: 200, toY: 200 }, expect: 'up', why: 'straight up' },
+      { input: { fromX: 200, fromY: 200, toX: 200, toY: 600 }, expect: 'down', why: 'straight down' },
+      { input: { fromX: 300, fromY: 400, toX: 40, toY: 400 }, expect: 'left', why: 'a carousel swiped left' },
+      { input: { fromX: 40, fromY: 400, toX: 300, toY: 400 }, expect: 'right', why: 'swipe-to-reveal' },
+      // a diagonal: the axis with the larger |delta| wins, so this is `left`, not `up`
+      { input: { fromX: 300, fromY: 500, toX: 60, toY: 420 }, expect: 'left', why: 'diagonal, x dominates' },
+      { input: { fromX: 300, fromY: 500, toX: 260, toY: 180 }, expect: 'up', why: 'diagonal, y dominates' },
+      // `startX`/`endY` is the spelling harness-notes §2 says Argent does NOT use — other drivers do
+      { input: { startX: 100, startY: 100, endX: 100, endY: 700 }, expect: 'down', why: 'start/end aliases' },
+    ];
+    for (const c of cases) {
+      const r = translateSteps(ctx.map, [obs({
+        seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list',
+        tool: 'mcp__argent__gesture-swipe', input: c.input,
+      })], ctx.config.driver);
+      assert.deepEqual(r.warnings, [], c.why);
+      const step = r.steps[0]?.step;
+      assert.equal(step?.action === 'swipe' && step.direction, c.expect, c.why);
+    }
+    // and the pure helper agrees about where each answer came from
+    assert.deepEqual(swipeDirection({ fromX: 0, fromY: 0, toX: 0, toY: 9 }), { direction: 'down', source: 'coordinates' });
+    assert.deepEqual(swipeDirection({ direction: 'left' }), { direction: 'left', source: 'declared' });
+  });
+
+  it('a swipe with neither a direction nor coordinates is DROPPED with a warning, not defaulted to `up` (issue #9 generality)', () => {
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__gesture-swipe', input: {} }),
+      // half a coordinate pair is not a coordinate pair
+      obs({ seq: 2, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__gesture-swipe', input: { fromX: 10, fromY: 20 } }),
+      // a gesture that went nowhere, and one with no dominant axis: neither names a direction
+      obs({ seq: 3, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__gesture-swipe', input: { fromX: 10, fromY: 20, toX: 10, toY: 20 } }),
+      obs({ seq: 4, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__gesture-swipe', input: { fromX: 10, fromY: 20, toX: 110, toY: 120 } }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps, [], 'inventing `up` is what made a swipe that moved nothing pass');
+    assert.equal(r.warnings.length, 4);
+    for (const w of r.warnings) {
+      assert.match(w, /mcp__argent__gesture-swipe/);
+      assert.match(w, /no swipe direction could be established/);
+      assert.equal(isNormalisationWarning(w), false, 'a dropped call is incompleteness (04 §8)');
+    }
+    assert.match(r.warnings[0]!, /^seq 1: /);
+    assert.match(r.warnings[2]!, /zero-length/);
+    assert.match(r.warnings[3]!, /exact diagonal/);
+  });
+
+  it('an explicit `direction` still wins, and an unreadable one falls back to the coordinates', () => {
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__gesture-swipe', input: { direction: 'left', fromX: 0, fromY: 0, toX: 0, toY: 500 } }),
+      // a Maestro-vocabulary driver shouts its directions; recipe.schema.json only accepts `up`
+      obs({ seq: 2, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__maestro__swipe', input: { direction: 'RIGHT' } as never }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.warnings, []);
+    assert.deepEqual(r.steps.map((x) => x.step.action === 'swipe' && x.step.direction), ['left', 'right']);
+    // a direction the schema would reject is worth no more than none: derive from the pair instead
+    assert.deepEqual(swipeDirection({ direction: 'sideways' as never, fromX: 0, fromY: 0, toX: 500, toY: 0 }), { direction: 'right', source: 'coordinates' });
+    const none = swipeDirection({ direction: 'sideways' as never });
+    assert.equal(none.direction, undefined);
+    assert.match(none.direction === undefined ? none.why : '', /`direction: sideways` is not one of up\/down\/left\/right/);
+  });
+
   it('a swipe carries its direction, and perception-only calls are never steps', () => {
-    const steps = translateSteps(ctx.map, [
+    const r = translateSteps(ctx.map, [
       obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__swipe', input: { direction: 'up' } }),
       obs({ seq: 2, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__screenshot', input: {} }),
       obs({ seq: 3, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__describe_ui', input: {} }),
-    ]);
-    assert.deepEqual(steps.map((s) => s.step.action), ['swipe']);
-    assert.equal(steps[0]!.step.action === 'swipe' && steps[0]!.step.direction, 'up');
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps.map((s) => s.step.action), ['swipe']);
+    assert.equal(r.steps[0]!.step.action === 'swipe' && r.steps[0]!.step.direction, 'up');
+    assert.deepEqual(r.warnings, [], 'a perception call is a KNOWN non-step: expected, so never a warning');
   });
 
-  it('a tap whose element could not be resolved is not a step', () => {
-    const steps = translateSteps(ctx.map, [obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', input: { x: 10, y: 10 } })]);
-    assert.deepEqual(steps, []);
+  it('Argent 0.25.0 verbs compile: keyboard → type, open-url → open_link, paste → type, gesture-tap → tap, gesture-swipe → swipe (issue #9)', () => {
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, screen_before: UNKNOWN_SCREEN, screen_after: 'invoice_new', tool: 'mcp__argent__open-url', input: { url: 'appmap://invoice_new' } }),
+      obs({ seq: 2, screen_before: 'invoice_new', screen_after: 'invoice_new', tool: 'mcp__argent__gesture-tap', input: { id: 'invoice.amount.field' }, element: 'invoice.amount.field' }),
+      obs({ seq: 3, screen_before: 'invoice_new', screen_after: 'invoice_new', tool: 'mcp__argent__keyboard', input: { text: '50' } }),
+      obs({ seq: 4, screen_before: 'invoice_new', screen_after: 'invoice_new', tool: 'mcp__argent__paste', input: { text: 'Acme Corp' } }),
+      obs({ seq: 5, screen_before: 'invoice_new', screen_after: 'invoice_new', tool: 'mcp__argent__gesture-swipe', input: { direction: 'down' } }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps.map((s) => s.step.action), ['open_link', 'tap', 'type', 'type', 'swipe']);
+    // these observations carry no snapshot, so both `type`s were attached by 04 §3.3's SECONDARY
+    // rule and say so (issue #18); the point of this test is that no translated call is dropped
+    assert.deepEqual(r.warnings.filter((w) => !isFocusFallbackWarning(w)), []);
+    const typed = r.steps[2]!.step;
+    assert.equal(typed.action === 'type' && typed.element, 'invoice.amount.field', 'the field tapped by `gesture-tap` is the target');
+    assert.equal(typed.action === 'type' && typed.text, '50');
+  });
+
+  it('an unrecognised driver verb is dropped WITH a warning naming the seq and the tool (issue #9)', () => {
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__telemetry_flush', input: {} }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps, []);
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0]!, /seq 1/);
+    assert.match(r.warnings[0]!, /mcp__argent__telemetry_flush/);
+  });
+
+  it('`run-sequence` is rejected explicitly: one observation cannot be split into N steps (04 §3.3)', () => {
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, screen_before: 'invoice_new', screen_after: 'invoice_detail', tool: 'mcp__argent__run-sequence', input: {} }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps, []);
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0]!, /mcp__argent__run-sequence/);
+    assert.match(r.warnings[0]!, /re-drive/);
+  });
+
+  it('perception, wait and lifecycle calls are not steps and raise no warning (03 §8, 04 §5)', () => {
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__screenshot', input: {} }),
+      obs({ seq: 2, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__native-describe-screen', input: {} }),
+      obs({ seq: 3, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__await-screen-idle', input: {} }),
+      obs({ seq: 4, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__launch-app', input: {} }),
+      obs({ seq: 5, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__report_step', input: {} }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps, []);
+    assert.deepEqual(r.warnings, []);
+  });
+
+  it('`keyboard --key return` is a key press, not a `type` step (02 §6: recipe.schema.json requires text)', () => {
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, screen_before: 'invoice_new', screen_after: 'invoice_new', tool: 'mcp__argent__gesture-tap', input: { id: 'invoice.amount.field' }, element: 'invoice.amount.field' }),
+      obs({ seq: 2, screen_before: 'invoice_new', screen_after: 'invoice_new', tool: 'mcp__argent__keyboard', input: { key: 'return' } }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps.map((s) => s.step.action), ['tap']);
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0]!, /key: return/);
+  });
+
+  it('a hardware `button` press is warned about, not silently dropped (02 §6)', () => {
+    const r = translateSteps(ctx.map, [
+      obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', tool: 'mcp__argent__button', input: { id: 'home' } }),
+    ], ctx.config.driver);
+    assert.deepEqual(r.steps, []);
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0]!, /no recipe step can express/);
+  });
+
+  it('a long press / double tap / touch-and-hold is dropped WITH a warning, never compiled to a tap (issue #9 generality)', () => {
+    // the repro: a UIKit row whose context menu opens on long-press, or a Compose
+    // `combinedClickable(onLongClick = …)`. Before the fix each of these classified `tap` (the
+    // generic fallback's TAP_RE is a bare substring test), so the recipe navigated INTO the row
+    // and the next `expect` passed on the wrong screen.
+    const tools = ['long_press', 'double_tap', 'touch_and_hold'];
+    const r = translateSteps(ctx.map, tools.map((tool, i) => obs({
+      seq: i + 1, screen_before: 'invoice_list', screen_after: 'invoice_list',
+      tool: `mcp__argent__${tool}`, input: { id: 'invoice.add.button' }, element: 'invoice.add.button',
+    })), ctx.config.driver);
+    assert.deepEqual(r.steps, [], 'no gesture may become a step — least of all a `tap`');
+    assert.equal(r.warnings.length, 3);
+    for (const [i, tool] of tools.entries()) {
+      assert.match(r.warnings[i]!, new RegExp(`^seq ${i + 1}: mcp__argent__${tool} `), tool);
+      assert.match(r.warnings[i]!, /no recipe step can express/, tool);
+      // a dropped call is incompleteness: it must not overwrite a reviewed recipe unattended (04 §8)
+      assert.equal(isNormalisationWarning(r.warnings[i]!), false, tool);
+    }
+  });
+
+  it('a plain tap/gesture-tap/click/press still compiles to a `tap` (the gesture patterns do not over-match)', () => {
+    for (const tool of ['tap', 'gesture-tap', 'click', 'press']) {
+      const r = translateSteps(ctx.map, [obs({
+        seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_new',
+        tool: `mcp__argent__${tool}`, input: { id: 'invoice.add.button' }, element: 'invoice.add.button',
+      })], ctx.config.driver);
+      assert.deepEqual(r.steps.map((x) => x.step.action), ['tap'], tool);
+      assert.deepEqual(r.warnings, [], tool);
+    }
+  });
+
+  it('a tap whose element could not be resolved is not a step, and says so (issue #9)', () => {
+    const r = translateSteps(ctx.map, [obs({ seq: 1, screen_before: 'invoice_list', screen_after: 'invoice_list', input: { x: 10, y: 10 } })], ctx.config.driver);
+    assert.deepEqual(r.steps, []);
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0]!, /seq 1/);
+    assert.match(r.warnings[0]!, /no registered element/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The issue #9 regression: an Argent 0.25.0 search flow
+// ---------------------------------------------------------------------------------------------
+
+describe('compileRecipe — the Argent 0.25.0 search flow (issue #9)', () => {
+  /** tap the search field → type into it with `keyboard` → pick the matching row */
+  function searchFlow(typeTool = 'mcp__argent__keyboard'): Observation[] {
+    const snapshot = scrubbed('client_picker');
+    return [
+      obs({ seq: 1, snapshot, tool: 'mcp__argent__gesture-tap', input: { id: 'client.picker.search.field' }, element: 'client.picker.search.field', screen_before: 'client_picker', screen_after: 'client_picker' }),
+      obs({ seq: 2, snapshot, tool: typeTool, input: { text: 'Acme Corp' }, screen_before: 'client_picker', screen_after: 'client_picker' }),
+      obs({ seq: 3, snapshot, tool: 'mcp__argent__gesture-tap', input: { text: 'Acme Corp' }, element: 'client.picker.cell', screen_before: 'client_picker', screen_after: 'invoice_new' }),
+    ];
+  }
+  const CLIENT: RecipeParam[] = [{ name: 'client', type: 'string', required: true }];
+  function compileSearch(): ReturnType<typeof compileRecipe> {
+    return compileRecipe(ctx, { session: SESSION, task: 'find the client Acme Corp', recipe_id: 'search_client', params: CLIENT, values: { client: 'Acme Corp' } });
+  }
+
+  it('keeps the `type` step when the driver typed with `mcp__argent__keyboard` — the false-PASS repro', () => {
+    insert(searchFlow());
+    const r = compileSearch();
+    assert.equal(r.ok, true, r.ok ? '' : `${r.reason}: ${r.message}`);
+    if (!r.ok) return;
+    // before the fix `keyboard` matched no verb regex, so this was ['tap', 'select']: the recipe
+    // passed while searching for one client and opening whichever row happened to be first
+    assert.deepEqual(r.recipe.steps.map((s) => s.action), ['tap', 'type', 'select']);
+    assert.deepEqual(r.recipe.steps, [
+      { id: 's1', action: 'tap', element: 'client.picker.search.field' },
+      { id: 's2', action: 'type', element: 'client.picker.search.field', text: '{client}' },
+      { id: 's3', action: 'select', list: 'client.picker.list', match: { text: '{client}' }, expect: { screen: 'invoice_new' } },
+    ]);
+    assert.equal(r.warnings.some((w) => w.includes('keyboard')), false, 'a translated call is never reported as dropped');
+  });
+
+  it('an unknown verb in the same flow still compiles, but the dropped call is in `warnings` (issue #9)', () => {
+    insert(searchFlow('mcp__argent__whatever'));
+    const r = compileSearch();
+    assert.equal(r.ok, true, r.ok ? '' : `${r.reason}: ${r.message}`);
+    if (!r.ok) return;
+    assert.deepEqual(r.recipe.steps.map((s) => s.action), ['tap', 'select'], 'the call is still not compilable');
+    assert.ok(r.warnings.some((w) => w.includes('mcp__argent__whatever') && w.includes('seq 2')), r.warnings.join(' | '));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// `select {cell, match}`: a list whose container is not an accessibility element (issue #19)
+// ---------------------------------------------------------------------------------------------
+
+describe('translateSteps / compileRecipe — select by cell (04 §3.3, issue #19)', () => {
+  /**
+   * client_picker as SwiftUI actually reports it: the rows are there, the `List` container is
+   * not an accessibility element and so was never captured (01 R4), and no list id is declared.
+   */
+  function withoutTheListContainer(): void {
+    const path = screenFile(t.config, 'client_picker');
+    const doc = parse(readFileSync(path, 'utf8')) as ScreenFile;
+    doc.elements = doc.elements.filter((e) => e.id !== 'client.picker.list');
+    doc.dynamic_regions = (doc.dynamic_regions ?? []).filter((id) => id !== 'client.picker.list');
+    doc.signature.required_ids = (doc.signature.required_ids ?? []).filter((id) => id !== 'client.picker.list');
+    writeFileSync(path, canonicalYaml('screen', doc));
+    ctx.reload();
+  }
+  /** tap the search field → type into it → tap the row that says "Acme Corp" */
+  function searchFlow(over: Partial<Observation> = {}): Observation[] {
+    const snapshot = scrubbed('client_picker');
+    return [
+      obs({ seq: 1, snapshot, tool: 'mcp__argent__gesture-tap', input: { id: 'client.picker.search.field' }, element: 'client.picker.search.field', screen_before: 'client_picker', screen_after: 'client_picker' }),
+      obs({ seq: 2, snapshot, tool: 'mcp__argent__keyboard', input: { text: 'Acme Corp' }, screen_before: 'client_picker', screen_after: 'client_picker' }),
+      obs({ seq: 3, snapshot, tool: 'mcp__argent__gesture-tap', input: { text: 'Acme Corp' }, element: 'client.picker.cell', screen_before: 'client_picker', screen_after: 'invoice_new', ...over }),
+    ];
+  }
+  const CLIENT: RecipeParam[] = [{ name: 'client', type: 'string', required: true }];
+  function compileSearch(over: Partial<CompileRecipeInput> = {}): ReturnType<typeof compileRecipe> {
+    return compileRecipe(ctx, { session: SESSION, task: 'find the client Acme Corp', recipe_id: 'search_client', params: CLIENT, ...over });
+  }
+
+  it('a tap on a dynamic cell with no enclosing dynamic list compiles to `select {cell, match}`', () => {
+    withoutTheListContainer();
+    const steps = translateSteps(ctx.map, searchFlow(), ctx.config.driver).steps;
+    // before the fix this degraded to `tap client.picker.cell`: the row that says X was
+    // inexpressible, so the recipe opened whichever row happened to be first
+    assert.deepEqual(steps.map((x) => x.step.action), ['tap', 'type', 'select']);
+    assert.deepEqual(steps[2]!.step, { id: 's3', action: 'select', cell: 'client.picker.cell', match: { text: 'Acme Corp' } });
+  });
+
+  it('the enclosing dynamic list still wins when the screen declares one — the cell form is additive', () => {
+    const steps = translateSteps(ctx.map, searchFlow(), ctx.config.driver).steps;
+    assert.deepEqual(steps[2]!.step, { id: 's3', action: 'select', list: 'client.picker.list', match: { text: 'Acme Corp' } });
+  });
+
+  it('a dynamic-cell tap that carried no text or index stays a `tap` (02 §6: match.text is required)', () => {
+    withoutTheListContainer();
+    const steps = translateSteps(ctx.map, searchFlow({ input: {} }), ctx.config.driver).steps;
+    assert.deepEqual(steps[2]!.step, { id: 's3', action: 'tap', element: 'client.picker.cell' });
+  });
+
+  it('the cell form is parameterized, validates against recipe.schema.json and serializes canonically (04 §3.4)', () => {
+    withoutTheListContainer();
+    insert(searchFlow());
+    const r = compileSearch({ values: { client: 'Acme Corp' } });
+    assert.equal(r.ok, true, r.ok ? '' : `${r.reason}: ${r.message}`);
+    if (!r.ok) return;
+    assert.deepEqual(r.recipe.steps, [
+      { id: 's1', action: 'tap', element: 'client.picker.search.field' },
+      { id: 's2', action: 'type', element: 'client.picker.search.field', text: '{client}' },
+      { id: 's3', action: 'select', cell: 'client.picker.cell', match: { text: '{client}' }, expect: { screen: 'invoice_new' } },
+    ]);
+    assert.deepEqual(validateAgainstSchema(schemaDir(t.config), 'recipe', r.recipe), []);
+    assert.equal(isCanonical('recipe', r.yaml), true);
+  });
+
+  it('the cell form carries the selected value, so an undeclared one is `unparameterized_value` (04 §3.4)', () => {
+    withoutTheListContainer();
+    // only the row tap, so the select's match text is the one literal in the trajectory
+    insert([searchFlow()[2]!]);
+    const r = compileSearch({ task: 'open a client', params: [] });
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.equal(r.reason, 'unparameterized_value');
+    assert.deepEqual(r.offending_values, ['Acme Corp']);
+  });
+
+  it('a step carrying both `list` and `cell` matches no branch of the schema oneOf (02 §6)', () => {
+    const bad = { ...ctx.map.recipes.get('create_invoice')!, steps: [{ id: 's1', action: 'select', list: 'client.picker.list', cell: 'client.picker.cell', match: { text: 'Acme Corp' } }] };
+    assert.notDeepEqual(validateAgainstSchema(schemaDir(t.config), 'recipe', bad), [], 'the two forms are disjoint');
   });
 });
 
@@ -457,18 +792,24 @@ describe('sliceTrajectory — 04 §3.1', () => {
 });
 
 describe('inferPostconditions and markIntentCritical — 04 §3.6, 04 §3.7', () => {
-  it('screen change → expect.screen; new focus → expect.focused; neither → no expect (02 §6)', () => {
-    const observations = collapseBacktracking(trajectory()).observations;
-    const steps = translateSteps(ctx.map, observations).slice(1);
+  it('screen change → expect.screen; new focus → `visible` on ios / `focused` on android; neither → no expect (02 §6, 04 §10)', () => {
+    const observations = collapseBacktracking(trajectory(), ctx.config.driver).observations;
+    const steps = translateSteps(ctx.map, observations, ctx.config.driver).steps.slice(1);
     const { steps: withExpect, missing } = inferPostconditions(ctx.map, steps, observations);
     assert.deepEqual(missing, []);
+    // s1 newly focused the amount field. On ios that is real but UNCHECKABLE — Argent's snapshot
+    // carries no focus flag — so the compiler must never author `focused` there (issue #18).
     assert.deepEqual(withExpect.map((s) => s.expect), [
-      { focused: 'invoice.amount.field' },
+      { visible: ['invoice.amount.field'] },
       undefined,
       { screen: 'client_picker' },
       { screen: 'invoice_new' },
       { screen: 'invoice_detail' },
     ]);
+    // …and on android, where Maestro's hierarchy does carry `focused`, the strong form stands
+    const onAndroid = inferPostconditions({ ...ctx.map, platform: 'android' }, steps, observations);
+    assert.deepEqual(onAndroid.steps[0]!.expect, { focused: 'invoice.amount.field' });
+    assert.deepEqual(onAndroid.steps.slice(1).map((s) => s.expect), withExpect.slice(1).map((s) => s.expect), 'only the focus rule differs');
   });
 
   it('marks only steps touching an intent_critical element (02 §10.6: absent means false)', () => {
@@ -557,5 +898,48 @@ describe('compileRecipe — revisions (04 §8)', () => {
     assert.deepEqual(r.recipe.matches, committed().matches);
     assert.equal(r.recipe.description, committed().description);
     assert.equal(r.recipe.status, 'candidate', 'a revision goes back through review');
+  });
+
+  // 04 §3.5 re-derives exactly ONE condition, `{auth: logged_in}`. Everything else a recipe can
+  // be gated on — `platform_version`, a feature flag — is hand-authored and unrecoverable from a
+  // trajectory, so a revision that emitted only what it derived would DROP it, and the 04 §8
+  // write guard would then refuse that rebuild with `missing_preconditions` for ever.
+  it('a revision carries the reviewed preconditions forward and does not duplicate the derived one', () => {
+    insert(trajectory());
+    ctx.db.putRecipe({ ...committed(), preconditions: [{ platform_version: '>=17.0' }, { auth: 'logged_in' }] }, { dirty: false });
+    const r = compile({ values: { amount: 50, client: 'Acme Corp' }, revision_of: 3 });
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.deepEqual(
+      r.recipe.preconditions,
+      [{ platform_version: '>=17.0' }, { auth: 'logged_in' }],
+      'the hand-authored condition survives, in its reviewed order, and the trajectory-derived `auth` is not added twice',
+    );
+    assert.deepEqual(validateAgainstSchema(schemaDir(t.config), 'recipe', r.recipe), []);
+  });
+
+  it('a revision of a recipe with no preconditions still derives `auth: logged_in` from the trajectory (04 §3.5)', () => {
+    insert(trajectory());
+    ctx.db.putRecipe({ ...committed(), preconditions: undefined }, { dirty: false });
+    const r = compile({ values: { amount: 50, client: 'Acme Corp' }, revision_of: 3 });
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.deepEqual(r.recipe.preconditions, [{ auth: 'logged_in' }], 'carrying forward is a union, never a replacement');
+  });
+});
+
+describe('COMPILABLE_STEP_ACTIONS — what step 3 can actually emit (04 §3.3)', () => {
+  // the 04 §8 coverage rule exempts reviewed steps of a kind with no producer here
+  // (`lifecycle.recompileCovers`), so this list is load-bearing: it must stay exactly the set of
+  // `translateSteps`' `push` sites, and shrink the day one of them learns a new kind.
+  it('is every 02 §6 action except `wait_for`, which nothing in the compiler produces', () => {
+    assert.deepEqual([...COMPILABLE_STEP_ACTIONS].sort(), STEP_ACTIONS.filter((a) => a !== 'wait_for').slice().sort());
+    for (const action of STEP_ACTIONS) assert.equal(compilerCanEmit(action), action !== 'wait_for');
+  });
+
+  it('the pilot trajectory translates to nothing outside it', () => {
+    const translated = translateSteps(ctx.map, trajectory(), ctx.config.driver);
+    assert.ok(translated.steps.length > 0);
+    for (const t of translated.steps) assert.equal(compilerCanEmit(t.step.action), true, `${t.step.action} is emitted but not listed`);
   });
 });

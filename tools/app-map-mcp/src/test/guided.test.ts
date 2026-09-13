@@ -5,12 +5,12 @@
  * verifies from real observations and never from the reported `ok`.
  */
 import assert from 'node:assert/strict';
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
-import type { BuildProbeResult, RecipeFile, ReportStepResult, RunStep, ScreenId, Tree, TreeNode } from '../types.ts';
+import type { BuildProbeResult, RecipeFile, RecipeStep, ReportStepResult, RunStep, ScreenId, Tree, TreeNode } from '../types.ts';
 import { GUIDED_LIMITS, UNKNOWN_SCREEN } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { readEvents } from '../events.ts';
@@ -22,8 +22,9 @@ import { normalizeTree, walk } from '../tree.ts';
 import { declareTask, recordObservation } from '../observe.ts';
 import type { BuildInfoProbe } from '../recipes/guided.ts';
 import {
-  assertDebugSandbox, checkExpect, defaultBuildProbe, expandSteps, reportStep, resolveRunSession,
-  startGuidedRun, substituteParams, toRunStep,
+  BUILD_PROBE_KEY, assertDebugSandbox, buildProbeStrategies, checkExpect, defaultBuildProbe, expandSteps,
+  parseProbeOutput, parseXmlPlist, readBuildProbe, reportStep, resolveRunSession, startGuidedRun,
+  substituteParams, toRunStep,
 } from '../recipes/guided.ts';
 import { loadFixtureTree, makeTempAppMapDir } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
@@ -154,6 +155,26 @@ describe('toRunStep (04 §5: ≤120 tokens; 07 §3 announce)', () => {
     assert.equal(step.resolved?.degraded, false);
   });
 
+  it('a `select` by cell is addressed by its match text — every row carries the same id (04 §3.3, issue #19)', () => {
+    const tree = normalizeTree(loadFixtureTree('client_picker'), { platform: 'ios' });
+    const step: RecipeStep = { id: 's4', action: 'select', cell: 'client.picker.cell', match: { text: '{client}' }, expect: { screen: 'invoice_new' } };
+    const run = toRunStep(ctx.map, step, PARAMS, { tree });
+    assert.equal(run.element, 'client.picker.cell');
+    assert.equal(run.match_text, 'Acme Corp');
+    // `resolved` is evidence the row id is on screen; `target` is how to address the ONE row the
+    // step means, which an id shared by every row cannot do
+    assert.deepEqual(run.target, { by: 'text', text: 'Acme Corp' });
+    assert.equal(run.resolved?.strategy, 'a11y_id');
+    assertStepBudget(run);
+  });
+
+  it('the list form keeps its `{by: id}` target — the cell form is additive (issue #19)', () => {
+    const tree = normalizeTree(loadFixtureTree('client_picker'), { platform: 'ios' });
+    const run = toRunStep(ctx.map, recipe().steps.find((s) => s.id === 's4')!, PARAMS, { tree });
+    assert.equal(run.element, 'client.picker.list');
+    assert.deepEqual(run.target, { by: 'id', id: 'client.picker.list' });
+  });
+
   it('07 §3: intent_critical steps announce only when the caller says the recipe is a candidate', () => {
     const s5 = recipe().steps.find((s) => s.id === 's5')!;
     assert.equal(toRunStep(ctx.map, s5, PARAMS, { announce: true }).announce, true);
@@ -262,6 +283,260 @@ describe('07 §3: the server refuses to run against a Release build or outside t
     assert.equal(started.mode, 'guided');
     assert.equal(ctx.probe?.build_type, 'debug');
     assert.equal(ctx.probe?.auth, 'logged_in');
+  });
+});
+
+describe('07 §3 build probe: the iOS 26 defaults regression and the app container fallback', () => {
+  /** a real `plutil -convert xml1` domain: the probe, and a `Data` value that breaks `-convert json` */
+  const PROBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>favorites</key>
+  <data>
+  YnBsaXN0MDDUAQIDBAUIJihYJHZlcnNpb25ZJGFyY2hpdmVy
+  </data>
+  <key>app_map_debug_probe</key>
+  <dict>
+    <key>app_id</key>
+    <string>com.example.app</string>
+    <key>build_number</key>
+    <string>1</string>
+    <key>build_type</key>
+    <string>debug</string>
+    <key>git_sha</key>
+    <string>0000000</string>
+    <key>sandbox</key>
+    <true/>
+    <key>schema_version</key>
+    <integer>1</integer>
+    <key>version</key>
+    <string>1.0</string>
+    <key>written_at</key>
+    <string>2026-09-13T01:21:29Z</string>
+  </dict>
+  <key>lastScreen</key>
+  <string>invoice_list</string>
+</dict>
+</plist>
+`;
+  /** the Release case: the app ran and saved preferences, but published no record */
+  const NO_PROBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>favorites</key>
+  <data>YnBsaXN0MDDUAQIDBAUIJihYJHZlcnNpb24=</data>
+  <key>lastScreen</key>
+  <string>invoice_list</string>
+</dict>
+</plist>
+`;
+
+  /**
+   * A fake iOS toolchain (`xcrun` + `plutil`) on PATH for the duration of `run`, so the real
+   * `defaultBuildProbe` is exercised end to end (POSIX sh; the CI matrix for this suite is
+   * linux/macOS — same assumption `makeFakeDevice` in cli.test.ts already makes). PATH is restored
+   * in a `finally`; the suite runs `--test-concurrency=1` and node:test runs a file serially, so
+   * nothing else ever sees the fake binaries.
+   */
+  async function withFakeIosToolchain(
+    opts: { defaultsExport: string; plistName?: string; plistXml?: string },
+    run: () => Promise<void>,
+  ): Promise<void> {
+    const bin = join(t.dir, '.local', 'fakebin');
+    // the space in the container path proves `"$( … )"` keeps it one word (07 §4)
+    const container = join(t.dir, '.local', 'app container');
+    mkdirSync(bin, { recursive: true });
+    if (opts.plistName !== undefined && opts.plistXml !== undefined) {
+      mkdirSync(join(container, 'Library', 'Preferences'), { recursive: true });
+      writeFileSync(join(container, 'Library', 'Preferences', opts.plistName), opts.plistXml);
+    }
+    writeFileSync(join(bin, 'xcrun'), [
+      '#!/bin/sh',
+      'case "$2" in',
+      `  spawn) printf '%s' ${JSON.stringify(opts.defaultsExport)} ;;`,
+      `  get_app_container) printf '%s\\n' ${JSON.stringify(container)} ;;`,
+      '  *) exit 1 ;;',
+      'esac',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    // `-convert json -o - -` reads the pipe; `-convert xml1 -o - <file>` prints the file and exits
+    // non-zero when it is absent — which is how a strategy fails instead of answering
+    writeFileSync(join(bin, 'plutil'), [
+      '#!/bin/sh',
+      'case "$2" in',
+      '  json) cat ;;',
+      '  xml1) cat "$5" ;;',
+      '  *) exit 1 ;;',
+      'esac',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path ?? ''}`;
+    try {
+      await run();
+    } finally {
+      if (path === undefined) delete process.env.PATH;
+      else process.env.PATH = path;
+    }
+  }
+
+  it('buildProbeStrategies tries `defaults export` first and the app container plist second (07 §3)', () => {
+    const [first, second, ...rest] = buildProbeStrategies(t.config, 'com.example.app', BUILD_PROBE_KEY);
+    assert.equal(rest.length, 0);
+    assert.equal(first?.format, 'json');
+    assert.match(first?.command ?? '', /xcrun simctl spawn .* defaults export .* \| plutil -convert json -o - -$/);
+    assert.equal(second?.format, 'xml1');
+    assert.match(second?.command ?? '', /xcrun simctl get_app_container /);
+    // `-o -` is what keeps `plutil -convert` from rewriting the app's own preferences in place
+    assert.match(second?.command ?? '', /^plutil -convert xml1 -o - /);
+    // Android keeps its single `run-as` read
+    const android = buildProbeStrategies({ ...t.config, platform: 'android' }, 'com.example.app', BUILD_PROBE_KEY);
+    assert.equal(android.length, 1);
+    assert.equal(android[0]?.format, 'json');
+    assert.match(android[0]?.command ?? '', /^adb shell run-as 'com\.example\.app' cat files\/app_map_debug_probe\.json$/);
+  });
+
+  it('buildProbeStrategies quotes app_id and the udid everywhere, including inside the $(…) container path (07 §4)', () => {
+    const udid = "a'b;rm -rf /";
+    const appId = "com.example.app'; touch pwned #";
+    const [first, second] = buildProbeStrategies({ ...t.config, simUdid: udid }, appId, BUILD_PROBE_KEY);
+    assert.equal(
+      first?.command,
+      `xcrun simctl spawn 'a'\\''b;rm -rf /' defaults export 'com.example.app'\\''; touch pwned #' - | plutil -convert json -o - -`,
+    );
+    // the container path is `"$( … )"` plus a SEPARATE quoted word — `appId` is never inside the
+    // double quotes, where a `$( )` or backtick in a bundle id would be executed
+    assert.equal(
+      second?.command,
+      `plutil -convert xml1 -o - "$(xcrun simctl get_app_container 'a'\\''b;rm -rf /' 'com.example.app'\\''; touch pwned #' data)"`
+      + `/Library/Preferences/'com.example.app'\\''; touch pwned #.plist'`,
+    );
+  });
+
+  it('readBuildProbe stops at the first strategy that finds a record and never runs the rest', async () => {
+    const calls: string[] = [];
+    const probe = await readBuildProbe(
+      [{ command: 'defaults', format: 'json' }, { command: 'container', format: 'xml1' }],
+      BUILD_PROBE_KEY,
+      async (command) => {
+        calls.push(command);
+        return JSON.stringify({ [BUILD_PROBE_KEY]: { build_type: 'debug', sandbox: true, app_id: 'com.example.app' } });
+      },
+    );
+    assert.equal(probe?.build_type, 'debug');
+    assert.deepEqual(calls, ['defaults']);
+  });
+
+  it('readBuildProbe falls through a domain with no record (the iOS 26 `{}`) to the next strategy', async () => {
+    const calls: string[] = [];
+    const outputs = ['{}', PROBE_XML];
+    const probe = await readBuildProbe(
+      [{ command: 'defaults', format: 'json' }, { command: 'container', format: 'xml1' }],
+      BUILD_PROBE_KEY,
+      async (command) => { calls.push(command); return outputs[calls.length - 1] ?? ''; },
+    );
+    assert.equal(probe?.build_type, 'debug');
+    assert.equal(probe?.sandbox, true);
+    assert.deepEqual(calls, ['defaults', 'container']);
+  });
+
+  it('readBuildProbe treats a failing strategy as "keep looking", not as the answer', async () => {
+    let calls = 0;
+    const probe = await readBuildProbe(
+      [{ command: 'defaults', format: 'json' }, { command: 'container', format: 'xml1' }],
+      BUILD_PROBE_KEY,
+      async () => {
+        calls += 1;
+        // what `plutil -convert json` does on a domain that holds any Data value
+        if (calls === 1) throw new Error('invalid object in plist for destination format');
+        return PROBE_XML;
+      },
+    );
+    assert.equal(probe?.build_type, 'debug');
+    assert.equal(calls, 2);
+  });
+
+  it('parseProbeOutput reads the exported domain, a bare record, and an xml1 domain whose other keys are Data', () => {
+    const record = {
+      schema_version: 1, build_type: 'debug', sandbox: true, app_id: 'com.example.app',
+      version: '1.0', build_number: '1', git_sha: '0000000',
+    };
+    assert.equal(parseProbeOutput(JSON.stringify({ [BUILD_PROBE_KEY]: record }), BUILD_PROBE_KEY, 'json')?.build_type, 'debug');
+    assert.equal(parseProbeOutput(JSON.stringify(record), BUILD_PROBE_KEY, 'json')?.build_type, 'debug');
+    // the `<data>` sibling is exactly what makes `plutil -convert json` refuse the whole file
+    const fromXml = parseProbeOutput(PROBE_XML, BUILD_PROBE_KEY, 'xml1');
+    assert.equal(fromXml?.build_type, 'debug');
+    assert.equal(fromXml?.sandbox, true);
+    assert.equal(fromXml?.app_id, 'com.example.app');
+    assert.equal(fromXml?.build_number, '1');
+    assert.equal(fromXml?.written_at, '2026-09-13T01:21:29Z');
+    // no record published, and output that is not a property list at all
+    assert.equal(parseProbeOutput(NO_PROBE_XML, BUILD_PROBE_KEY, 'xml1'), null);
+    assert.equal(parseProbeOutput('{}', BUILD_PROBE_KEY, 'json'), null);
+    assert.equal(parseProbeOutput('plutil: invalid object in plist for destination format', BUILD_PROBE_KEY, 'xml1'), null);
+    assert.equal(parseProbeOutput('not json at all', BUILD_PROBE_KEY, 'json'), null);
+  });
+
+  it('parseXmlPlist drops <data> payloads, decodes entities and never throws on a truncated plist', () => {
+    const parsed = parseXmlPlist(PROBE_XML) as Record<string, unknown>;
+    assert.equal(parsed.favorites, null, 'a Data value is dropped, not a parse failure');
+    assert.equal(parsed.lastScreen, 'invoice_list');
+    const entities = parseXmlPlist(
+      '<plist version="1.0"><dict><key>a &amp; b</key><string>&lt;x&gt; &#65;&#x42;</string>'
+      + '<key>n</key><array><integer>2</integer><real>1.5</real><false/></array></dict></plist>',
+    ) as Record<string, unknown>;
+    assert.deepEqual(entities, { 'a & b': '<x> AB', n: [2, 1.5, false] });
+    // best effort, never a throw and never a spin: a half-written file keeps what it read, a
+    // numeric entity outside the code-point range is left alone, junk is simply not a plist
+    assert.deepEqual(parseXmlPlist('<plist><dict><key>a</key><dict><key>b</key>'), { a: {} });
+    assert.deepEqual(parseXmlPlist('<plist><dict><key>a</key><string>&#xFFFFFFFF;</string></dict></plist>'), { a: '&#xFFFFFFFF;' });
+    assert.equal(parseXmlPlist('not xml'), null);
+    assert.equal(parseXmlPlist('plutil: <unterminated'), null);
+  });
+
+  it('iOS 26: `defaults export` prints {} and the probe is still read out of the app container (07 §3)', async () => {
+    await withFakeIosToolchain(
+      { defaultsExport: '{}', plistName: 'com.example.app.plist', plistXml: PROBE_XML },
+      async () => {
+        const probe = await defaultBuildProbe(t.config, 'com.example.app');
+        assert.equal(probe?.build_type, 'debug');
+        assert.equal(probe?.sandbox, true);
+        assert.equal(probe?.build_number, '1');
+        assert.doesNotThrow(() => assertDebugSandbox(probe));
+      },
+    );
+  });
+
+  it('a Release build publishes no record, so every strategy comes back empty and the run is still refused (07 §3)', async () => {
+    await withFakeIosToolchain(
+      { defaultsExport: '{}', plistName: 'com.example.app.plist', plistXml: NO_PROBE_XML },
+      async () => {
+        assert.equal(await defaultBuildProbe(t.config, 'com.example.app'), null);
+        drive('invoice_list');
+        await assert.rejects(
+          () => startGuidedRun(ctx, { recipe_id: 'create_invoice', params: PARAMS }, {}),
+          isCode(ERROR_CODES.RELEASE_BUILD_REFUSED),
+        );
+        assert.equal(ctx.db.listRuns().length, 0);
+      },
+    );
+  });
+
+  it('an app_id with shell metacharacters is read as a literal filename and executes nothing (07 §4)', async () => {
+    const hostile = "com.example.app'; touch pwned #";
+    await withFakeIosToolchain(
+      { defaultsExport: '{}', plistName: `${hostile}.plist`, plistXml: PROBE_XML },
+      async () => {
+        // found under its hostile literal name: the quoting survived the `$( … )` nesting
+        assert.equal((await defaultBuildProbe(t.config, hostile))?.build_type, 'debug');
+      },
+    );
+    // and a bundle id carrying a command substitution never runs it — the reporter's patch, which
+    // interpolated `${appId}` raw inside the double-quoted container path, would have
+    const pwned = join(t.dir, '.local', 'pwned');
+    assert.equal(await defaultBuildProbe(t.config, `com.example.app$(touch ${pwned})`), null);
+    assert.equal(existsSync(pwned), false);
   });
 });
 
@@ -382,6 +657,33 @@ describe('04 §9: guided replay of create_invoice completes with every step veri
     assert.equal(tasks[0]!.kind === 'task' && tasks[0]!.mode_end, 'guided');
     assert.equal(tasks[0]!.kind === 'task' && tasks[0]!.ok, true);
     assertEventsValid();
+  });
+
+  it('a recipe whose `select` names the cell replays to done, addressing the row by text (issue #19)', async () => {
+    const recipe = ctx.map.recipes.get('create_invoice')!;
+    const cellForm: RecipeStep = { id: 's4', action: 'select', cell: 'client.picker.cell', match: { text: '{client}' }, expect: { screen: 'invoice_new' } };
+    ctx.db.putRecipe({ ...recipe, steps: recipe.steps.map((st) => (st.id === 's4' ? cellForm : st)) }, { dirty: true, reason: 'test' });
+    declareTask(ctx, SESSION, 'create an invoice for Acme Corp');
+    drive('invoice_list');
+
+    const started = await startGuidedRun(ctx, { recipe_id: 'create_invoice', params: PARAMS }, noHooks);
+    let last: ReportStepResult | undefined;
+    let handedS4: RunStep | undefined;
+    for (const [stepId, tree] of HAPPY_PATH) {
+      drive(tree, stepId === 's0' ? { url: 'appmap://invoice_new?fixture=logged_in' } : {});
+      last = await reportStep(ctx, { run_id: started.run_id, step_id: stepId, ok: true });
+      if (stepId === 's3' && last.status === 'ok') handedS4 = last.step;
+      if (stepId !== 's5') {
+        assert.equal(last.status, 'ok', `${stepId} → ${JSON.stringify(last)}`);
+        assert.equal(last.status === 'ok' && last.healed, undefined, 'the cell resolves; nothing is healed');
+      }
+    }
+    // the step the LLM was handed for s4 addresses the row by its label, not by the shared id
+    assert.equal(handedS4?.element, 'client.picker.cell');
+    assert.deepEqual(handedS4?.target, { by: 'text', text: 'Acme Corp' });
+    assert.equal(last?.status, 'done');
+    assert.equal(last?.status === 'done' && last.verified, true);
+    assert.deepEqual(last?.status === 'done' && last.heals, []);
   });
 
   it('reports out of order, for a finished run or for an unknown run are refused', async () => {

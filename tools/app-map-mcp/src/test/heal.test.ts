@@ -11,17 +11,17 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
 import type { ElementDef, HealInput, PendingHeal, RecipeStep, ScreenId, ScrubbedTree, Tree, TreeNode } from '../types.ts';
-import { HEAL_ACCEPT_SCORE, HEAL_RUNNER_UP_MARGIN, HEAL_WEIGHTS } from '../types.ts';
+import { HEAL_ACCEPT_SCORE, HEAL_RUNNER_UP_MARGIN, HEAL_WEIGHTS, roleHintsFor } from '../types.ts';
 import { readEvents } from '../events.ts';
 import { buildScrubPolicy, scrub } from '../scrub.ts';
-import { normalizeTree, walk } from '../tree.ts';
+import { normalizeTree, nodesWithRole, walk } from '../tree.ts';
 import { resolve } from '../resolve.ts';
 import {
   COMPATIBLE_ROLES, applyHeal, bboxProximity, heal, healedElement, jaroWinkler, lcsLength,
   proposeHeal, rejectHeal, scoreCandidates, toPendingHeal,
 } from '../heal.ts';
 import { stringsFile } from '../paths.ts';
-import { loadFixtureTree, makeTempAppMapDir } from './helpers.ts';
+import { loadFixtureTree, makeTempAppMapDir, readJsonFixture } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
 let t: TempAppMapDir;
@@ -505,5 +505,63 @@ describe('scoreCandidates — robustness', () => {
   it('malformed input yields no candidates instead of throwing', () => {
     assert.deepEqual(scoreCandidates(undefined as unknown as HealInput), []);
     assert.deepEqual(scoreCandidates({ tree: { root: undefined } } as unknown as HealInput), []);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The doubled iOS tab bar (issue #10 AC4)
+// ---------------------------------------------------------------------------------------------
+
+describe('heal — the doubled iOS tab bar (issue #10)', () => {
+  /** the pilot tree as the AX service really reports it: every tab twice, once without an id */
+  function doubledTabBar(): ScrubbedTree {
+    return observed('invoice_list', (tree) => {
+      const bar = node(tree, (n) => n.role === 'tabBar');
+      bar.children = bar.children.flatMap((tab) => {
+        const { a11y_id: _dropped, ...twin } = structuredClone(tab);
+        void _dropped;
+        return [twin as TreeNode, tab];
+      });
+    });
+  }
+
+  /** `nav.clients.tab` after a rename made its rank-0 a11y_id locator miss */
+  function renamedTab(): ElementDef {
+    const def = element('invoice_list', 'nav.clients.tab');
+    def.locators = def.locators.map((l) => (l.strategy === 'a11y_id' ? { ...l, value: 'nav.customers.tab' } : l));
+    return def;
+  }
+
+  function tabHeal(tree: ScrubbedTree): HealInput {
+    const def = renamedTab();
+    return healInput({
+      tree, element: def, screen: 'invoice_list',
+      step: step({ element: 'nav.clients.tab', expect: { screen: 'client_picker' } }),
+      trigger: { status: 'miss', element: def.id, tried: [{ strategy: 'a11y_id', matches: 0 }], candidates: [] },
+    });
+  }
+
+  it('the id-less twin makes a tab heal ambiguous — the bug the flat branch fixes', () => {
+    const tree = doubledTabBar();
+    assert.equal(nodesWithRole(tree, 'tab').length, 6, 'six tabs where the app has three');
+    const proposal = proposeHeal(tabHeal(tree));
+    assert.equal(proposal.reason, 'ambiguous');
+    assert.equal(proposal.candidate, undefined);
+    // the twins differ only in `sibling_index`, i.e. by 0.10 × 0.5 = 0.05 — under the margin
+    assert.ok(proposal.candidates[0]!.score - proposal.runner_up!.score < HEAL_RUNNER_UP_MARGIN);
+  });
+
+  it('a real flat Argent capture dedupes the bar and the same heal resolves (issue #10)', () => {
+    const raw = readJsonFixture('raw/argent-native-describe-screen.invoice_list.json');
+    const tree = scrub(
+      normalizeTree(raw, { platform: 'ios', roleHints: roleHintsFor(ctx.map) }),
+      buildScrubPolicy(ctx.map.ids, ctx.map.staticLabels),
+    );
+    assert.equal(nodesWithRole(tree, 'tab').length, 3, 'one element per tab, the identified twin kept');
+    const proposal = proposeHeal(tabHeal(tree));
+    assert.equal(proposal.reason, 'accepted');
+    assert.equal(proposal.candidate!.a11y_id, 'nav.clients.tab');
+    assert.equal(proposal.candidate!.path, 'tabBar/tab[1]', 'the pilot path locator, restored');
+    assert.equal(proposal.candidate!.proposed_locator.strategy, 'a11y_id');
   });
 });

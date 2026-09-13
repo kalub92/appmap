@@ -14,10 +14,10 @@ signature without updating this file and every caller. Read `docs/dev/toolchain.
 | A2 | `src/log.ts`, `src/store/db.ts`, `src/store/export.ts`, `src/events.ts`, `src/context.ts` | stub | contract, A1 |
 | B1 | `src/tree.ts`, `src/scrub.ts`, `src/signature.ts` | stub | contract |
 | B2 | `src/identify.ts`, `src/resolve.ts`, `src/plan.ts`, `src/format.ts` | stub | contract, B1 |
-| C1 | `src/observe.ts`, `src/recipes/match.ts`, `src/recipes/compile.ts`, `src/recipes/lifecycle.ts` | stub | A2, B1, B2 |
+| C1 | `src/observe.ts`, `src/recipes/match.ts`, `src/recipes/compile.ts`, `src/recipes/verbs.ts`, `src/recipes/lifecycle.ts` | stub | A2, B1, B2 |
 | C2 | `src/heal.ts`, `src/recipes/guided.ts` | stub | A2, B1, B2, C1 (lifecycle, observe) |
 | C3 | `src/recipes/maestro.ts`, `src/recipes/headless.ts`, `src/drift.ts`, `src/router-import.ts` | stub | A2, B1, B2, C1, C2 |
-| D1 | `src/server.ts`, `src/ingest-socket.ts`, `src/index.ts` | stub | everything |
+| D1 | `src/tools.ts`, `src/server.ts`, `src/ingest-socket.ts`, `src/index.ts` | stub | everything |
 | D2 | `src/cli.ts`, `src/lint-ids.ts`, `src/gen-configs.ts`, `src/policy-check.ts`, `src/report.ts` | stub | everything |
 
 Import layering (no cycles — enforced by review; `lib.ts` lists modules in this order):
@@ -27,7 +27,8 @@ types/config/errors/paths/token/log
   → yaml/*, tree, scrub, signature
     → store/*, context, identify, resolve, plan, format
       → observe, recipes/*, heal, drift, router-import
-        → server, ingest-socket, cli, lint-ids, gen-configs, policy-check, report
+        → tools
+          → server, ingest-socket, cli, lint-ids, gen-configs, policy-check, report
 ```
 
 Design rules (apply to every module):
@@ -102,7 +103,7 @@ SRV  guided.startGuidedRun: recipe eligible? params ok? probe(07 §3) debug+sand
      expandSteps → [s0 open_link entry.deep_link expect{screen:invoice_new}, s1…s5]
      db.insertRun(active, session, current_step s0, start_seq = last_seq = session.last_seq)
      → {run_id, step: toRunStep(s0)}                                    (≤120 tokens, format.formatRunStep)
-LLM  mcp__argent__open_url(...)            → hook records observation seq N+1
+LLM  mcp__argent__open-url(...)            → hook records observation seq N+1
 LLM  report_step(run_id, s0, ok:true)
 SRV  guided.reportStep: obs = newest of db.listObservations(run.session, {fromSeq: run.last_seq+1})
      (never another session; none → fallback no_observation); run.last_seq = obs.seq
@@ -192,7 +193,10 @@ tests compare). The rules:
 4. **Text**: `yaml@2.9.0 stringify(ordered, { indent: 2, lineWidth: 0, minContentWidth: 0,
    singleQuote: false, nullStr: 'null' })`; block style everywhere (the flow-style `{…}` in the
    spec examples is illustrative); default quoting (plain unless required — `"4412"`,
-   `"{amount}"`, `"true"`, `"@swmansion/argent"` get double quotes); numbers as JS numbers (`1`,
+   `"{amount}"`, `"true"`, `"@swmansion/argent"` get double quotes), plus a forced-quote list
+   (`QUOTED_STRING_KEYS`): `build.version`, `build.build_number` and `build.git_sha` are always
+   double-quoted (issue #20), so `version: "1.0"` and `git_sha: "0000000"` survive a load/export
+   round trip and the committed manifest teaches the habit; numbers as JS numbers (`1`,
    `0.6`); LF; exactly one trailing newline; no comments, no `---`.
 5. `manifest.generated_at` is the only timestamp and changes only when the manifest changes.
 
@@ -286,10 +290,18 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 10. **Drift status `skipped`** added to `ok|degraded|broken` (06 R4) for screens without deep
     link or absent from the router export; never blocks.
 11. **`recipe_run` covers guided_fallback** (no separate event kind; §6).
-12. **Driver shapes are best-effort**: Argent snapshot (`{type, identifier, label, value, frame,
-    children}`), Maestro hierarchy (`{elements:[{attributes, children}]}`), the hook
-    `tool_response` (`structuredContent.snapshot`) — fixtures carry a `_note`; `tree.ts`
-    detects shapes and must stay tolerant.
+12. **Driver shapes**: four, detected by `tree.ts`, which must stay tolerant. The real Argent
+    capture (`argent run native-describe-screen --json`) is FLAT — `{status, screenFrame,
+    elements:[{frame, normalizedFrame, traits, viewClassName, identifier?}]}`, verified against
+    `@swmansion/argent@0.25.0` (issue #10) and rebuilt into the two levels app-map reads
+    (`application > window > [marker-subtree, tabBar]`); `xcuitest` is the nested `{type,
+    identifier, label, value, frame, children}` snapshot other drivers emit (best-effort);
+    Maestro hierarchy is `{elements:[{attributes, children}]}` (best-effort); plus the hook
+    `tool_response` (`structuredContent.snapshot`) wrapper. Fixtures carry a `_note`. Collapsing
+    exact duplicates in the flat shape exempts elements carrying DIFFERENT identifiers (issue
+    #15): `appMapScreen` pins every marker as a 1pt box at its root's top-leading corner, so two
+    stacked screens report two markers with one frame, and collapsing them dropped the pushed
+    screen's marker before `deepestMarker` could ever see it.
 13. **Trajectory `input.text` and the task text are kept, PII-redacted** — a deliberate
     deviation from the letter of 07 §2.2/§4 ("nothing raw touches disk"): the compiler needs
     equality between what was typed and a declared param value (04 §3.4). Both strings pass
@@ -327,7 +339,9 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 19. **Gates never win identification**; a tree that is only a gate is `unknown` +
     `gates_present`.
 20. **07 §3 Release-build probe** = the iOS `UserDefaults` record `app_map_debug_probe`
-    (instrumentation/ios AppMapDebugEndpoint) read via `simctl spawn … defaults read`; Android
+    (instrumentation/ios AppMapDebugEndpoint) read via `simctl spawn … defaults export`, falling back
+    to the app's container plist via `plutil -convert xml1` (iOS 26's `defaults` no longer resolves a
+    sandboxed app's domain, and `-convert json` refuses a domain holding `Data`, #11); Android
     best-effort via `adb shell run-as`; both behind the injectable `BuildInfoProbe`. The record
     also carries `flags`, `auth`, `platform_version` — the only source of 02 §4.3 variant facts;
     the last probe is cached on `ctx.probe` (`ctx.setProbe`) and passed to `identify` as
@@ -343,8 +357,9 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 25. **`summary` text format is fixed** (03 §8 lists content, not layout) — see format.ts.
 26. **`intent_critical` absent means false** for the agreement rule (02 §10.6), in ids, screen
     elements and recipe steps alike.
-27. **`route` identification signal** comes from the `open_url` input of the observation (Argent
-    does not report routes); `tree.route` is honored when a driver provides it.
+27. **`route` identification signal** comes from the `url` input of the observation — the driver's
+    deep-link call, `open-url` on Argent (`observe.ts` reads `input.url`; Argent does not report
+    routes); `tree.route` is honored when a driver provides it.
 28. **Role vocabulary** is the closed `ROLES` list (24 roles); platform types map onto it,
     unknown → `other`. `tab` is derived (button inside a tab bar).
 29. **`text_present` expectation** compares against node `label` equality (scrubbed trees have
@@ -369,7 +384,7 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 34. **ids.yaml `title`/`deep_link` must agree with the screen file** (validate rule 2): `title`
     exactly, `deep_link` on `routeKey` (the registry records the route; the screen file may add
     `?fixture=…`, 01 R5 — `invoice_detail` does). `indexMap` serves the screen file's values.
-35. **`mark_recipe` carries the draft**: `{recipe_id, status, recipe?, reviewer?}`
+35. **`mark` carries the draft**: `{recipe_id, status, recipe?, reviewer?}`
     (`MarkRecipeInput`). The server keeps no per-session draft; `candidate` for an unknown
     recipe requires `recipe` (RecipeFile or YAML text, re-validated), `ci_gate` requires
     `reviewer` (07 §7). The CLI twin is `app-map mark`.
@@ -448,7 +463,7 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 54. **The pilot deliberately ships no `ci_gate` recipe.** `app-map/ios/recipes/create_invoice.yaml`
     is `status: verified`. 07 §7 makes promotion a human act that needs a reviewer who is not the
     author **and** a green R5 run against the build — neither is possible without the real app, and
-    `mark_recipe --force` would fake both. The consequence is that 06 R4's blocking rule
+    `mark --force` would fake both. The consequence is that 06 R4's blocking rule
     (`summary.blocking` only on a broken screen a `ci_gate` recipe references) and 06 R5
     (`maestro-export --status ci_gate` → "(no recipes matched)", exit 0) are inert on the committed
     map; `src/test/drift.test.ts` promotes the recipe in a temp map to exercise 06 §5. Promoting it
@@ -459,6 +474,263 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     else (that the reviewer is a real person, that they approved the PR, the two approvals for an
     `intent_critical` downgrade) is branch protection, which has no representation in this repo;
     docs/dev/rollout.md §2 Stage 1 lists the exact settings.
+56. **Driver verbs are a table, not a regex.** `recipes/verbs.ts` maps a normalized tool name
+    (`mcp__<driver>__gesture-tap` → `gesture_tap`) to a `VerbKind` through a table keyed on
+    `APP_MAP_DRIVER` (03 §3), with generic patterns for a driver that has none, so swapping
+    drivers is a table entry rather than a regex edit. `classifyVerb` is total: perception and
+    lifecycle calls (waits, launches, log dumps, `report_step`) are KNOWN non-steps and stay
+    silent, while `batch` (`run-sequence`), `unsupported` (`button`, `tv-remote`) and `unknown`
+    are dropped with a named warning. `translateSteps` therefore returns `{steps, warnings}` and
+    `compileRecipe` folds them into `CompileRecipeResult.warnings` — a step that vanishes
+    silently is the worst failure this system has (a recipe that passes while exercising
+    nothing: `@swmansion/argent@0.25.0` types with `keyboard`, not `type_text`, issue #9).
+
+57. **An automated recompile may only grow a recipe.** `recipes/lifecycle.recompileFrom` writes
+    the rebuilt recipe over the previous one only when three gates pass, and otherwise keeps the
+    reviewed recipe. (a) No *incompleteness* warning — a dropped or failed driver call,
+    placeholder prose. The 04 §3.2 backtracking-collapse note is explicitly not one
+    (`compile.isCollapseWarning`, the predicate the producer and the guard share): collapsing is
+    what the compiler does to every trajectory by design, including the one the reviewer
+    approved, and anything it removed that the reviewed recipe needs is named by gate (b).
+    Treating it as a defect refused the pilot's own trajectory and left 04 §9's automatic
+    recompile true only on paper. (b) The new step list covers the old one as an ordered
+    subsequence (`recompileCovers`/`stepIdentity`, identity = action + the element/list/gate/url
+    acted on; `expect` may strengthen, never weaken; `intent_critical` may not be dropped).
+    (c) The rebuilt `preconditions` and `entry` cover the old ones (`recompileCoversEntry`):
+    every condition still present, and a reviewed `entry.deep_link` back on the same screen with
+    every query parameter intact — losing `?fixture=logged_in` is `auth: logged_in` loss in URL
+    form, which the pilot's own recompile from a post-entry slice does. `entry.fallback_path` is
+    checked only when there is no deep link, since 04 §3.5 derives it from whatever leading
+    navigation the slice held. A refusal is loud: an `error` log line, the unified diff, and a
+    `compile` event with `ok:false` and a `recompile_refused_*` reason — no new event kind, since
+    `CompileEvent` already carries `ok`/`reason`. An accepted revision carries
+    `provenance.reviewed_by` forward and stamps `provenance.machine_recompile: true` directly
+    above it, so a PR diff reads "machine-built steps, historical signature"; `markRecipe` deletes
+    the stamp when a human signs again. The body write uses the dirty reason `recompile:<trigger>`
+    (`store/db.RECOMPILE_DIRTY_PREFIX`), which is what lets `export` report
+    `written_from[].machine_recompile` and the CLI name it on stderr. Issue #13.
+
+58. **A validation rule may be a warning where the lifecycle guarantees the gap is temporary.**
+    02 §10 rule 2's "edge element is declared on this screen" half is a warning, not an error, on a
+    screen that is `meta.status: candidate` AND has `elements: []` (`validate.crossReferenceIssues`'s
+    `unexplored`). `import-router` seeds exactly that shape — the app's edges with nothing learned
+    yet (01 R6) — and erroring on it deadlocked first-run setup: the map would not load, so the
+    server could not ingest an observation, so `name_screen` could never populate `elements[]`, so
+    the map never became loadable. Both conditions, not either: one declared element means the
+    screen HAS been observed and a still-undeclared edge target is a real gap; a status past
+    `candidate` is past the point where "not learned yet" explains anything. The sibling branch —
+    the element is not in `ids.yaml` at all — is never relaxed, on any screen: that is a typo, and
+    01 R1/R8 gen-ids is what registers element ids (`import-router` registers screens only). The
+    carve-out is keyed on status and emptiness, not on `meta.sources` containing `router_export`,
+    because `mergeRouterScreen` and `nameScreen` both rewrite `sources`; a hand-authored empty
+    candidate is in the same "not learned yet" state and gets the same relaxation. `loadMap` throws
+    `invalid_map` on errors only and carries the survivors on `LoadedMap.validationWarnings`, which
+    `formatSummary` names and `app-map validate` counts, so the state is discoverable rather than
+    silently tolerated. Extended by decision 64, which adds the second and third unreached subjects
+    and closes the "known limit" this decision originally recorded. Issue #12.
+
+59. **`string_literal_id` matches a WHOLE registered id, never a feature prefix** (01 R8). The
+    rule used to fire on any `ID_REGEX` literal sharing a first segment with a registered id, so
+    one `person.detail.name.text` claimed the entire `person.` namespace and ordinary SwiftUI
+    code — SF Symbol names (`person.3`, `star.fill`, `xmark.circle.fill`) and dotted storage keys
+    (`favorites.v1`) — became CI errors with no suppression mechanism, which pushed the reference
+    integration to change PRODUCT code the linter had no business touching (issue #14). R8 is
+    "use the constant instead of the literal", which only means anything for an id that exists,
+    so `literalIdsIn` now tests `registered.has(value)` against the same set the rest of the
+    module uses (markers, gate ids and dismiss ids, element ids), behind an `isRegistryIdShape`
+    gate; and `tokenize` marks `Image(systemName:)` / `Label(_:systemImage:)` arguments
+    `systemImage: true` so a symbol name is never a candidate even when it collides with a
+    registered id. Deliberate narrowing: a literal that is REGISTERED-BUT-MISSPELLED
+    (`"invoice.save.buton"`) or names no id at all (`"screen.not_a_screen"`) is no longer this
+    rule's finding — `bad_id` and `orphan_constant` are where a made-up id surfaces. This is
+    precision, not permission: unlike decision 53's counting shortcut, nothing here can turn the
+    rule off — every genuine literal id in the registry still errors.
+
+60. **`select` has two forms, and `selectTarget` is the only accessor.** 04 §3.3's `select` was
+    expressible only as `{list, match.text}`, which assumes the list container is an
+    accessibility element. SwiftUI's `List`/`Section`/`ForEach` are not (01 R4, the same root
+    cause as the issue #15 screen container), so the container is absent from every capture, no
+    id can be registered for it, and `compile.enclosingDynamicList` can never find one: a tap on
+    a dynamic row degraded to a bare `tap` and "pick the row that says X" was inexpressible —
+    the recipe addressed rows by position and passed while opening whichever row came first.
+    `{cell, match.text}` names the repeated ROW id instead, which is what 04 §3.3 describes and
+    what the pilot's own `client_picker` EDGE already records (`action: {type: select, element:
+    client.picker.cell}` — the cell, not the list). `StepSelect` is therefore a union; making it
+    one is what forces every consumer through `types.selectTarget(step)` (the typechecker lists
+    them: `stepElement`, guided's local `stepElement`, `headless.elementOfStep`,
+    `lifecycle.stepIdentity`, plus the duck-typed `policy-check` casts and `migrate-id.ID_KEYS`,
+    which the typechecker does NOT list). The list form still wins whenever the screen declares a
+    dynamic list, so nothing that worked changes shape. Two consequences worth stating:
+    `guided.toRunStep` gives the cell form `target: {by: 'text', text: <match>}` while `resolved`
+    still reports the `a11y_id` hit — deliberately disagreeing, because the id proves the row is
+    on screen and only the text says WHICH row, and it is exactly what the Maestro export taps
+    (04 §6.2, so that export needed no code at all); and a reviewed `tap <cell>` step whose
+    recompile now yields `select {cell}` changes identity under decision 57, so `recompileFrom`
+    refuses the write and asks for a human — loud and safe, but a real behaviour change for any
+    map with list-driven recipes. Issue #19.
+
+61. **"Never observed" is knowable in the YAML layer, so the never-observed `kind: list` warning
+    lives in `validate`, not in `lint-ids` or the cache.** A screen file's `elements[]`,
+    `signature.required_ids`, `dynamic_regions` and `variants[].required_ids` are each built by
+    `observe.nameScreen` from `idsPresent(snapshot)` — a real capture — so their union
+    (`validate.observedElementIds`) is the map's committed, durable record of "a driver has seen
+    this id". The SQLite `counters` table looks like the authority and is not: `observe` bumps
+    `hits`/`misses` only for the element a driver call TOUCHED, and a container is never touched
+    (you tap its cells), so a perfectly healthy list would read as never observed. `lint-ids` is
+    the other candidate and is the wrong layer — it reads `ids.yaml` plus app source and never
+    opens a screen file. Edge `action.element` is excluded from the observed set on purpose:
+    `import-router` seeds edges for elements exploration has never reached (decision 58), which
+    is the absence of evidence. A WARNING for decision 58's reason, scoped to `kind: list`
+    because that is the container `select` addresses (`sheet`/`picker` have the same SwiftUI
+    exposure problem and would warn on the pilot — a separate issue, not scope creep here), and
+    the message names the platform because `ids.yaml` is shared while the check runs per
+    platform and `sortIssues` would otherwise dedupe a genuine per-platform difference away.
+    The pilot is unaffected: its three list ids are in `elements[]` and `invoice.list.collection`
+    is in `variants[new_invoices_ui].required_ids` on both platforms. Known limit, the mirror of
+    decision 58's: a HAND-AUTHORED `elements[]` entry is taken at face value, so a list id typed
+    into a screen file by a human silences the warning without any capture behind it — the same
+    trust the rest of rule 2 places in a committed screen file. Issue #19.
+62. **An expectation a platform's driver cannot report is a warning, and the compiler never
+    writes one.** `expect.focused` is in the recipe schema because Maestro's Android hierarchy
+    carries a `focused` attribute on every node, which `tree.ts`'s maestro branch reads straight
+    into `ScrubbedNode.focused`. Argent's iOS `native-describe-screen` carries no focus flag of
+    any kind — `frame`, `normalizedFrame`, `tapPoint`, `normalizedTapPoint`, `traits`, `value`,
+    `identifier`, `viewClassName`, and `traits` is `button`/`staticText`/`header`/`image`/
+    `selected` — so on iOS the assertion fails on every replay however well the tap worked
+    (issue #18's `FALLBACK at s1 (expect_failed)` on a field that WAS focused). Three
+    consequences, all keyed on ONE list, `types.FOCUS_OBSERVABLE_PLATFORMS`, so the validator and
+    the compiler cannot disagree about what a platform can verify. (a) `validate` WARNS, for
+    decision 58's reason: the file is well-formed and the other platform satisfies it, so 06 R1
+    must not block the PR and the schema must keep accepting the key. (b) `inferPostconditions`
+    writes `visible: [e]` instead of `focused: e` where focus is unobservable — the observation is
+    real, only the strongest form of it is uncheckable, and this is what keeps "the committed
+    trajectory compiles to the committed pilot recipe" true after the pilot was fixed. That branch
+    is not dead code on a platform that one day reports focus (XCUITest does); it states the rule
+    rather than a platform's current gap. (c) The `type`-attach fallback is now NAMED in
+    `warnings` (`compile.focusFallbackWarning`) instead of being silent, because a target picked
+    by fallback is a guess, and 04 §3.3's primary rule is unavailable on iOS forever. That note is
+    classified NORMALISATION (`compile.isNormalisationWarning`), not incompleteness — the step is
+    in the recipe with what was typed and where, only the strategy that chose the target was the
+    secondary one — because decision 57's write guard blocks on any unclassified warning and
+    would otherwise refuse EVERY iOS recompile of a recipe containing a `type`. Issue #18.
+
+63. **The harness's Argent tool list is pinned to `ARGENT_VERBS`, not to spec prose.** `tools` in a
+    subagent frontmatter has no per-tool glob (harness-notes §2), so `.claude/agents/
+    app-nav-replayer.md` must name Argent's tools one by one — and it named `tap`, `type_text`,
+    `open_url` and `swipe`, none of which `@swmansion/argent@0.25.0` registers. The replayer as
+    shipped could therefore not tap, type, swipe or open a deep link, and 05 §5 carried the same
+    list because it quotes the file verbatim. Both now name the confirmed hyphenated tools
+    (`gesture-tap`, `keyboard`, `open-url`, `gesture-swipe`) — exactly the four that carry the four
+    02 §6 step verbs; `select` replays as a tap on the matched row (decision 60), so it needs no
+    fifth. `verbs.test.ts` asserts every `mcp__argent__*` grant is a key of `ARGENT_VERBS`, is
+    spelled with hyphens (`normalizeVerb` folds `-` to `_` for the classifier, so `open_url` would
+    otherwise pass while never matching — the harness compares `tools:` entries literally), and
+    classifies as a `StepVerb`; and that 05 §5 still quotes the file's `tools:` line byte for byte,
+    because fixing one file and forgetting the other is how both came to be wrong. Issues #9, #21.
+
+64. **A temporary gap has three subjects — the screen, the element and the capture — and a
+    lifecycle guard is what keeps any of them temporary.** Decision 58 keyed 02 §10 rule 2's
+    carve-out on the SCREEN (`candidate` + `elements: []`), which survived exactly one import.
+    Three holes: (a) `lifecycle.markVerified` flipped `candidate → verified` without consulting
+    `elements[]`, and every ok guided step, every headless success and `observe`'s lazy re-verify
+    call it — so one
+    replay through the seed removed the carve-out's own precondition and the map stopped loading
+    with no human edit, a worse failure than the one reported; (b) `router-import.mergeRouterScreen`
+    adds a new build's edges and touches neither `elements[]` nor `meta.status`, so on build N+1 a
+    newly registered element landed on an already-explored screen where the screen-shaped condition
+    could never apply — issue #12's cycle again, on every app's second build; (c) the same refresh
+    naming SHARED CHROME — a tab bar, a back button — that another screen already declares, so the
+    element-shaped condition below is false too and the hard error survived even (a) and (b) being
+    fixed.
+    `crossReferenceIssues` therefore warns when ANY subject is unreached: the screen (decision
+    58's condition, unchanged); the element — a `status: candidate` edge whose element
+    `observedElementIds` does not contain, i.e. no screen file anywhere records that id as present
+    (`observedElementIds` is hoisted above the screen loop and shared with decision 61's `kind:
+    list` sweep; it deliberately excludes edge `action.element`, or it would answer its own
+    question); or the capture — a `status: candidate` edge on a screen whose `sources` include
+    `router_export` and whose `meta.last_verified_build` is neither the build `manifest.yaml` names
+    nor demonstrably newer than it. For two integers that is "older than"; for a `build_number` that
+    does not compare numerically (`1.2.3`, `4413-rc1` — both schemas allow them) it is "they
+    differ", because decision 18's conservative fallback is the ERROR here, and taking it would
+    leave hole (c) below fully intact for every app that versions builds that way.
+    `elements[]` is the id set the last `name_screen` captured, at that build, and the
+    refresh recaptures nothing, so a capture that old could not have contained an id the app has
+    registered since — whether or not another screen declares it. All three, not one replacing
+    another: the element condition alone would re-open #12 on first-run setup, because a seed's
+    edges routinely name that same shared chrome while the screen has never been captured at all;
+    the screen condition alone survives one import; the capture condition alone would let a fresh,
+    current capture be contradicted for ever. An element recorded on another screen, on a screen
+    whose capture is of this build, is a real gap and stays an error; so does any undeclared element
+    on a screen the router does not write, where nothing appends edges on its own and there is no
+    cycle to break; a non-`candidate` edge asserts the tap already happened here and stays an error;
+    an element missing from `ids.yaml` is never relaxed at all. The capture condition self-heals:
+    `name_screen` stamps the current build, after which an element that really is absent errors
+    again. This also closes decision 58's known limit — an edge target off-screen at `nameScreen`
+    time is now a warning, since nothing has captured it.
+    Hole (a) is closed in `markVerified` itself rather than at its three call sites: it never
+    verifies a screen whose `elements` is empty (02 §8 verification is a clean observation
+    of the required ids, which such a screen has by definition never had — neither the status nor
+    `last_verified_build` is earned), and never verifies an edge whose `action.element` that screen
+    does not declare, one level down for the same reason. The screen guard is keyed on emptiness
+    ALONE, not on "empty AND carrying an undeclared edge element": a seed whose edges name no
+    element yet has nothing for rule 2 to relax today, but `import-router` appends the app's new
+    edges on every later build, and a screen promoted in the meantime is unrecoverable — rule 2
+    errors, `loadMap` throws `invalid_map`, `ctx.loadError` short-circuits every tool but `export`,
+    so nobody can `mark` it back. The narrower guard defers the deadlock instead of preventing it.
+    Accepted cost: a screen with no registered non-marker id at all (a splash, an interstitial —
+    `nameScreen` builds `elements[]` from the snapshot's registered ids minus markers) stays
+    `candidate` for ever and carries no `last_verified_build`, so 02 §8's decay is not applied to it
+    and `report`'s deep-link coverage does not count it.
+    KNOWN LIMIT, deliberate: on a screen NO capture has ever touched (the screen condition), an
+    element another screen declares is still only a warning, because on such a screen the map holds
+    no evidence at all about what is on it — and the state is indistinguishable from a first-run
+    router seed naming shared chrome, which is issue #12 itself. Telling the two apart would need
+    per-edge provenance in `screen.schema.json`, whose `edge` is `additionalProperties: false`. The
+    hard error is therefore scoped to screens a capture HAS produced, which is where the map has
+    something to contradict.
+    The capture condition only means anything if `manifest.yaml` actually moves, so `importRouter`'s
+    build bump takes the same shape: it records the export's build unless that build is demonstrably
+    OLDER, rather than only when it is demonstrably newer. Decision 18's numeric-only comparison is
+    false in BOTH directions for a `build_number` like `1.2.3` or `4413-rc1` (every schema allows
+    `^[0-9A-Za-z][0-9A-Za-z.\-]*$`), so such an app merged every later build's edges while its
+    manifest claimed build 1 for ever — and hole (c) then came back in full, because a frozen
+    manifest can never look newer than a capture. Decision 18's "fall back to the conservative
+    branch" is a rule about DECAY, where the conservative branch is "do not decay"; on both of these
+    the conservative branch is the one that keeps the map loading and the build honest. Issue #12.
+
+65. **A recompile gate may only refuse what the compiler could have produced.** Decision 57's
+    three gates are the right shape, but two of them were unsatisfiable for constructs the pilot
+    never used, so the 04 §9 automatic recompile went inert — refusing in the safe direction,
+    yet logging an `error` and an `ok:false` `compile` event on every failing replay, which reads
+    as erosion when it is really the compiler unable to re-derive something a human wrote.
+    (a) `compile` emitted `preconditions` only from the trajectory — 04 §3.5 derives exactly
+    `{auth: logged_in}` — and carried none of the previous recipe's forward, unlike `verify`,
+    `matches`, `description` and `params`. A recipe gated on `{platform_version: '>=17.0'}` or a
+    feature flag therefore lost it in every rebuild and gate (c) refused that rebuild for ever
+    (`missing_preconditions: ['platform_version=>=17.0']`). A revision now carries the reviewed
+    conditions and unions the derived one onto them (`compile.revisionPreconditions`, deduped on
+    `conditionKey` — which moved to `types.ts` so the producer and the guard cannot key the same
+    question two ways). The gate then passes because the condition is REALLY in the written file;
+    it is not bypassed, and it still refuses a draft that genuinely loses one.
+    (b) Nothing produces `action: 'wait_for'` — 02 §6 defines it, 04 §6.2 maps it to Maestro's
+    `extendedWaitUntil`, and `translateSteps` has no `push` site for it — so a human-authored
+    wait between a tap and a `select` (the React Native / Flutter case) was `missing` from every
+    rebuild and gate (b) refused it for ever. `recompileCovers` now exempts a reviewed step whose
+    action the compiler cannot emit, read off the producer's own list
+    (`compile.COMPILABLE_STEP_ACTIONS` / `compilerCanEmit`, beside the `push` sites, the same
+    arrangement as `collapseWarning`/`isCollapseWarning`). No erosion hole: the exemption is
+    decided by the ACTION in the reviewed file, which only a human `mark` writes, so a real step
+    cannot acquire it by coming back as something else; it applies only where nothing matched and
+    never advances the subsequence cursor, so a dropped `type` beside an exempt `wait_for` is
+    still refused by name; and no kind a rebuild could have emitted is ever exempt. Its real cost
+    is bounded and stated: the accepted rebuild does not contain that `wait_for`, so the write
+    loses the wait — visible in the export diff, stamped `machine_recompile: true`, demoted to
+    `candidate`, and named in the `recipe recompiled` log line (`dropped_uncompilable`), with
+    `verify` (carried prose) still asserting where the recipe must end up. Re-inserting the step
+    positionally would be guesswork, since a `wait_for` has no element to anchor it to in the
+    rebuilt list; carrying reviewed `wait_for` steps into a rebuild is the filed follow-up. Both
+    exemptions delete themselves: add the action to `COMPILABLE_STEP_ACTIONS` the day 04 §3.3
+    emits it. Follow-up to issue #13.
 
 ## 8. How to implement your module
 
@@ -485,7 +757,10 @@ text locator) invalid; `load.test.ts` — `loadMap` on the temp pilot: 5 screens
 `validate.test.ts` — one failing case per rule 1–8 (rename an id without migrate-id → rule 2
 lists the dangling references, 06 §5; a screen file whose `deep_link` route differs from
 ids.yaml → rule 2; `matches: ["(a+)+"]` → rule 1 `safeRegexIssue`; a gate with `title` → rule 8
-warning); `load.test.ts` also asserts `files` has 10 entries for the served platform on the
+warning) plus the decision 61 rule-2 warning (a registered `kind: list` id no screen file
+records warns and stays `ok`; one in `elements[]` or in a variant's `required_ids` does not; a
+`kind: cell` id never warns) and a `select {cell, match}` recipe step validating and
+cross-referencing like any other (issue #19); `load.test.ts` also asserts `files` has 10 entries for the served platform on the
 pilot (ids, manifest, 7 screens, 1 recipe) each with a `blob_sha` inside the git repo; `migrate-id.test.ts` — rename `invoice.add.button`,
 zero dangling references, canonical output; `merge-driver.test.ts` — branch adding
 `client_picker.yaml` vs branch editing `invoice_list.yaml` merges clean (02 §11); same-key edit
@@ -510,9 +785,12 @@ limit, no `label`/`value`/`snapshot` fields at any level.
 
 ### B1 — trees
 Fill: `tree.ts`, `scrub.ts`, `signature.ts`.
-Tests: `tree.test.ts` — `normalizeTree` on `raw/argent-snapshot.invoice_list.json` and
+Tests: `tree.test.ts` — `normalizeTree` on `raw/xcuitest-snapshot.invoice_list.json` and
 `raw/maestro-hierarchy.invoice_list.json` yields the same roles/ids as
-`trees/invoice_list.normalized.json` (bbox within 0.01); `pathOf` reproduces every `path`
+`trees/invoice_list.normalized.json` (bbox within 0.01); the flat
+`raw/argent-native-describe-screen.*.json` captures reproduce the reference integration's
+committed map (roles, paths, `sibling_index`, `bbox_norm` and two `structural_hash` values);
+`pathOf` reproduces every `path`
 locator in the pilot screens; `extractSnapshot(loadHookFixture('post-tool-use.tap').tool_response)`
 finds the snapshot; `scrub.test.ts` — `trees/pii.normalized.json` through `scrub` with the
 fixture policy contains no email, phone, 16-digit run, `$1,250.00`, `€`, `£`, IBAN, SSN,
@@ -561,6 +839,15 @@ recipe equal to `app-map/ios/recipes/create_invoice.yaml` modulo `matches`, `des
 `status: candidate`, `version: 1`, `provenance` (the A→B→A loop at seq 2–3 collapses; `50` →
 `{amount}`, `Acme Corp` → `{client}`) both with explicit `values` and via `inferParams`; an
 unparameterized literal → `unparameterized_value`; `to_seq: 5` slices to s1–s2;
+`verbs.test.ts` — every confirmed `@swmansion/argent@0.25.0` tool classifies to its `VerbKind`,
+`open-url` == `open_url`, an untabled driver still resolves `type_text`/`tap` and an untabled tool
+is `unknown`, plus the harness grants: every `mcp__argent__*` tool in `.claude/agents/
+app-nav-replayer.md` is an `ARGENT_VERBS` key, hyphen-spelled and a `StepVerb` covering all four
+of them, and 05 §5 quotes that `tools:` line verbatim (decision 63, issue #21); `compile.test.ts` also proves a `mcp__argent__keyboard` `type` step survives the
+compile and that an unknown verb lands in `warnings` instead of vanishing (issue #9), and that a
+dynamic-cell tap on a screen declaring no dynamic list compiles to `select {cell, match}`,
+parameterizes and serializes canonically while the list form still wins where a list exists
+(decision 60, issue #19);
 `lifecycle.test.ts` — `decideTransition` for each row of the table (3 successes / 2 sessions →
 verified; 6 of last 10 failed → candidate, 04 §9; pending heals ≥2 → candidate; ci_gate never
 automatic); `markRecipe({status:'candidate'})` without `recipe` on an unknown id → `bad_input`,
@@ -589,7 +876,9 @@ resolution → the step is handed out with `healing: true` and `pending_heal` pe
 fallback `heal_rejected` and a `postcondition_failed` heal event; `skipBuildCheck:false` with a
 probe returning `null` or `build_type:'release'` → `release_build_refused` (07 §8), a debug
 probe → `ctx.probe` set; state (including `pending_heal`) survives a new `openContext` between
-`run_recipe` and `report_step`.
+`run_recipe` and `report_step`; a `select {cell, match}` step is handed out with
+`target: {by:'text'}` while the list form keeps `{by:'id'}`, and a recipe whose s4 names the cell
+replays s0…s5 to done with no heals (decision 60, issue #19).
 
 ### C3 — Maestro, headless, drift, router import
 Fill: `recipes/maestro.ts`, `recipes/headless.ts`, `drift.ts`, `router-import.ts`.
@@ -599,7 +888,9 @@ Corp'})` equals `fixtures/maestro/create_invoice.flow.yaml` byte-for-byte (04 §
 recipe on `invoice_list`); an element with only `path`/`geometry` → `eligible: false`;
 `resolveRecipeParams` takes explicit → `fixtures/ci/params.json` → `values[0]` and throws
 `bad_input` naming `create_invoice.amount` when nothing supplies it; `maestroExport` on the
-temp pilot (params file installed by the helper) writes `create_invoice.yaml`;
+temp pilot (params file installed by the helper) writes `create_invoice.yaml`; a `select` by cell
+exports to the same `scrollUntilVisible` + `tapOn {text}` pair with an unchanged `command_index`
+and stays headless-eligible (issue #19);
 `headless.test.ts` — with a fake `exec` that succeeds → report ok, `steps_done = 6`, recipe
 `last_verified_build` stamped; fake exec failing at command k with a fake hierarchy → heal
 attempted, ≤2 retries, `fallback_step`, `error_code: maestro_failed`, `failed_command_index`;
@@ -617,11 +908,12 @@ screen absent from the export → `retired` and its recipes retired; `purgeRetir
 import with a newer build deletes it.
 
 ### D1 — server and socket
-Fill: `server.ts`, `ingest-socket.ts`, `index.ts`.
+Fill: `tools.ts` (the 03 §8 bodies, shared with the CLI twins — issue #17; it imports no MCP SDK
+so `cli.ts` can call it), `server.ts`, `ingest-socket.ts`, `index.ts`.
 Tests: `server.test.ts` — in-memory MCP client (SDK `InMemoryTransport`) lists exactly the 13
 tools and 3 resource templates; `summary` ≤600 tokens; `get_screen` block with `conf` from the
 last observation and, for a screen never observed, the decayed value; `match_recipe` with
-`"delete a client"` (no_match) still declares the task on the session; `mark_recipe
+`"delete a client"` (no_match) still declares the task on the session; `mark
 {status:'candidate'}` without `recipe` → `bad_input`; every tool returns `{error, hint, code}`
 with `isError` instead of throwing (feed a bad `screen_id`); resources return the YAML verbatim;
 `startServer` with a fake exec whose `maestro --version` fails still serves tools and logs a
@@ -651,7 +943,11 @@ sources pass (06 R2; `invoice.list.table` is not an error); `fixtures/lint/Bad.s
 `string_literal_id` ×2 at the right lines and `marker_unreferenced {platform:'ios'}` for
 `client_picker`/`invoice_detail` when it is the only iOS source; `fixtures/lint/Bad.kt` →
 `string_literal_id` ×2 and `marker_unreferenced {platform:'android'}` for `login`; `--platform
-ios` suppresses the Android findings; `report.test.ts` — `fixtures/events/sample.events.jsonl`
+ios` suppresses the Android findings; a literal that only shares a feature prefix with a
+registered id (`"person.3"`, `"favorites.v1"`) and an `Image(systemName:)` / `Label(systemImage:)`
+argument are NOT `string_literal_id` findings while the whole registered id still is, and
+`"screen.<known>"`/`"gate.<known>"` still are while an unregistered `"screen.not_a_screen"` is not
+(decision 59, issue #14); `report.test.ts` — `fixtures/events/sample.events.jsonl`
 with `since: 2026-09-01`, `until: 2026-09-08` → replay_rate 3/5, fallback_rate_per_recipe
 `create_invoice` on build 4413 = 1, heal_rate 40/100 runs, intent_critical_rejections 1,
 unknown_screen_rate 1/5 and `unknown_screen_rate_7d` over 09-01…09-08, brittleness index over
@@ -671,7 +967,7 @@ app-map/
 tools/app-map-mcp/
   src/**                      this package
   fixtures/trees/**           normalized iOS + android/ pilot trees (+ with_gate, no_ids, pii variants)
-  fixtures/raw/**             Argent snapshot and Maestro hierarchy dumps (best-effort shapes)
+  fixtures/raw/**             real Argent flat captures, an XCUITest-like nested snapshot, a Maestro hierarchy dump
   fixtures/hooks/**           PostToolUse, PostToolUseFailure, SessionStart, Stop payloads
   fixtures/trajectories/**    create_invoice.session.jsonl (8 scrubbed observations)
   fixtures/strings.{ios,android}.txt   static string tables (07 §2.3.3)

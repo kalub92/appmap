@@ -9,6 +9,7 @@
  * | tap element             | `- tapOn: {id: "<a11y_id>"}` — regex `id:` when the top exportable locator is `role_label` with `label_regex`; `text:` for `role_label.label`/`text` |
  * | type element text       | `- tapOn: {id}` then `- inputText: "<text>"`                             |
  * | select list match.text  | `- scrollUntilVisible: {element: {text: "<text>"}}` then `- tapOn: {text: "<text>"}` |
+ * | select cell match.text  | the same two commands — neither form addresses the container, so the cell form (issue #19) exports identically and stays headless-eligible |
  * | swipe                   | `- swipe: {direction: <UP|DOWN|LEFT|RIGHT>, duration: <ms>}`             |
  * | dismiss_gate g          | `- runFlow: {when: {visible: {id|text: "<marker or label regex>"}}, commands: [- tapOn: {…dismiss…}]}` — emitted before every step on a screen whose `gates` lists `g`, and for explicit dismiss_gate steps |
  * | expect screen s         | `- extendedWaitUntil: {visible: {id: "screen.<s>"}, timeout: 10000}`      |
@@ -259,7 +260,9 @@ function emitStep(st: EmitState, step: RecipeStep): void {
       break;
     }
     case 'select': {
-      // The list itself is never addressed: Maestro scrolls to the matching row by text.
+      // Neither form addresses the container: Maestro scrolls to the matching row by text. That
+      // is already exactly the semantics of `select {cell, match}` (the rows share one id, the
+      // text picks one), so both forms export to the same two commands (04 §6.2, issue #19).
       const text = substituteSlots(step.match.text, st.params);
       st.commands.push({ scrollUntilVisible: { element: { text } } });
       st.commands.push({ tapOn: { text } });

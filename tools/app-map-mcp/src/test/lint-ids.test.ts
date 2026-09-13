@@ -87,18 +87,74 @@ describe('01 R8: string-literal ids in UI code', () => {
     }
   });
 
-  it('findStringLiteralIds ignores comments, non-ids and unregistered prefixes', () => {
-    const prefixes = new Set(['screen.', 'gate.', 'invoice.']);
-    const hits = findStringLiteralIds(loadLintFixture('Bad.swift'), prefixes);
+  it('findStringLiteralIds matches whole registered ids, never prefixes (01 R8)', () => {
+    // the registry's own vocabulary, not feature prefixes: the rule is "this literal IS an id"
+    const registered = new Set(['screen.invoice_list', 'gate.push_permission', 'invoice.list.table', 'invoice.save.button']);
+    const hits = findStringLiteralIds(loadLintFixture('Bad.swift'), registered);
     assert.deepEqual(hits, [{ id: 'invoice.list.table', line: 8 }, { id: 'screen.invoice_list', line: 13 }]);
-    assert.deepEqual(findStringLiteralIds('// "invoice.save.button" in a comment\n', prefixes), []);
-    assert.deepEqual(findStringLiteralIds('/* a\n   "invoice.save.button" */\n', prefixes), []);
-    assert.deepEqual(findStringLiteralIds('let x = "Save Invoice"\n', prefixes), []);
-    assert.deepEqual(findStringLiteralIds('let x = "other.thing.button"\n', prefixes), []);
-    assert.deepEqual(findStringLiteralIds('let u = "appmap://invoice_new"\n', prefixes), [], 'a deep link is not an id');
-    assert.deepEqual(findStringLiteralIds('let x = "gate.push_permission"\n', prefixes), [{ id: 'gate.push_permission', line: 1 }]);
+    assert.deepEqual(findStringLiteralIds('// "invoice.save.button" in a comment\n', registered), []);
+    assert.deepEqual(findStringLiteralIds('/* a\n   "invoice.save.button" */\n', registered), []);
+    assert.deepEqual(findStringLiteralIds('let x = "Save Invoice"\n', registered), []);
+    assert.deepEqual(findStringLiteralIds('let x = "other.thing.button"\n', registered), []);
+    assert.deepEqual(findStringLiteralIds('let u = "appmap://invoice_new"\n', registered), [], 'a deep link is not an id');
+    assert.deepEqual(findStringLiteralIds('let x = "gate.push_permission"\n', registered), [{ id: 'gate.push_permission', line: 1 }]);
     // line numbers survive a multi-line comment
-    assert.deepEqual(findStringLiteralIds('/*\n\n*/\nlet x = "invoice.save.button"\n', prefixes), [{ id: 'invoice.save.button', line: 4 }]);
+    assert.deepEqual(findStringLiteralIds('/*\n\n*/\nlet x = "invoice.save.button"\n', registered), [{ id: 'invoice.save.button', line: 4 }]);
+    assert.deepEqual(findStringLiteralIds('let x = "invoice.3"\n', registered), [], 'a feature prefix is not a match (issue #14)');
+    assert.deepEqual(findStringLiteralIds('Image(systemName: "invoice.list.table")\n', registered), [], 'an SF Symbol argument is never an id');
+  });
+
+  // issue #14: the rule used to match a literal's feature PREFIX, so a registered
+  // `person.detail.name.text` claimed every SF Symbol under `person.`.
+  it('a literal that only shares a feature prefix with a registered id is not a finding (01 R8; issue #14)', () => {
+    withIdsAndSources((ids) => {
+      ids.elements.push({ id: 'person.detail.name.text', kind: 'text' });
+      ids.elements.push({ id: 'favorites.list.cell', kind: 'cell' });
+      ids.elements.push({ id: 'star.rating.text', kind: 'text' });
+    }, {
+      'Tabs.swift': 'let a = Image(systemName: "person.3")\nlet b = "person.crop.circle"\nlet c = Image(systemName: "star.fill")\n',
+      'Store.swift': 'private let key = "favorites.v1"\n',
+    }, (r) => {
+      assert.deepEqual(of(r, 'string_literal_id'), [], 'SF Symbol names and storage keys are not ids');
+    });
+  });
+
+  it('a literal that equals a registered element id is still an error (01 R8)', () => {
+    withIdsAndSources((ids) => {
+      ids.elements.push({ id: 'person.detail.name.text', kind: 'text' });
+    }, {
+      'PersonDetail.swift': 'let a = "person.detail.name.text"\nlet b = "person.3"\n',
+    }, (r) => {
+      const hits = of(r, 'string_literal_id');
+      assert.deepEqual(hits.map((i) => i.line), [1], JSON.stringify(hits));
+      assert.match(hits[0]!.message, /person\.detail\.name\.text/);
+      assert.equal(hits[0]!.severity, 'error');
+      assert.equal(hits[0]!.platform, 'ios');
+    });
+  });
+
+  it('screen.<known> and gate.<known> literals are still errors; an unregistered screen literal is not (01 R8)', () => {
+    withIdsAndSources((ids) => {
+      ids.screens.push({ id: 'people_list', title: 'Characters', deep_link: 'none' });
+    }, {
+      'Nav.swift': 'let a = "screen.people_list"\nlet b = "gate.push_permission"\nlet c = "gate.push_permission.deny"\nlet d = "screen.not_a_screen"\n',
+    }, (r) => {
+      // line 4 names no registered screen, so it is not a "use the constant" violation at all;
+      // a made-up id surfaces through `bad_id`/`orphan_constant`, not through this rule.
+      assert.deepEqual(of(r, 'string_literal_id').map((i) => i.line), [1, 2, 3], JSON.stringify(of(r, 'string_literal_id')));
+    });
+  });
+
+  it('an Image(systemName:) / Label(systemImage:) argument is never an id, even when it equals a registered id (01 R8; issue #14)', () => {
+    withIdsAndSources((ids) => {
+      // a registered id deliberately spelled like an SF Symbol (it also earns a harmless kind-segment
+      // `bad_id` warning — decision 38 — which the rule filter ignores)
+      ids.elements.push({ id: 'person.crop.circle', kind: 'text' });
+    }, {
+      'Icon.swift': 'let a = Image(systemName: "person.crop.circle")\nlet b = Label("Sort", systemImage: "person.crop.circle")\nlet c = "person.crop.circle"\n',
+    }, (r) => {
+      assert.deepEqual(of(r, 'string_literal_id').map((i) => i.line), [3], JSON.stringify(of(r, 'string_literal_id')));
+    });
   });
 });
 
@@ -321,6 +377,30 @@ function withSources(files: Record<string, string>, fn: (root: string) => void):
     fn(root);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The pilot map with extra ids AND a temp `src/` source tree, linted together: `string_literal_id`
+ * needs both halves — the registry supplies the ids, the source the literals. iOS only, so the
+ * Android findings stay out of the assertions.
+ */
+function withIdsAndSources(mutate: (ids: IdsRegistry) => void, files: Record<string, string>, assertions: (r: LintIdsResult) => void): void {
+  const base = mkdtempSync(join(tmpdir(), 'app-map-lint-both-'));
+  try {
+    const dir = join(base, 'app-map');
+    cpSync(PILOT_APP_MAP_DIR, dir, { recursive: true, filter: (src) => !src.split(/[/\\]/).includes('.local') });
+    const ids = yamlParse(readFileSync(join(dir, 'ids.yaml'), 'utf8')) as IdsRegistry;
+    mutate(ids);
+    writeFileSync(join(dir, 'ids.yaml'), canonicalYaml('ids', ids));
+    for (const [name, text] of Object.entries(files)) {
+      const abs = join(base, 'src', name);
+      mkdirSync(join(abs, '..'), { recursive: true });
+      writeFileSync(abs, text);
+    }
+    assertions(lintIds({ dir }, { ...LINT_FIXTURE_OPTS, repoRoot: base, iosDirs: ['src'], androidDirs: ['src'], platforms: ['ios'] }));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
   }
 }
 

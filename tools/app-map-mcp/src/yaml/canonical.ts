@@ -17,21 +17,99 @@
  * 4. Text is produced by `yaml@2.9 stringify(ordered, YAML_STRINGIFY_OPTIONS)`: block style
  *    everywhere (the flow-style `{…}` in the spec examples is illustrative), 2-space indent,
  *    `lineWidth: 0` (never fold), default quoting (plain when possible; `"4412"`, `"{amount}"`
- *    and `"true"`-like strings double-quoted), LF, trailing newline, no comments, no document
- *    markers. Numbers print as JS numbers (`1`, not `1.0`).
+ *    and `"true"`-like strings double-quoted) EXCEPT the `QUOTED_STRING_KEYS` below
+ *    (`build.version`, `build.build_number`, `build.git_sha`), which are always double-quoted so
+ *    the committed file teaches the habit and `version: "1.0"` / `git_sha: "0000000"` survive a
+ *    load/export round trip (issue #20). LF, trailing newline, no comments, no document markers.
+ *    Numbers print as JS numbers (`1`, not `1.0`).
+ *
+ * Parsing lives here too. `parseYamlDoc` additionally reports what the author literally typed for
+ * every scalar YAML resolved to a number or boolean (`ParsedYaml.scalarSources`), because the
+ * parsed value has already lost the spelling — `1.0` is `1` and `0000000` is `0`. That text is
+ * what restores the documented string type of the manifest `build` scalars and what the "quote it"
+ * schema hint echoes back (yaml/schemas.ts, issue #20).
  *
  * Layer: yaml (imports types/paths only).
  */
-import { LineCounter, parse, parseDocument, stringify } from 'yaml';
+import { LineCounter, Scalar, isMap, isScalar, isSeq, parse, parseDocument, stringify } from 'yaml';
 import type { YamlKind } from '../paths.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 
+/** A parsed YAML document plus the source text of the scalars whose spelling parsing threw away. */
+export interface ParsedYaml<T> {
+  doc: T;
+  /**
+   * JSON pointer → the text the author wrote, for every scalar YAML resolved to a number or
+   * boolean (`/build/version` → `"1.0"`, `/build/git_sha` → `"0000000"`). Empty for a document
+   * of nothing but strings. Null scalars are deliberately absent: an empty `git_sha:` lost no
+   * spelling, and recording it as `''` would turn a clear "must be string" into an opaque
+   * "must match pattern ^[0-9a-f]{7,40}$" (issue #20).
+   */
+  scalarSources: ReadonlyMap<string, string>;
+}
+
 /**
- * `yaml.parse` of text already in memory; parse errors carry `file` + `line:col` and are
- * `AppMapError(invalid_map)` (02 §10.1). Lives here (not load.ts) so validate.ts can parse
- * without importing the loader — the layering has no cycles (architecture §1).
+ * Scalars every schema documents as strings but that humans naturally write unquoted, so YAML
+ * resolves them to numbers and the file fails 02 §10 rule 1 before any other command can run
+ * (issue #20 — and `instrumentation/README.md`'s documented `0000000` placeholder is one of them).
+ *
+ * `String(parsed)` is NOT the fix: `0000000` parses as `0` and would then fail the schema's
+ * `^[0-9a-f]{7,40}$` pattern with a *different* confusing error, and `1.0` would silently become
+ * `"1"`. The authored text is restored instead. JSON pointers keyed by YamlKind; mirrors
+ * `QUOTED_STRING_KEYS` below, which re-quotes the same scalars on the way out.
  */
-export function parseYamlText<T = unknown>(text: string, file: string): T {
+export const AUTHORED_STRING_SCALARS: Readonly<Partial<Record<YamlKind, readonly string[]>>> = {
+  manifest: ['/build/version', '/build/build_number', '/build/git_sha'],
+};
+
+/** RFC 6901 escaping, so the pointers here compare equal to Ajv's `instancePath`. */
+function pointerEscape(key: string): string {
+  return key.replace(/~/g, '~0').replace(/\//g, '~1');
+}
+
+/** Record `pointer → node.source` for every scalar whose parsed value is no longer its spelling. */
+function collectScalarSources(node: unknown, pointer: string, out: Map<string, string>): void {
+  if (isScalar(node)) {
+    const t = typeof node.value;
+    // strings kept their spelling and null never had one (see ParsedYaml.scalarSources)
+    if ((t === 'number' || t === 'boolean' || t === 'bigint') && typeof node.source === 'string') out.set(pointer, node.source);
+    return;
+  }
+  if (isSeq(node)) {
+    node.items.forEach((item, i) => collectScalarSources(item, `${pointer}/${i}`, out));
+    return;
+  }
+  if (isMap(node)) {
+    for (const item of node.items) {
+      const key = isScalar(item.key) ? item.key.value : undefined;
+      if (key === null || key === undefined) continue;
+      collectScalarSources(item.value, `${pointer}/${pointerEscape(String(key))}`, out);
+    }
+  }
+}
+
+/** Assign `value` at `pointer` inside a plain JS document; a no-op when the parent is not a container. */
+function setAtPointer(obj: unknown, pointer: string, value: string): void {
+  const segments = pointer.split('/').slice(1).map((s) => s.replace(/~1/g, '/').replace(/~0/g, '~'));
+  const leaf = segments.pop();
+  if (leaf === undefined) return;
+  let cursor: unknown = obj;
+  for (const s of segments) {
+    if (Array.isArray(cursor)) cursor = cursor[Number(s)];
+    else if (isPlainObject(cursor)) cursor = cursor[s];
+    else return;
+  }
+  if (Array.isArray(cursor)) cursor[Number(leaf)] = value;
+  else if (isPlainObject(cursor)) cursor[leaf] = value;
+}
+
+/**
+ * `parseYamlText` plus the authored spellings of the scalars YAML turned into numbers or booleans
+ * (issue #20). When `kind` is given, the scalars listed in `AUTHORED_STRING_SCALARS[kind]` are
+ * rewritten back to the text the author typed, so a manifest that says `version: 1.0` /
+ * `git_sha: 0000000` carries the strings 02 §3 documents instead of `1` and `0`.
+ */
+export function parseYamlDoc<T = unknown>(text: string, file: string, kind?: YamlKind): ParsedYaml<T> {
   // parseDocument (not parse) so every error is collected with its position; uniqueKeys is the
   // yaml default, so duplicate keys are parse errors too.
   // LineCounter gives line:col without prettyErrors (which would echo source lines into the message)
@@ -45,7 +123,24 @@ export function parseYamlText<T = unknown>(text: string, file: string): T {
     });
     throw new AppMapError(ERROR_CODES.INVALID_MAP, `${file} is not valid YAML:\n${lines.join('\n')}`, 'fix the YAML syntax (02 §2.3: block style, 2-space indent)');
   }
-  return doc.toJS() as T;
+  const scalarSources = new Map<string, string>();
+  if (doc.contents !== null) collectScalarSources(doc.contents, '', scalarSources);
+  const js = doc.toJS() as T;
+  for (const pointer of (kind !== undefined ? AUTHORED_STRING_SCALARS[kind] : undefined) ?? []) {
+    const authored = scalarSources.get(pointer);
+    if (authored !== undefined) setAtPointer(js, pointer, authored);
+  }
+  return { doc: js, scalarSources };
+}
+
+/**
+ * `yaml.parse` of text already in memory; parse errors carry `file` + `line:col` and are
+ * `AppMapError(invalid_map)` (02 §10.1). Lives here (not load.ts) so validate.ts can parse
+ * without importing the loader — the layering has no cycles (architecture §1). Pass `kind` to
+ * get the `AUTHORED_STRING_SCALARS` coercion; use `parseYamlDoc` when the spellings are wanted too.
+ */
+export function parseYamlText<T = unknown>(text: string, file: string, kind?: YamlKind): T {
+  return parseYamlDoc<T>(text, file, kind).doc;
 }
 
 /** Options passed verbatim to `yaml.stringify`. */
@@ -85,14 +180,22 @@ export const KEY_ORDER: Readonly<Record<CanonicalType, readonly string[]>> = {
   edge: ['action', 'to', 'preconditions', 'postconditions', 'status', 'last_verified_build'],
   action: ['type', 'element', 'direction', 'url', 'gate'],
   condition: ['auth', 'screen', 'flag', 'value', 'platform_version'],
-  meta: ['sources', 'status', 'last_verified_build'],
+  // `relearned_from` sits directly above `reviewed_by` for the reason `provenance.machine_recompile`
+  // does (issue #13, #16): in a PR diff the two lines are then read together — "this screen was
+  // re-learned over a verified one, and here is who signed off since" — instead of the marker
+  // landing after the build stamp where it reads as a footnote.
+  meta: ['sources', 'status', 'relearned_from', 'reviewed_by', 'last_verified_build'],
   recipe: ['id', 'version', 'platform', 'description', 'matches', 'params', 'preconditions', 'entry', 'steps', 'verify', 'status', 'provenance', 'last_verified_build'],
   param: ['name', 'type', 'required', 'values'],
   entry: ['deep_link', 'fallback_path'],
-  step: ['id', 'action', 'element', 'list', 'match', 'text', 'direction', 'duration_ms', 'url', 'gate', 'timeout_ms', 'expect', 'intent_critical'],
+  // `cell` sits beside `list`: they are the two element keys of the two `select` forms (issue #19)
+  step: ['id', 'action', 'element', 'list', 'cell', 'match', 'text', 'direction', 'duration_ms', 'url', 'gate', 'timeout_ms', 'expect', 'intent_critical'],
   match: ['text'],
   expect: ['screen', 'focused', 'visible', 'not_visible', 'text_present'],
-  provenance: ['compiled_from', 'compiled_by', 'reviewed_by', 'revision_of'],
+  // `machine_recompile` sits directly above `reviewed_by` on purpose (issue #13 criterion 4): in a
+  // PR diff the two lines are then read together — "these steps are machine-made, the signature
+  // below is historical" — instead of the marker landing at the end where it reads as a footnote.
+  provenance: ['compiled_from', 'compiled_by', 'machine_recompile', 'reviewed_by', 'revision_of'],
   'mcp-allowlist': ['schema_version', 'servers'],
   server: ['name', 'source', 'transport', 'command', 'args', 'package', 'version', 'reviewer', 'reviewed_at', 'notes'],
 };
@@ -110,6 +213,19 @@ export const CHILD_TYPES: Readonly<Partial<Record<CanonicalType, Readonly<Record
   recipe: { params: 'param', preconditions: 'condition', entry: 'entry', steps: 'step', verify: 'expect', provenance: 'provenance' },
   step: { match: 'match', expect: 'expect' },
   'mcp-allowlist': { servers: 'server' },
+};
+
+/**
+ * Keys serialized as double-quoted strings even where YAML could write them plain (rule 4,
+ * issue #20). The manifest `build` scalars are documented strings (02 §3) whose natural values
+ * read back as numbers — `1.0` is a float, `0000000` is `0` — so the canonical form quotes all
+ * three: the committed file then teaches the habit, and `export --check` (02 §10.7) agrees with
+ * the quoted file instead of reporting a permanent diff. Keyed by CanonicalType, not by key name,
+ * so the integer `recipe.version` and the free-form `server.version` are untouched. Mirrors
+ * `AUTHORED_STRING_SCALARS` above, which restores the same scalars on the way in.
+ */
+export const QUOTED_STRING_KEYS: Readonly<Partial<Record<CanonicalType, ReadonlySet<string>>>> = {
+  build: new Set(['version', 'build_number', 'git_sha']),
 };
 
 export const SORTED_STRING_SETS: ReadonlySet<string> = new Set(['required_ids', 'dynamic_regions', 'gates', 'sources', 'visible', 'not_visible']);
@@ -236,9 +352,35 @@ export function canonicalize(type: CanonicalType, obj: unknown): unknown {
   return out;
 }
 
+/**
+ * Deep copy of a canonicalized value with every `QUOTED_STRING_KEYS` string leaf wrapped in a
+ * double-quoted `Scalar` node (rule 4, issue #20). Applied only here, on the way to `stringify`:
+ * `canonicalize` stays a pure data transform because merge-driver.ts compares its output
+ * structurally and the A1 tests assert `Object.keys` on it — a `Scalar` leaking in would break both.
+ */
+function forceQuotedScalars(type: CanonicalType, value: unknown): unknown {
+  // reached with the ITEM type already resolved by the caller (childType returns the item type for
+  // an array-valued key), exactly as canonicalizeArray resolves it
+  if (Array.isArray(value)) return value.map((v) => forceQuotedScalars(type, v));
+  if (!isPlainObject(value)) return value;
+  const forced = QUOTED_STRING_KEYS[type];
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (forced?.has(k) && typeof v === 'string') {
+      const scalar = new Scalar(v);
+      scalar.type = Scalar.QUOTE_DOUBLE;
+      out[k] = scalar;
+      continue;
+    }
+    const sub = childType(type, k, value);
+    out[k] = sub === undefined ? v : forceQuotedScalars(sub, v);
+  }
+  return out;
+}
+
 /** `stringify(canonicalize(type, obj))` for any canonical sub-type (merge driver renders subtrees with it). */
 export function canonicalYamlOf(type: CanonicalType, obj: unknown): string {
-  const text = stringify(canonicalize(type, obj), YAML_STRINGIFY_OPTIONS);
+  const text = stringify(forceQuotedScalars(type, canonicalize(type, obj)), YAML_STRINGIFY_OPTIONS);
   return text.endsWith('\n') ? text : `${text}\n`;
 }
 

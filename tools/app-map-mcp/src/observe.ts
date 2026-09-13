@@ -48,10 +48,10 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import type { AppMapConfig } from './config.ts';
 import { driverToolPattern } from './config.ts';
 import type { AppMapContext } from './context.ts';
-import type { DriverInput, ElementDef, ElementId, Fingerprint, HookPayload, IdentifyResult, IdentifySignalKind, Locator, NameScreenInput, NameScreenResult, Observation, ObservedSignature, RecordObservationInput, RecordResult, ScreenFile, ScrubPolicy, ScrubbedTree, SessionId, SessionMode, TreeNode } from './types.ts';
+import type { DriverInput, ElementDef, ElementId, Fingerprint, HookPayload, IdentifyResult, IdentifySignalKind, Locator, NameScreenInput, NameScreenResult, Observation, ObservedSignature, RecordObservationInput, RecordResult, ScreenFile, ScreenStatus, ScrubPolicy, ScrubbedTree, SessionId, SessionMode, TreeNode } from './types.ts';
 import {
   DEEP_LINK_REGEX, DEFAULT_LOCATOR_WEIGHTS, UNKNOWN_SCREEN, assertScrubbed, isMarker, markerOfScreen, now,
-  probeConditions, routeKey,
+  probeConditions, roleHintsFor, routeKey,
 } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { trajectoriesDir, trajectoryFile } from './paths.ts';
@@ -181,7 +181,9 @@ export function hookPayloadToObservation(ctx: AppMapContext, payload: HookPayloa
   const raw = extractSnapshot(payload.tool_response);
   if (raw !== undefined) {
     try {
-      const tree = normalizeTree(raw, { platform: ctx.map.platform });
+      // `roleHints`: a flat driver capture (03 §5, issue #10) carries no element type, so the
+      // registry's kinds are what make a registered list row come out `cell` and not `other`
+      const tree = normalizeTree(raw, { platform: ctx.map.platform, roleHints: roleHintsFor(ctx.map) });
       // 03 §3: `APP_MAP_BUILD=auto` takes the build the driver reported
       if (ctx.config.build === 'auto' && typeof tree.build === 'string' && tree.build !== '' && tree.build !== ctx.build) ctx.setBuild(tree.build);
       snapshot = scrub(tree, policyFor(ctx));
@@ -475,8 +477,17 @@ function fingerprintFor(snapshot: ScrubbedTree, node: TreeNode): Fingerprint {
  *  - `edges: []`, `gates` = the observation's `gates_present`, `meta {sources: [exploration],
  *    status: candidate}`; no `last_verified_build` (02 §8: set on verification only);
  *  - existing screen (from an earlier `name_screen`, still `candidate`) → elements merged
- *    (`created: false`), verified screens are never overwritten (`bad_input`);
- *  - `db.putScreen(screen, {dirty: true, reason: 'name_screen'})`; `export` writes the file.
+ *    (`created: false`);
+ *  - a screen that is no longer `candidate` is `bad_input` UNLESS `input.force` (02 §8, issue
+ *    #16). Forced, it is re-learned in place: the whole `signature` is rebuilt from this
+ *    observation (the stale half that mattered), elements present in the snapshot overwrite
+ *    their old definitions, `meta.status` drops back to `candidate`, `last_verified_build` is
+ *    dropped with the verification it recorded, and `meta.relearned_from` records the status
+ *    that was overridden so the override is visible in the PR diff. Elements absent from this
+ *    snapshot survive with their old locators — a re-learn is still a merge; use
+ *    `migrate-id`/a reviewed edit to delete an element;
+ *  - `db.putScreen(screen, {dirty: true, reason: 'name_screen'})` — `name_screen:force` for a
+ *    forced re-learn, so a reviewer can tell the two apart (03 §4); `export` writes the file.
  */
 export function nameScreen(ctx: AppMapContext, input: NameScreenInput): NameScreenResult {
   if (!input || typeof input.screen_id !== 'string' || input.screen_id === '') {
@@ -563,20 +574,41 @@ export function nameScreen(ctx: AppMapContext, input: NameScreenInput): NameScre
 
   const existing = ctx.db.getScreen(input.screen_id) ?? ctx.map.screens.get(input.screen_id);
   let created = true;
+  /** the status `force` overrode, or `undefined` for an ordinary naming (02 §8, issue #16) */
+  let relearned: ScreenStatus | undefined;
   if (existing !== undefined) {
     if (existing.meta.status !== 'candidate') {
-      throw new AppMapError(ERROR_CODES.BAD_INPUT, `name_screen: ${input.screen_id} is already ${existing.meta.status}`, 'a verified screen is only changed by a reviewed edit or a heal (04 §7.3)');
+      if (input.force !== true) {
+        throw new AppMapError(
+          ERROR_CODES.BAD_INPUT,
+          `name_screen: ${input.screen_id} is already ${existing.meta.status}`,
+          `demote it first with \`app-map mark-screen ${input.screen_id} candidate --reviewer <you>\` (the \`mark\` tool takes screen_id), or pass force to re-learn it in place — both record the override in meta (02 §8)`,
+        );
+      }
+      // the override replaces data a verification certified, so leave an audit line (02 §8)
+      relearned = existing.meta.status;
+      ctx.log.warn('name_screen: re-learning a non-candidate screen with force', { screen: input.screen_id, from: relearned });
     }
     created = false;
     const merged = new Map(existing.elements.map((e) => [e.id, e]));
     for (const e of elements) merged.set(e.id, e);
     screen.elements = [...merged.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
     screen.edges = existing.edges;
-    screen.meta = { ...existing.meta, sources: [...new Set([...existing.meta.sources, 'exploration' as const])].sort(), status: 'candidate' };
+    screen.meta = {
+      ...existing.meta,
+      sources: [...new Set([...existing.meta.sources, 'exploration' as const])].sort(),
+      status: 'candidate',
+      ...(relearned !== undefined ? { relearned_from: relearned } : {}),
+    };
+    // 02 §8: the verification is withdrawn together with the data it certified
+    if (relearned !== undefined) delete screen.meta.last_verified_build;
   }
 
-  ctx.db.putScreen(screen, { dirty: true, reason: 'name_screen' });
-  return { screen, created, from_seq: obs.seq, elements: elements.map((e) => e.id) };
+  ctx.db.putScreen(screen, { dirty: true, reason: relearned !== undefined ? 'name_screen:force' : 'name_screen' });
+  return {
+    screen, created, from_seq: obs.seq, elements: elements.map((e) => e.id),
+    ...(relearned !== undefined ? { relearned_from: relearned } : {}),
+  };
 }
 
 /** Read a trajectory file back (compile input); tolerates a truncated last line. */

@@ -2,14 +2,14 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { AnyTree, IdentifySignal, LoadedMap, ScreenFile, Tree, TreeNode } from '../types.ts';
-import { IDENTIFY_SCORES, IDENTIFY_UNKNOWN_THRESHOLD, UNKNOWN_SCREEN, probeConditions } from '../types.ts';
+import { IDENTIFY_SCORES, IDENTIFY_UNKNOWN_THRESHOLD, UNKNOWN_SCREEN, probeConditions, roleHintsFor } from '../types.ts';
 import { loadMap } from '../yaml/load.ts';
 import { structuralHash } from '../signature.ts';
-import { findByA11yId, walk } from '../tree.ts';
+import { findByA11yId, nodeAtPath, normalizeTree, pathOf, walk } from '../tree.ts';
 import {
   DECAY_FACTOR, DECAY_FLOOR, buildsSince, combineSignals, decayConfidence, evaluateCondition, identify, scoreScreen,
 } from '../identify.ts';
-import { PILOT_SCREEN_TREES, cloneTree, loadFixtureTree, makeTempAppMapDir } from './helpers.ts';
+import { PILOT_SCREEN_TREES, cloneTree, loadFixtureTree, makeTempAppMapDir, readJsonFixture } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
 let t: TempAppMapDir;
@@ -102,13 +102,75 @@ describe('identify — marker (03 §5.2)', () => {
     assert.equal(r.marker, 'screen.not_in_map', 'the marker seen is still reported');
   });
 
-  it('two marker nodes → not "exactly one": the cascade decides and no marker is reported', () => {
+  it('two markers → the deepest wins: a pushed detail leaves the parent marker in the tree (01 R3, issue #10)', () => {
+    // the reporter saw `identify_screen` answer `films_list` while `person_detail` was on screen:
+    // taking the first marker identifies the screen the pushed one COVERS
     const tree = cloneTree(loadFixtureTree('invoice_list'));
     findByA11yId(tree, 'invoice.list.table')[0]!.children.push(node('container', { a11y_id: 'screen.login' }));
     const r = identify(map, tree);
-    assert.equal(r.marker, undefined);
-    assert.ok(!r.signals.some((s) => s.kind === 'marker'));
-    assert.equal(r.screen_id, 'invoice_list', 'required_ids + title still win');
+    assert.equal(r.marker, 'screen.login');
+    assert.deepEqual(r.signals.map((s) => s.kind), ['marker']);
+    assert.equal(r.screen_id, 'login');
+    assert.equal(r.confidence, 1);
+  });
+
+  it('identifies a real flat Argent capture of a pushed screen as the pushed screen (issue #10)', () => {
+    const raw = readJsonFixture('raw/argent-native-describe-screen.invoice_detail.json');
+    const tree = normalizeTree(raw, { platform: 'ios', roleHints: roleHintsFor(map) });
+    const r = identify(map, tree);
+    assert.equal(r.screen_id, 'invoice_detail', 'not invoice_list, whose marker is still in the tree');
+    assert.equal(r.marker, 'screen.invoice_detail');
+    assert.equal(r.confidence, 1);
+  });
+
+  it('a 1pt marker overlay identifies at confidence 1, and a covering screen’s coincident marker wins (issue #15)', () => {
+    // `AppMapKit.appMapScreen` pins the marker as a 1pt element at the screen root's top-leading
+    // corner, so two roots flush with the top report markers with an IDENTICAL frame. Before the
+    // dedupe exception this capture collapsed to the covered screen's marker alone and answered
+    // `invoice_list` while `invoice_detail` was on screen.
+    const marker = (id: string): Record<string, unknown> => ({
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      normalizedFrame: { x: 0, y: 0, width: 0.0026, height: 0.0012 },
+      traits: [], identifier: id, viewClassName: 'SwiftUI.AccessibilityNode',
+    });
+    const capture = {
+      status: 'ok',
+      screenFrame: { x: 0, y: 0, width: 390, height: 844 },
+      elements: [
+        marker('screen.invoice_list'),
+        marker('screen.invoice_detail'),
+        { normalizedFrame: { x: 0.04, y: 0.12, width: 0.2, height: 0.04 }, traits: ['button'], identifier: 'invoice.detail.back.button', viewClassName: 'UIButton' },
+        { normalizedFrame: { x: 0.04, y: 0.24, width: 0.92, height: 0.05 }, traits: [], identifier: 'invoice.detail.amount.text', viewClassName: 'UILabel' },
+      ],
+    };
+    const r = identify(map, normalizeTree(capture, { platform: 'ios', roleHints: roleHintsFor(map) }));
+    assert.equal(r.screen_id, 'invoice_detail', 'not invoice_list, whose 1pt marker shares the frame');
+    assert.equal(r.marker, 'screen.invoice_detail');
+    assert.equal(r.confidence, 1);
+    assert.deepEqual(r.signals.map((s) => s.kind), ['marker']);
+  });
+
+  it('a 1pt marker that is a childless leaf beside the content still identifies at confidence 1 (issue #15)', () => {
+    // the overlay marker is a zero-ish-area leaf with no children of its own. Nothing in
+    // normalization, scrubbing or the cascade may discard it for being small (03 §5.2), and it
+    // must not corrupt `path`: a node outside the marker subtree is addressed from the lowest
+    // common ancestor of it and the marker (02 §5.1).
+    const content = node('container', {}, [
+      node('list', { a11y_id: 'invoice.list.table' }),
+      node('button', { a11y_id: 'invoice.add.button', label: 'New Invoice' }),
+    ]);
+    for (const bbox of [{ x: 0, y: 0.0714, w: 0.0025, h: 0.0011 }, { x: 0, y: 0, w: 0, h: 0 }]) {
+      const leaf = node('other', { a11y_id: 'screen.invoice_list', bbox_norm: bbox });
+      const tree = synthetic(node('application', {}, [node('window', {}, [leaf, content])]));
+      const r = identify(map, tree);
+      assert.equal(r.screen_id, 'invoice_list', `bbox ${JSON.stringify(bbox)}`);
+      assert.equal(r.confidence, 1);
+      assert.deepEqual(r.signals.map((s) => s.kind), ['marker']);
+      assert.equal(r.marker, 'screen.invoice_list');
+      const add = findByA11yId(tree, 'invoice.add.button')[0]!;
+      assert.equal(pathOf(tree, add), 'container/button', 'addressed from the LCA of the node and the marker');
+      assert.equal(nodeAtPath(tree, 'container/button'), add);
+    }
   });
 
   it('a gate-only tree is unknown with the gate present, never the gate as screen_id (decision 19)', () => {

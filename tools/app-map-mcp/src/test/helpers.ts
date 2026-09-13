@@ -169,6 +169,58 @@ export function loadLintFixture(name: 'Bad.swift' | 'Bad.kt'): string {
   return readFixture(join('lint', name));
 }
 
+/**
+ * The raw NESTED fixtures with the screen marker DOUBLED, which is what `appMapScreen(_:)` and
+ * `AppMapScreenMarkerView` really emit (issue #15): `screen.<id>` sits on the
+ * `children: .contain` CONTAINER and again on a 1 pt overlay ELEMENT inside it. The overlay is
+ * the container's LAST child — SwiftUI applies the overlay after the content it decorates, UIKit
+ * `addSubview`s the marker — and it is childless. `fromArgentScreen` discards the overlay's own
+ * frame, so the FLAT shape never shows the pair; every capture that preserves nesting does
+ * (`xcuitest`, and `maestro`, which drift.ts runs on BOTH platforms).
+ */
+export function doubledMarkerXcuiFixture(marker = 'screen.invoice_list'): unknown {
+  const raw = readJsonFixture<{ root: Record<string, unknown> }>(join('raw', 'xcuitest-snapshot.invoice_list.json'));
+  let found = false;
+  const visit = (n: Record<string, unknown>): void => {
+    const kids = Array.isArray(n['children']) ? n['children'] as Record<string, unknown>[] : [];
+    if (n['identifier'] === marker) {
+      const frame = (n['frame'] ?? {}) as Record<string, number>;
+      kids.push({ type: 'Other', identifier: marker, frame: { x: frame['x'] ?? 0, y: frame['y'] ?? 0, width: 1, height: 1 }, children: [] });
+      found = true;
+      return;
+    }
+    for (const kid of kids) visit(kid);
+  };
+  visit(raw.root);
+  if (!found) throw new Error(`xcuitest fixture carries no ${marker} container`);
+  return raw;
+}
+
+/** `doubledMarkerXcuiFixture` for the `maestro hierarchy` shape (the marker keys on `resource-id`). */
+export function doubledMarkerMaestroFixture(marker = 'screen.invoice_list'): unknown {
+  const raw = readJsonFixture<{ elements: Record<string, unknown>[] }>(join('raw', 'maestro-hierarchy.invoice_list.json'));
+  let found = false;
+  const visit = (n: Record<string, unknown>): void => {
+    const attrs = (n['attributes'] ?? {}) as Record<string, string>;
+    const kids = Array.isArray(n['children']) ? n['children'] as Record<string, unknown>[] : [];
+    if (attrs['resource-id'] === marker) {
+      // the marker's top-leading corner, 1 px square — `[x1,y1][x2,y2]`, maestro's bounds format
+      const x1 = Number(/\[(-?\d+),(-?\d+)\]/.exec(attrs['bounds'] ?? '')?.[1] ?? 0);
+      const y1 = Number(/\[(-?\d+),(-?\d+)\]/.exec(attrs['bounds'] ?? '')?.[2] ?? 0);
+      kids.push({
+        attributes: { ...attrs, class: 'android.view.View', bounds: `[${x1},${y1}][${x1 + 1},${y1 + 1}]` },
+        children: [],
+      });
+      found = true;
+      return;
+    }
+    for (const kid of kids) visit(kid);
+  };
+  for (const el of raw.elements) visit(el);
+  if (!found) throw new Error(`maestro fixture carries no ${marker} container`);
+  return raw;
+}
+
 /** Deep clone a tree so a test can mutate it (drop ids, relabel) without touching the fixture. */
 export function cloneTree<T extends AnyTree>(t: T): T {
   return structuredClone(t);

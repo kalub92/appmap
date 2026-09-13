@@ -1,0 +1,372 @@
+{
+  "_note": "real `argent run native-describe-screen --udid <UDID> --bundleId <ID> --json` shape (@swmansion/argent@0.25.0, issue #10): a FLAT element list, no nesting, no `type`, no `enabled` and no focus flag of any name. `elements` is in CAPTURE order, which is what `sibling_index` records. Reconstructed from swapi-explorer app-map/ios/screens/films_list.yaml, and it carries the DOUBLED tab bar verbatim: six tab elements, each tab once without an identifier and once with one (issue #10 AC4).",
+  "status": "ok",
+  "screenFrame": {
+    "x": 0,
+    "y": 0,
+    "width": 402.0,
+    "height": 874.0
+  },
+  "elements": [
+    {
+      "frame": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 1.0,
+        "height": 1.0
+      },
+      "normalizedFrame": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 0.0025,
+        "height": 0.0011
+      },
+      "normalizedTapPoint": {
+        "x": 0.0013,
+        "y": 0.0006
+      },
+      "tapPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "traits": [],
+      "identifier": "screen.films_list",
+      "viewClassName": "SwiftUI.AccessibilityNode"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 168.0,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.1922,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.2303
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 201.3
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "A New Hope",
+      "identifier": "films.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 234.7,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.2685,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.3067
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 268.1
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "The Empire Strikes Back",
+      "identifier": "films.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 301.4,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.3448,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.383
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 334.7
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Return of the Jedi",
+      "identifier": "films.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 368.0,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.4211,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.4592
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 401.3
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "The Phantom Menace",
+      "identifier": "films.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 434.7,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.4974,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.5355
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 468.0
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Attack of the Clones",
+      "identifier": "films.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 501.4,
+        "width": 370.0,
+        "height": 66.7
+      },
+      "normalizedFrame": {
+        "x": 0.0398,
+        "y": 0.5737,
+        "width": 0.9204,
+        "height": 0.0763
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.6119
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 534.8
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Revenge of the Sith",
+      "identifier": "films.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 67.0,
+        "y": 795.0,
+        "width": 94.7,
+        "height": 54.0
+      },
+      "normalizedFrame": {
+        "x": 0.1667,
+        "y": 0.9096,
+        "width": 0.2355,
+        "height": 0.0618
+      },
+      "normalizedTapPoint": {
+        "x": 0.2844,
+        "y": 0.9405
+      },
+      "tapPoint": {
+        "x": 114.3,
+        "y": 822.0
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Characters",
+      "viewClassName": "_UITabButton"
+    },
+    {
+      "frame": {
+        "x": 67.0,
+        "y": 795.0,
+        "width": 94.7,
+        "height": 54.0
+      },
+      "normalizedFrame": {
+        "x": 0.1667,
+        "y": 0.9096,
+        "width": 0.2355,
+        "height": 0.0618
+      },
+      "normalizedTapPoint": {
+        "x": 0.2844,
+        "y": 0.9405
+      },
+      "tapPoint": {
+        "x": 114.3,
+        "y": 822.0
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Characters",
+      "identifier": "nav.people.tab",
+      "viewClassName": "_UITabButton"
+    },
+    {
+      "frame": {
+        "x": 153.7,
+        "y": 795.0,
+        "width": 94.7,
+        "height": 54.0
+      },
+      "normalizedFrame": {
+        "x": 0.3823,
+        "y": 0.9096,
+        "width": 0.2355,
+        "height": 0.0618
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.9405
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 822.0
+      },
+      "traits": [
+        "button",
+        "selected"
+      ],
+      "label": "Films",
+      "viewClassName": "_UITabButton"
+    },
+    {
+      "frame": {
+        "x": 153.7,
+        "y": 795.0,
+        "width": 94.7,
+        "height": 54.0
+      },
+      "normalizedFrame": {
+        "x": 0.3823,
+        "y": 0.9096,
+        "width": 0.2355,
+        "height": 0.0618
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.9405
+      },
+      "tapPoint": {
+        "x": 201.0,
+        "y": 822.0
+      },
+      "traits": [
+        "button",
+        "selected"
+      ],
+      "label": "Films",
+      "identifier": "nav.films.tab",
+      "viewClassName": "_UITabButton"
+    },
+    {
+      "frame": {
+        "x": 240.3,
+        "y": 795.0,
+        "width": 94.7,
+        "height": 54.0
+      },
+      "normalizedFrame": {
+        "x": 0.5978,
+        "y": 0.9096,
+        "width": 0.2355,
+        "height": 0.0618
+      },
+      "normalizedTapPoint": {
+        "x": 0.7156,
+        "y": 0.9405
+      },
+      "tapPoint": {
+        "x": 287.7,
+        "y": 822.0
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Favorites",
+      "viewClassName": "_UITabButton"
+    },
+    {
+      "frame": {
+        "x": 240.3,
+        "y": 795.0,
+        "width": 94.7,
+        "height": 54.0
+      },
+      "normalizedFrame": {
+        "x": 0.5978,
+        "y": 0.9096,
+        "width": 0.2355,
+        "height": 0.0618
+      },
+      "normalizedTapPoint": {
+        "x": 0.7156,
+        "y": 0.9405
+      },
+      "tapPoint": {
+        "x": 287.7,
+        "y": 822.0
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Favorites",
+      "identifier": "nav.favorites.tab",
+      "viewClassName": "_UITabButton"
+    }
+  ]
+}

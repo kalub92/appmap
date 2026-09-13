@@ -1,0 +1,344 @@
+{
+  "_note": "real `argent run native-describe-screen --udid <UDID> --bundleId <ID> --json` shape (@swmansion/argent@0.25.0, issue #10): a FLAT element list, no nesting, no `type`, no `enabled` and no focus flag of any name. `elements` is in CAPTURE order, which is what `sibling_index` records. Pilot ids (app-map/ios/screens/invoice_list.yaml) in the real flat shape, with the doubled tab bar: after `dedupeArgentElements` the three tabs land at tabBar/tab[0..2] with sibling_index 0..2, exactly the pilot fingerprints, so a tab heal resolves again.",
+  "status": "ok",
+  "screenFrame": {
+    "x": 0,
+    "y": 0,
+    "width": 390.0,
+    "height": 844.0
+  },
+  "elements": [
+    {
+      "frame": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 1.0,
+        "height": 1.0
+      },
+      "normalizedFrame": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 0.0026,
+        "height": 0.0012
+      },
+      "normalizedTapPoint": {
+        "x": 0.0013,
+        "y": 0.0006
+      },
+      "tapPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "traits": [],
+      "identifier": "screen.invoice_list",
+      "viewClassName": "SwiftUI.AccessibilityNode"
+    },
+    {
+      "frame": {
+        "x": 16.0,
+        "y": 51.0,
+        "width": 60.0,
+        "height": 36.0
+      },
+      "normalizedFrame": {
+        "x": 0.041,
+        "y": 0.0604,
+        "width": 0.1538,
+        "height": 0.0427
+      },
+      "normalizedTapPoint": {
+        "x": 0.1179,
+        "y": 0.0818
+      },
+      "tapPoint": {
+        "x": 46.0,
+        "y": 69.0
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Filter",
+      "identifier": "invoice.filter.button",
+      "viewClassName": "_UIButtonBarButton"
+    },
+    {
+      "frame": {
+        "x": 280.0,
+        "y": 51.0,
+        "width": 100.0,
+        "height": 36.0
+      },
+      "normalizedFrame": {
+        "x": 0.7179,
+        "y": 0.0604,
+        "width": 0.2564,
+        "height": 0.0427
+      },
+      "normalizedTapPoint": {
+        "x": 0.8461,
+        "y": 0.0818
+      },
+      "tapPoint": {
+        "x": 330.0,
+        "y": 69.0
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "New Invoice",
+      "identifier": "invoice.add.button",
+      "viewClassName": "_UIButtonBarButton"
+    },
+    {
+      "frame": {
+        "x": 0.0,
+        "y": 190.0,
+        "width": 390.0,
+        "height": 72.0
+      },
+      "normalizedFrame": {
+        "x": 0.0,
+        "y": 0.2251,
+        "width": 1.0,
+        "height": 0.0853
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.2677
+      },
+      "tapPoint": {
+        "x": 195.0,
+        "y": 225.9
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Acme Corp, $1,250.00, Paid",
+      "identifier": "invoice.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 0.0,
+        "y": 262.0,
+        "width": 390.0,
+        "height": 72.0
+      },
+      "normalizedFrame": {
+        "x": 0.0,
+        "y": 0.3104,
+        "width": 1.0,
+        "height": 0.0853
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.3531
+      },
+      "tapPoint": {
+        "x": 195.0,
+        "y": 298.0
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Globex LLC, $480.00, Sent",
+      "identifier": "invoice.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 0.0,
+        "y": 334.0,
+        "width": 390.0,
+        "height": 72.0
+      },
+      "normalizedFrame": {
+        "x": 0.0,
+        "y": 0.3957,
+        "width": 1.0,
+        "height": 0.0853
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.4384
+      },
+      "tapPoint": {
+        "x": 195.0,
+        "y": 370.0
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Initech, $3,200.00, Overdue",
+      "identifier": "invoice.list.cell",
+      "viewClassName": "SwiftUI.ListCollectionViewCell"
+    },
+    {
+      "frame": {
+        "x": 0.0,
+        "y": 761.0,
+        "width": 130.0,
+        "height": 83.0
+      },
+      "normalizedFrame": {
+        "x": 0.0,
+        "y": 0.9017,
+        "width": 0.3333,
+        "height": 0.0983
+      },
+      "normalizedTapPoint": {
+        "x": 0.1666,
+        "y": 0.9508
+      },
+      "tapPoint": {
+        "x": 65.0,
+        "y": 802.5
+      },
+      "traits": [
+        "button",
+        "selected"
+      ],
+      "label": "Invoices",
+      "viewClassName": "_UITabButton"
+    },
+    {
+      "frame": {
+        "x": 0.0,
+        "y": 761.0,
+        "width": 130.0,
+        "height": 83.0
+      },
+      "normalizedFrame": {
+        "x": 0.0,
+        "y": 0.9017,
+        "width": 0.3333,
+        "height": 0.0983
+      },
+      "normalizedTapPoint": {
+        "x": 0.1666,
+        "y": 0.9508
+      },
+      "tapPoint": {
+        "x": 65.0,
+        "y": 802.5
+      },
+      "traits": [
+        "button",
+        "selected"
+      ],
+      "label": "Invoices",
+      "identifier": "nav.invoices.tab",
+      "viewClassName": "_UITabButton"
+    },
+    {
+      "frame": {
+        "x": 130.0,
+        "y": 761.0,
+        "width": 130.0,
+        "height": 83.0
+      },
+      "normalizedFrame": {
+        "x": 0.3333,
+        "y": 0.9017,
+        "width": 0.3333,
+        "height": 0.0983
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.9508
+      },
+      "tapPoint": {
+        "x": 195.0,
+        "y": 802.5
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Clients",
+      "viewClassName": "_UITabButton"
+    },
+    {
+      "frame": {
+        "x": 130.0,
+        "y": 761.0,
+        "width": 130.0,
+        "height": 83.0
+      },
+      "normalizedFrame": {
+        "x": 0.3333,
+        "y": 0.9017,
+        "width": 0.3333,
+        "height": 0.0983
+      },
+      "normalizedTapPoint": {
+        "x": 0.5,
+        "y": 0.9508
+      },
+      "tapPoint": {
+        "x": 195.0,
+        "y": 802.5
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Clients",
+      "identifier": "nav.clients.tab",
+      "viewClassName": "_UITabButton"
+    },
+    {
+      "frame": {
+        "x": 260.0,
+        "y": 761.0,
+        "width": 130.0,
+        "height": 83.0
+      },
+      "normalizedFrame": {
+        "x": 0.6667,
+        "y": 0.9017,
+        "width": 0.3333,
+        "height": 0.0983
+      },
+      "normalizedTapPoint": {
+        "x": 0.8333,
+        "y": 0.9508
+      },
+      "tapPoint": {
+        "x": 325.0,
+        "y": 802.5
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Settings",
+      "viewClassName": "_UITabButton"
+    },
+    {
+      "frame": {
+        "x": 260.0,
+        "y": 761.0,
+        "width": 130.0,
+        "height": 83.0
+      },
+      "normalizedFrame": {
+        "x": 0.6667,
+        "y": 0.9017,
+        "width": 0.3333,
+        "height": 0.0983
+      },
+      "normalizedTapPoint": {
+        "x": 0.8333,
+        "y": 0.9508
+      },
+      "tapPoint": {
+        "x": 325.0,
+        "y": 802.5
+      },
+      "traits": [
+        "button"
+      ],
+      "label": "Settings",
+      "identifier": "nav.settings.tab",
+      "viewClassName": "_UITabButton"
+    }
+  ]
+}

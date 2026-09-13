@@ -3,9 +3,11 @@
  *
  * `identify(map, tree, opts)`:
  *  1. gates: for every `map.gates` entry, `gateSignatureMatches` → `gates_present`;
- *  2. marker: exactly one node with id `^screen\.` (findMarkerNodes.count === 1) whose suffix is
- *     a known screen → `{screen_id, confidence 1.0, signals:[marker]}` — done (still compute
- *     `structural_hash` and, when `opts.build` given, apply decay);
+ *  2. marker: the DEEPEST node with id `^screen\.` (`deepestMarker`) whose suffix is a known
+ *     screen → `{screen_id, confidence 1.0, signals:[marker]}` — done (still compute
+ *     `structural_hash` and, when `opts.build` given, apply decay). Deepest, not "exactly one":
+ *     a pushed detail screen leaves the covered screen's marker in the tree (01 R3, issue #10),
+ *     and taking the first would identify the screen underneath;
  *  3. route: `opts.route` (or `tree.route`) whose `routeKey` is in `map.routes` → 0.9;
  *  4. required_ids: fraction f of `signature.required_ids` present, only if f ≥ 0.5 → 0.8 × f;
  *  5. structural_hash: `structuralHash(tree, screen.dynamic_regions)` equals
@@ -32,7 +34,7 @@ import {
   IDENTIFY_AGREEMENT_BONUS, IDENTIFY_SCORES, IDENTIFY_UNKNOWN_THRESHOLD, REQUIRED_IDS_MIN_FRACTION, UNKNOWN_SCREEN,
   routeKey, screenIdOfMarker,
 } from './types.ts';
-import { findMarkerNodes, walk } from './tree.ts';
+import { deepestMarker, walk } from './tree.ts';
 import { gateSignatureMatches, structuralHash, titleOf } from './signature.ts';
 
 export const DECAY_FACTOR = 0.9;
@@ -137,10 +139,9 @@ export function identify(map: LoadedMap, tree: AnyTree, opts: IdentifyOptions = 
   gates_present.sort();
 
   const index = indexTree(tree);
-  const { nodes: markerNodes, count } = findMarkerNodes(tree);
-  const marker = count === 1 ? markerNodes[0]!.a11y_id : undefined;
+  const marker = deepestMarker(tree)?.a11y_id;
 
-  // 2. marker (03 §5.2): exactly one marker whose suffix is a known `kind: screen` file (gates
+  // 2. marker (03 §5.2): the deepest marker whose suffix is a known `kind: screen` file (gates
   // never win identification — architecture §7 decision 19)
   if (marker !== undefined) {
     const suffix = screenIdOfMarker(marker);

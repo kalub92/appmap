@@ -5,12 +5,29 @@
  *     on every user-authored regex source (`matches[]`, `label_regex`): ≤200 chars, no nested
  *     quantifiers (`(a+)+`, `(a*)*`, `(a|aa)+`-style) — `safeRegexIssue` (07 §4 malicious YAML)
  *  2. every element id, screen id, gate id exists in ids.yaml (gate dismiss controls count as
- *     registered via `gates[].dismiss`; screen markers via `screens[].id`); element ids in
+ *     registered via `gates[].dismiss`; screen markers via `screens[].id`); an edge
+ *     `action.element` must also be DECLARED on its own screen — a WARNING instead of an error
+ *     while exploration has not reached it, an error once it has. Three subjects count as
+ *     unreached (issue #12): the SCREEN, `meta.status: candidate` with `elements: []` (an untouched
+ *     router-export seed, 01 R6/03 §5); the ELEMENT, a still-`candidate` edge whose element no
+ *     capture has produced on ANY screen (what a build N+1 `import-router` refresh appends to an
+ *     already-explored screen when the app registered a new id); or the CAPTURE, a still-`candidate`
+ *     edge on a router-written screen whose `elements[]` was captured on a build the manifest has
+ *     moved past — or, for a `build_number` that does not compare numerically, any build other than
+ *     the one it names (the same refresh naming SHARED CHROME another screen already declares). An
+ *     element missing from ids.yaml entirely stays an error on every screen, and a non-`candidate`
+ *     edge is a claim that the tap happened here; element ids in
  *     screen files match `ID_REGEX` (2+ segments; `ELEMENT_ID_REGEX` applies to ids.yaml only);
  *     when ids.yaml carries `title`/`deep_link` for a screen they must agree with the screen
  *     file's — `title` exactly, `deep_link` on `routeKey` (query stripped: the registry records
  *     the route, the screen file may add `?fixture=…`, 01 R5); `indexMap` serves the screen
- *     file's values (two sources of truth otherwise — `plan_path`, `routes`, drift)
+ *     file's values (two sources of truth otherwise — `plan_path`, `routes`, drift); and a
+ *     WARNING for a registered `kind: list` element that no screen file records as observed —
+ *     a SwiftUI list container is not an accessibility element, so it never reaches the driver
+ *     and a `select {list, match}` against it can never resolve (01 R4, issue #19); and a WARNING
+ *     for an `expect.focused` on a platform whose driver reports no focus — Argent's iOS snapshot
+ *     carries no focus flag of any kind, so the assertion can never be satisfied and every replay
+ *     of the step falls back (`types.focusObservable`, 04 §10, issue #18)
  *  3. every edge `to`, `entry.fallback_path` entry, `expect.screen`, condition `screen` references
  *     an existing screen file (`_previous` allowed on gates)
  *  4. every committed element has ≥2 locators and an `a11y_id` locator, unless the file is a
@@ -18,7 +35,10 @@
  *  5. no `text` strategy stands alone
  *  6. `intent_critical` agrees between ids.yaml and every screen element / recipe step that
  *     touches the element (absent = false)
- *  7. serialization is canonical (yaml/canonical.ts `isCanonical`)
+ *  7. serialization is canonical (yaml/canonical.ts `isCanonical`) — this is where an unquoted
+ *     `version: 1.0` / `git_sha: 0000000` in a manifest lands now that rule 1 reads them as the
+ *     authored strings: `export --check` reports one re-quoting diff and the next write of the
+ *     manifest fixes it, instead of `map failed to load` blocking every other command (issue #20)
  *  8. forbidden content sweep over `elements[].label`, `title`, every `text`/`text_present`/
  *     `match.text` and `description`: email, phone, 13–19 digit runs, currency, IBAN-like,
  *     SSN-like (`scrub.ts` PII_PATTERNS); `{param}` slots are exempt. Also a WARNING when a
@@ -35,14 +55,14 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, join, relative, sep } from 'node:path';
 import type { AppMapConfig, Platform } from './config.ts';
 import { PLATFORMS } from './config.ts';
-import type { Condition, Expect, IdsElement, IdsRegistry, RecipeFile, ScreenFile, ValidateResult, ValidationIssue } from './types.ts';
-import { ID_REGEX, PREVIOUS_SCREEN, markerOfScreen, routeKey, stepElement } from './types.ts';
+import type { BuildNumber, Condition, ElementId, Expect, IdsElement, IdsRegistry, Manifest, RecipeFile, ScreenFile, UnlearnedEdgeElementReason, ValidateResult, ValidationIssue } from './types.ts';
+import { ID_REGEX, PREVIOUS_SCREEN, focusObservable, isNewerBuild, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
 import { AppMapError } from './errors.ts';
 import { allowlistFile, idsFile, kindForPath, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from './paths.ts';
 import type { YamlKind } from './paths.ts';
 import { PII_PATTERNS } from './scrub.ts';
-import { isCanonical, parseYamlText } from './yaml/canonical.ts';
-import { validateAgainstSchema } from './yaml/schemas.ts';
+import { isCanonical, parseYamlDoc } from './yaml/canonical.ts';
+import { schemaIssueDetail, validateAgainstSchema } from './yaml/schemas.ts';
 
 export interface ValidateOptions {
   /** default: every platform directory that has a manifest */
@@ -89,8 +109,11 @@ export function validateMap(config: AppMapConfig, opts: ValidateOptions = {}): V
       return undefined;
     }
     let doc: unknown;
+    let scalarSources: ReadonlyMap<string, string>;
     try {
-      doc = parseYamlText(text, file);
+      // parsed WITH the kind, so rule 1 accepts exactly what `loadMap` accepts: a manifest whose
+      // `version: 1.0` / `git_sha: 0000000` is read back as the authored string (issue #20)
+      ({ doc, scalarSources } = parseYamlDoc(text, file, kind));
     } catch (e) {
       issues.push(issue(1, file, AppMapError.is(e) ? e.message : String(e)));
       return undefined;
@@ -103,7 +126,7 @@ export function validateMap(config: AppMapConfig, opts: ValidateOptions = {}): V
       return undefined;
     }
     if (schemaIssues.length) {
-      for (const si of schemaIssues) issues.push(issue(1, file, `${si.message}${si.params ? ' ' + JSON.stringify(si.params) : ''}`, si.path));
+      for (const si of schemaIssues) issues.push(issue(1, file, schemaIssueDetail(si, doc, scalarSources), si.path));
       return undefined;
     }
     return doc as T;
@@ -138,7 +161,7 @@ export function validateMap(config: AppMapConfig, opts: ValidateOptions = {}): V
       issues.push(issue(1, rel(mPath), `manifest.yaml is missing for platform ${platform}`));
       continue;
     }
-    const manifest = readChecked<{ platform: string }>(mPath, 'manifest');
+    const manifest = readChecked<Manifest>(mPath, 'manifest');
     if (manifest && manifest.platform !== platform) issues.push(issue(1, rel(mPath), `platform ${manifest.platform} must equal the directory name ${platform}`, '/platform'));
 
     const screens = new Map<string, ScreenFile>();
@@ -180,7 +203,9 @@ export function validateMap(config: AppMapConfig, opts: ValidateOptions = {}): V
     }
     if (ids) {
       const strings = stringsFile(config, platform);
-      const input: CrossRefInput = { platform, ids, screens, recipes };
+      // rule 2's stale-capture carve-out compares each screen against the build the manifest names
+      // (issue #12); a manifest that failed rule 1 leaves it undefined and the carve-out stays off
+      const input: CrossRefInput = { platform, ids, screens, recipes, build: manifest?.build.build_number };
       if (existsSync(strings)) input.staticStrings = new Set(readFileSync(strings, 'utf8').split('\n').filter((l) => l.length > 0));
       issues.push(...crossReferenceIssues(input));
     }
@@ -274,6 +299,35 @@ export interface CrossRefInput {
    * missing from it. Omit (not empty) when the file is absent — then nothing is warned.
    */
   staticStrings?: ReadonlySet<string>;
+  /**
+   * The build this platform's `manifest.yaml` names — what `import-router` stamps when it merges a
+   * new export (02 §8). Rule 2's third carve-out subject compares it with each screen's
+   * `meta.last_verified_build` to tell a stale capture from a contradiction (issue #12); omit it
+   * and that subject simply never fires, so callers that have no manifest lose nothing else.
+   */
+  build?: BuildNumber;
+}
+
+/**
+ * Every element id some screen FILE records as present on that screen: `elements[]`,
+ * `signature.required_ids`, `dynamic_regions` and each variant's `required_ids`. `observe`'s
+ * `nameScreen` builds all four out of `idsPresent(snapshot)` — a real capture — so together they
+ * are the map's committed, durable record of "a driver has seen this id in a tree", and the
+ * SQLite cache adds nothing (its `hits` counter only counts elements a driver call TOUCHED, and
+ * a container is never touched: you tap its cells). Edge `action.element` is excluded on purpose:
+ * `import-router` seeds edges for elements exploration has never reached (01 R6, issue #12),
+ * which is the absence of evidence rather than evidence — and rule 2's carve-out reads this set to
+ * decide exactly that, so counting edges here would make it answer its own question.
+ */
+function observedElementIds(screens: Iterable<ScreenFile>): Set<ElementId> {
+  const out = new Set<ElementId>();
+  for (const s of screens) {
+    for (const e of s.elements) out.add(e.id);
+    for (const id of s.signature.required_ids ?? []) out.add(id);
+    for (const id of s.dynamic_regions ?? []) out.add(id);
+    for (const v of s.variants ?? []) for (const id of v.required_ids ?? []) out.add(id);
+  }
+  return out;
 }
 
 /** Pure: rules 2–6 and 8 over already-parsed documents. */
@@ -297,11 +351,21 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
   const knownScreen = (id: string, allowPrevious: boolean): boolean => screenFilesById.has(id) || (allowPrevious && id === PREVIOUS_SCREEN);
   const critical = (id: string): boolean => registry.get(id)?.intent_critical === true; // absent = false (decision 26)
 
-  const checkExpect = (file: string, x: Expect | undefined, loc: string): void => {
+  const checkExpect = (file: string, x: Expect | undefined, loc: string, where: string): void => {
     if (!x) return;
     if (x.screen !== undefined && !knownScreen(x.screen, false)) issues.push(issue(3, file, `expect.screen ${x.screen}: no such screen file`, `${loc}/screen`));
     for (const id of [x.focused, ...(x.visible ?? []), ...(x.not_visible ?? [])]) {
       if (id !== undefined && !registry.has(id)) issues.push(issue(2, file, `element ${id} is not registered in ids.yaml`, loc));
+    }
+    // An assertion this platform's driver cannot report is not a verification, it is a guaranteed
+    // fallback: the step's `expect` fails on every replay however well the action worked
+    // (issue #18's `FALLBACK at s1 (expect_failed)` on a field that WAS focused). A WARNING, not
+    // an error — the file is still well-formed and Maestro satisfies it, so 06 R1 must not block
+    // the PR and recipe.schema.json must keep accepting the key (`focusObservable`, 04 §10).
+    if (x.focused !== undefined && !focusObservable(input.platform)) {
+      issues.push(issue(2, file,
+        `${where}: expect.focused ${x.focused} can never be satisfied on ${input.platform} — its accessibility snapshot carries no focus flag, so every replay of this step falls back (04 §10, issue #18). Assert \`visible: [${x.focused}]\` instead; \`focused\` is Android/Maestro-only`,
+        `${loc}/focused`, 'warning'));
     }
   };
   const checkConditions = (file: string, cs: Condition[] | undefined, loc: string, allowPrevious: boolean): void => {
@@ -309,6 +373,11 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
       if (c.screen !== undefined && !knownScreen(c.screen, allowPrevious)) issues.push(issue(3, file, `condition screen ${c.screen}: no such screen file`, `${loc}/${i}/screen`));
     });
   };
+
+  // Every element id SOME screen file records as present on a screen — the map's whole record of
+  // "a capture has produced this id". Hoisted above the screen loop because two rules need it: the
+  // rule 2 edge-element carve-out below (issue #12) and the `kind: list` sweep after it (issue #19).
+  const observed = observedElementIds(input.screens.values());
 
   for (const [file, doc] of input.screens) {
     const isGate = doc.kind === 'gate';
@@ -350,6 +419,41 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
     }
 
     const declared = new Set(doc.elements.map((e) => e.id));
+    // 02 §10 rule 2 carve-out (issue #12), subject 1 of 3: the SCREEN is untouched. A screen the
+    // router export seeded carries the app's edges and nothing else — `elements: []` is by design
+    // until exploration learns them, and erroring makes the seed unloadable before exploration can
+    // start. The moment ONE element is known the screen HAS been observed; a screen past
+    // `candidate` is past the point where "not learned yet" explains anything. Both halves of THIS
+    // subject, not either. `meta` is schema-required, so no optional chaining.
+    const unexploredScreen = doc.elements.length === 0 && doc.meta.status === 'candidate';
+    // Subject 3 of 3: the screen's CAPTURE IS STALE. `elements[]` is the id set `name_screen`
+    // captured at `meta.last_verified_build`; `mergeRouterScreen` appends the NEXT build's edges to
+    // the same file and recaptures nothing. An edge naming an id that older capture could not have
+    // contained is a refresh outrunning exploration, not a contradiction — and this is the only
+    // shape the other two subjects both miss: SHARED CHROME (a tab bar, a back button) that another
+    // screen already declares, so `observed` is true, landing on an explored screen, so
+    // `unexploredScreen` is false. Build N+1 hard-errored there and `loadMap` threw `invalid_map`,
+    // which is issue #12's cycle again. Scoped to screens the router writes, so a hand-authored map
+    // keeps the hard error, and it self-heals: re-explore the screen and `name_screen` stamps this
+    // build, after which an element that really is absent errors again.
+    // "Stale" is NOT `isNewerBuild(manifest, captured)`: that comparison is numeric-only
+    // (architecture decision 18), and both schemas let `build_number` be any
+    // `^[0-9A-Za-z][0-9A-Za-z.\-]*$` — `1.2.3`, `4413-rc1`. For such an app every comparison is
+    // `false`, so decision 18's "fall back to the conservative branch" would land on the hard error
+    // here, and the build N+1 shared-chrome deadlock survives in full (measured: `import-router` at
+    // `2026.9.13` appending a `nav.settings.tab` edge to the pilot's `invoice_detail` gives rule 2
+    // as an ERROR and `openContext` returns `loadError = invalid_map`). The conservative branch of
+    // a rule whose whole job is to keep the map loadable is the WARNING. So: the capture is not of
+    // the build the manifest names, and is not demonstrably NEWER than it — which for two integers
+    // is exactly `captured < manifest`, and for anything else is "they differ". Only ever turns an
+    // error into a warning, never the reverse. The residual case, disclosed: a capture stamped at a
+    // non-comparable build the manifest has NOT reached (a `--build` override running ahead of
+    // `manifest.yaml`) reads as stale and warns.
+    const staleCapture = doc.meta.last_verified_build !== undefined
+      && doc.meta.sources.includes('router_export')
+      && input.build !== undefined
+      && input.build !== doc.meta.last_verified_build
+      && !isNewerBuild(doc.meta.last_verified_build, input.build);
     doc.elements.forEach((el, ei) => {
       const loc = `/elements/${ei}`;
       if (!ID_REGEX.test(el.id)) issues.push(issue(2, file, `element id ${el.id} violates 01 R2 (${ID_REGEX.source})`, `${loc}/id`));
@@ -383,7 +487,35 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
       const a = e.action;
       if ('element' in a && a.element !== undefined) {
         if (!registry.has(a.element)) issues.push(issue(2, file, `edge element ${a.element} is not registered in ids.yaml`, `${loc}/action/element`));
-        else if (!declared.has(a.element)) issues.push(issue(2, file, `edge element ${a.element} is not declared on this screen`, `${loc}/action/element`));
+        else if (!declared.has(a.element)) {
+          // Registered in ids.yaml but absent from this screen's `elements[]`. A WARNING while
+          // exploration has not reached it, an ERROR once it has. THREE subjects can be unreached
+          // and any one of them explains the gap (issue #12):
+          //   (1) the SCREEN — an untouched router seed (`unexploredScreen`, above);
+          //   (2) the ELEMENT — a still-`candidate` edge whose element NO capture has produced on
+          //       ANY screen (`observed`). That is what a build N+1 `import-router` refresh adds to
+          //       an ALREADY-EXPLORED screen when the app registered a brand-new id;
+          //   (3) the CAPTURE — a still-`candidate` edge on a router-written screen whose
+          //       `elements[]` predates the manifest's build (`staleCapture`, above). Same refresh,
+          //       but the id is shared chrome some other screen already declares, so (2) is false
+          //       and (1) cannot apply either.
+          // None subsumes another, so all three stand. (2) alone would re-open #12 on first-run
+          // setup, because a seed's edges routinely name that same shared chrome while the screen
+          // has never been captured at all; (1) alone is what shipped and only survived the first
+          // import; (3) alone would let a fresh, current capture be contradicted for ever.
+          // An edge past `candidate` gets none of them: a verified edge asserts the tap happened on
+          // THIS screen, so an undeclared element is a contradiction, not a gap. The "not
+          // registered in ids.yaml" branch above is NEVER relaxed — that is a typo, not a gap
+          // (issue #12 criterion 4).
+          const unlearned: UnlearnedEdgeElementReason | undefined = unexploredScreen ? 'screen'
+            : e.status !== 'candidate' ? undefined
+              : !observed.has(a.element) ? 'element'
+                : staleCapture ? 'refresh'
+                  : undefined;
+          issues.push(unlearned !== undefined
+            ? issue(2, file, unlearnedEdgeElementMessage(a.element, unlearned), `${loc}/action/element`, 'warning')
+            : issue(2, file, `edge element ${a.element} is not declared on this screen`, `${loc}/action/element`));
+        }
       }
       if (a.type === 'dismiss_gate' && !gateIds.has(a.gate)) issues.push(issue(2, file, `edge gate ${a.gate} is not registered in ids.yaml gates[]`, `${loc}/action/gate`));
       checkConditions(file, e.preconditions, `${loc}/preconditions`, false);
@@ -404,6 +536,23 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
     }
   }
 
+  // ---- rule 2: a `kind: list` element no capture has ever produced (issue #19) ----
+  // SwiftUI's `List`, `Section` and `ForEach` are not accessibility elements, so the container
+  // never reaches the driver and a `select {list, match}` written against it can never resolve.
+  // The first real integration registered five such ids off the pilot's `invoice.list.table`
+  // pattern, saw none of them in any tree, and deleted them all again. A WARNING, not an error,
+  // for decision 58's reason — on a young map exploration may simply not have reached the screen
+  // yet — and scoped to `kind: list`, the containers 04 §3.3's `select` addresses. The message
+  // names the platform because ids.yaml is shared while this runs once per platform, and
+  // `sortIssues`' dedupe would otherwise collapse a genuine per-platform difference.
+  // (`observed` is computed once above the screen loop — the rule 2 edge carve-out needs it too.)
+  ids.elements.forEach((e, i) => {
+    if (e.kind !== 'list' || observed.has(e.id)) return;
+    issues.push(issue(2, 'ids.yaml',
+      `${e.id} (kind: list) is declared on no ${input.platform} screen — no capture has contained it. A SwiftUI List/Section container is not an accessibility element and never reaches the driver (01 R4, issue #19): pick a row with \`select {cell, match}\` on the row id, or delete this id`,
+      `/elements/${i}`, 'warning'));
+  });
+
   for (const [file, doc] of input.recipes) {
     (doc.entry.fallback_path ?? []).forEach((s, i) => {
       if (!knownScreen(s, false)) issues.push(issue(3, file, `fallback_path ${s}: no such screen file`, `/entry/fallback_path/${i}`));
@@ -420,9 +569,9 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
         }
       }
       if (st.action === 'dismiss_gate' && !gateIds.has(st.gate)) issues.push(issue(2, file, `${st.id}: gate ${st.gate} is not registered in ids.yaml gates[]`, `${loc}/gate`));
-      checkExpect(file, st.expect, `${loc}/expect`);
+      checkExpect(file, st.expect, `${loc}/expect`, st.id);
     });
-    checkExpect(file, doc.verify, '/verify');
+    checkExpect(file, doc.verify, '/verify', 'verify');
     issues.push(...forbiddenContentIssues(file, doc));
   }
 

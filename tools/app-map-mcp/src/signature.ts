@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto';
 import type { AnyTree, ObservedSignature, RoleLabelValue, ScreenFile, TreeNode } from './types.ts';
 import { REDACTED } from './types.ts';
-import { findMarkerNodes, labelOf, nodesWithRole, walk } from './tree.ts';
+import { deepestMarker, labelOf, nodesWithRole, walk } from './tree.ts';
 
 export function labelNorm(s: string): string {
   if (typeof s !== 'string') return '';
@@ -137,12 +137,14 @@ export function titleOf(tree: AnyTree): string | undefined {
 }
 
 /**
- * The signature stored on observations (02 §7): marker (`none` when not exactly one), hash with
- * `screen.dynamic_regions` (empty when `screen` unknown) and the required_ids fraction.
+ * The signature stored on observations (02 §7): marker — the `deepestMarker`, `none` only when
+ * the tree carries none at all (01 R3, issue #10: a pushed screen leaves the covered screen's
+ * marker behind, and observe.ts grades an observation's evidence by comparing this against
+ * `markerOfScreen(screen_after)`) — the hash with `screen.dynamic_regions` (empty when `screen`
+ * is unknown) and the required_ids fraction.
  */
 export function observedSignature(tree: AnyTree, screen?: ScreenFile): ObservedSignature {
-  const { nodes, count } = findMarkerNodes(tree);
-  const marker = count === 1 ? nodes[0]!.a11y_id! : 'none';
+  const marker = deepestMarker(tree)?.a11y_id ?? 'none';
   const structural_hash = structuralHash(tree, screen?.dynamic_regions ?? []);
   const required_present = screen ? requiredIdsFraction(tree, screen.signature?.required_ids ?? []).fraction : 0;
   return { marker, structural_hash, required_present };

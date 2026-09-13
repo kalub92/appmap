@@ -172,9 +172,10 @@ describe('rewriteIdReferences (pure)', () => {
     assert.equal(s.doc.signature.route, 'appmap://y?fixture=y');
     assert.equal(s.doc.edges[0]!.to, 'y');
     // recipe: type text equal to an id is copy, not a reference
-    const recipe = { id: 'r', steps: [{ id: 's1', action: 'type', element: 'a.b.c', text: 'a.b.c' }, { id: 's2', action: 'select', list: 'a.b.c', match: { text: 'a.b.c' }, expect: { focused: 'a.b.c', visible: ['a.b.c'], not_visible: ['q.q.q'] } }], entry: { fallback_path: ['x'] } } as unknown as RecipeFile;
+    // `list` and `cell` are both id-bearing `select` keys (issue #19)
+    const recipe = { id: 'r', steps: [{ id: 's1', action: 'type', element: 'a.b.c', text: 'a.b.c' }, { id: 's2', action: 'select', list: 'a.b.c', match: { text: 'a.b.c' }, expect: { focused: 'a.b.c', visible: ['a.b.c'], not_visible: ['q.q.q'] } }, { id: 's3', action: 'select', cell: 'a.b.c', match: { text: 'a.b.c' } }], entry: { fallback_path: ['x'] } } as unknown as RecipeFile;
     const rr = rewriteIdReferences(recipe, 'a.b.c', 'a.b.d');
-    assert.equal(rr.count, 4);
+    assert.equal(rr.count, 5);
     assert.equal((rr.doc.steps[0] as { text: string }).text, 'a.b.c');
     assert.equal((rr.doc.steps[1] as { match: { text: string } }).match.text, 'a.b.c');
     assert.equal(rewriteIdReferences(recipe, 'x', 'z').doc.entry.fallback_path![0], 'z');

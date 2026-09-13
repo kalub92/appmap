@@ -1,7 +1,7 @@
 # Reviewing a compiled recipe (04 §3.8, 04 §8)
 
 `compile_recipe` returns a **draft**. Nothing is written until you call
-`mark_recipe(recipe_id, status: candidate, recipe: <the yaml>)`.
+`mark(recipe_id, status: candidate, recipe: <the yaml>)`.
 
 Check, in order:
 

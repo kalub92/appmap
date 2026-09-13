@@ -16,7 +16,7 @@ import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
 import { ERROR_CODES } from '../errors.ts';
 import { idsFile, ingestSocket, recipeFile, screenFile, serverLog } from '../paths.ts';
-import type { HookPayload, Observation, Tree, TreeNode } from '../types.ts';
+import type { HookPayload, Observation, RecipeFile, Tree, TreeNode } from '../types.ts';
 import { estimateTokens } from '../token.ts';
 import { TRUNCATION_MARKER } from '../token.ts';
 import { GET_SCREEN_MAX_TOKENS, STEP_MAX_TOKENS, SUMMARY_MAX_TOKENS } from '../format.ts';
@@ -281,6 +281,17 @@ describe('find_element', () => {
   it('needs element_id or intent', async () => {
     assertToolError(await call('find_element', { screen_id: 'invoice_list' }), ERROR_CODES.BAD_INPUT);
   });
+
+  // issue #17: the CLI twin is `find-element <element_id> [--screen S]`, so `screen_id` is
+  // optional and 03 §2's last observation supplies it.
+  it('defaults screen_id to the last observation, and says so when there is none (03 §2, issue #17)', async () => {
+    const missing = assertToolError(await call('find_element', { element_id: 'invoice.amount.field' }), ERROR_CODES.BAD_INPUT);
+    assert.match(missing.error, /screen_id/, 'with no observation the miss must name the argument to pass');
+    await drive('invoice_new');
+    const result = ok(await call('find_element', { element_id: 'invoice.amount.field' }));
+    assert.equal(result.found, true);
+    assert.equal(result.screen_id, 'invoice_new');
+  });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -305,6 +316,19 @@ describe('plan_path', () => {
     const result = ok(await call('plan_path', { from: 'unknown', to: 'client_picker' }));
     assert.equal(result.kind, 'none');
     assert.match(String(result.reason), /unknown/);
+  });
+
+  // issue #17: the CLI twin is `plan-path <to>`, so `from` is optional and defaults to the
+  // screen the last observation left the app on; with no observation it degrades to `unknown`,
+  // which is exactly what an explicit "unknown" already meant.
+  it('defaults from to the last observation, else unknown (03 §2, issue #17)', async () => {
+    const blind = ok(await call('plan_path', { to: 'client_picker' }));
+    assert.equal(blind.from, 'unknown');
+    assert.equal(blind.kind, 'none');
+    await drive('invoice_new');
+    const result = ok(await call('plan_path', { to: 'client_picker' }));
+    assert.equal(result.from, 'invoice_new', 'the observation supplied the starting screen');
+    assert.equal(result.kind, 'edges');
   });
 });
 
@@ -454,7 +478,7 @@ describe('name_screen (03 §5 explore mode)', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// compile_recipe → mark_recipe → export (04 §3.1, 04 §3.8, 03 §4)
+// compile_recipe → mark → export (04 §3.1, 04 §3.8, 03 §4)
 // ---------------------------------------------------------------------------------------------
 
 describe('compile_recipe (04 §3)', () => {
@@ -488,23 +512,50 @@ describe('compile_recipe (04 §3)', () => {
   });
 });
 
-describe('mark_recipe (04 §3.8, 07 §7)', () => {
+describe('mark (04 §3.8, 07 §7, 02 §8)', () => {
   it('refuses candidate without the reviewed draft (decision 35)', async () => {
-    const error = assertToolError(await call('mark_recipe', { recipe_id: 'brand_new', status: 'candidate' }), ERROR_CODES.BAD_INPUT);
+    const error = assertToolError(await call('mark', { recipe_id: 'brand_new', status: 'candidate' }), ERROR_CODES.BAD_INPUT);
     assert.match(error.error, /no draft was supplied/);
   });
 
-  it('refuses ci_gate without a reviewer (07 §7)', async () => {
-    assertToolError(await call('mark_recipe', { recipe_id: 'create_invoice', status: 'ci_gate' }), ERROR_CODES.BAD_INPUT);
+  it('needs exactly one of recipe_id or screen_id (02 §6 / 02 §8)', async () => {
+    const none = assertToolError(await call('mark', { status: 'candidate' }), ERROR_CODES.BAD_INPUT);
+    assert.match(none.error, /recipe_id/);
+    assert.match(none.error, /screen_id/);
+    assertToolError(await call('mark', { recipe_id: 'create_invoice', screen_id: 'invoice_list', status: 'candidate' }), ERROR_CODES.BAD_INPUT);
   });
 
-  it('refuses a status outside the enum and a missing recipe_id', async () => {
-    assertToolError(await call('mark_recipe', { recipe_id: 'create_invoice', status: 'blessed' }), ERROR_CODES.BAD_INPUT);
-    assertToolError(await call('mark_recipe', { status: 'verified' }), ERROR_CODES.BAD_INPUT);
+  // issue #16: the screen half — the only way back out of `verified`
+  it('demotes a verified screen through screen_id and export writes it (02 §8, issue #16)', async () => {
+    const marked = ok(await call('mark', { screen_id: 'invoice_list', status: 'candidate', reviewer: 'dana' }));
+    assert.deepEqual({ from: marked.from, to: marked.to, written: marked.written }, { from: 'verified', to: 'candidate', written: true });
+    assert.equal(ctx.db.getScreen('invoice_list')!.meta.reviewed_by, 'dana');
+    assert.equal(ctx.db.getScreen('invoice_list')!.meta.last_verified_build, undefined);
+
+    const exported = ok(await call('export'));
+    assert.ok((exported.written as string[]).includes('ios/screens/invoice_list.yaml'), JSON.stringify(exported.written));
+    const yaml = readFileSync(screenFile(t.config, 'invoice_list'), 'utf8');
+    assert.match(yaml, /^ {2}status: candidate$/m);
+    assert.match(yaml, /^ {2}reviewed_by: dana$/m);
+    assert.doesNotMatch(yaml, /^ {2}last_verified_build:/m);
+  });
+
+  it('refuses a screen status outside 02 §8 and an unknown screen', async () => {
+    assertToolError(await call('mark', { screen_id: 'invoice_list', status: 'ci_gate' }), ERROR_CODES.BAD_INPUT);
+    assertToolError(await call('mark', { screen_id: 'nope', status: 'candidate' }), ERROR_CODES.NOT_FOUND);
+  });
+
+  it('refuses ci_gate without a reviewer (07 §7)', async () => {
+    assertToolError(await call('mark', { recipe_id: 'create_invoice', status: 'ci_gate' }), ERROR_CODES.BAD_INPUT);
+  });
+
+  it('refuses a status outside the enum, and a call carrying no id key at all', async () => {
+    assertToolError(await call('mark', { recipe_id: 'create_invoice', status: 'blessed' }), ERROR_CODES.BAD_INPUT);
+    assertToolError(await call('mark', { status: 'verified' }), ERROR_CODES.BAD_INPUT);
   });
 
   it('demotes an existing recipe and export writes it back canonically (03 §4)', async () => {
-    const marked = ok(await call('mark_recipe', { recipe_id: 'create_invoice', status: 'candidate' }));
+    const marked = ok(await call('mark', { recipe_id: 'create_invoice', status: 'candidate' }));
     assert.equal(marked.from, 'verified');
     assert.equal(marked.to, 'candidate');
     assert.equal(marked.written, true);
@@ -522,7 +573,7 @@ describe('mark_recipe (04 §3.8, 07 §7)', () => {
   });
 
   it('refuses to overwrite a YAML file that changed on disk since load — the tool never forces (03 §4)', async () => {
-    ok(await call('mark_recipe', { recipe_id: 'create_invoice', status: 'candidate' }));
+    ok(await call('mark', { recipe_id: 'create_invoice', status: 'candidate' }));
     const path = recipeFile(t.config, 'create_invoice');
     const onDisk = `${readFileSync(path, 'utf8')}# edited in another window\n`;
     writeFileSync(path, onDisk);
@@ -538,6 +589,21 @@ describe('mark_recipe (04 §3.8, 07 §7)', () => {
     const exported = ok(await call('export'));
     assert.deepEqual(exported.written, []);
     assert.deepEqual(exported.conflicts, []);
+  });
+
+  it('names a machine recompile, and says nothing for an ordinary write (04 §8, issue #13)', async () => {
+    ok(await call('mark', { recipe_id: 'create_invoice', status: 'candidate' }));
+    const human = ok(await call('export'));
+    assert.deepEqual(human.written, ['ios/recipes/create_invoice.yaml']);
+    assert.equal(human.machine_recompiles, undefined, 'a human mark is not a machine recompile');
+    assert.equal(human.recompile_hint, undefined);
+
+    // what `lifecycle.recompileFrom` leaves behind once its 04 §8 guard passes
+    const recipe = ctx.db.getRecipe('create_invoice') as RecipeFile;
+    ctx.db.putRecipe({ ...recipe, version: recipe.version + 1 }, { dirty: true, reason: 'recompile:recompile_failures' });
+    const machine = ok(await call('export'));
+    assert.deepEqual(machine.machine_recompiles, [{ path: 'ios/recipes/create_invoice.yaml', reason: 'recompile:recompile_failures' }]);
+    assert.match(String(machine.recompile_hint), /rebuilt from a replay trajectory/);
   });
 });
 
@@ -589,7 +655,7 @@ describe('03 §11 error contract', () => {
     ['record_observation', {}],
     ['name_screen', {}],
     ['compile_recipe', {}],
-    ['mark_recipe', {}],
+    ['mark', {}],
   ];
 
   it('answers every malformed call with {error, hint, code} and keeps serving', async () => {
@@ -618,7 +684,7 @@ describe('03 §11 error contract', () => {
       ['run_recipe', { recipe_id: 'create_invoice', params: 'notanobject' }, /params/],
       ['compile_recipe', { session: 's', task: 't', recipe_id: 'r', params: 'x' }, /params/],
       ['record_observation', { tool: 42 }, /tool/],
-      ['mark_recipe', { recipe_id: 'create_invoice', status: 7 }, /status/],
+      ['mark', { recipe_id: 'create_invoice', status: 7 }, /status/],
       ['match_recipe', { instruction: { a: 1 } }, /instruction/],
     ];
     for (const [name, args, expected] of cases) {

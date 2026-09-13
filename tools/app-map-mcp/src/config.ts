@@ -13,6 +13,10 @@ export type Platform = (typeof PLATFORMS)[number];
 export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
+/** What the automatic 04 §8 recompile is allowed to do to the map (issue #13). */
+export const RECOMPILE_MODES = ['guarded', 'off'] as const;
+export type RecompileMode = (typeof RECOMPILE_MODES)[number];
+
 export interface AppMapConfig {
   /** `APP_MAP_DIR` — absolute root of YAML + `.local/` (default `./app-map`, resolved against cwd) */
   dir: string;
@@ -35,6 +39,21 @@ export interface AppMapConfig {
   simUdid: string | undefined;
   /** `APP_MAP_RETENTION_DAYS` — `.local` retention (default 14; 02 §7, 07 §2.4) */
   retentionDays: number;
+  /**
+   * `APP_MAP_RECOMPILE` — what the automatic 04 §8 recompile may do (default `guarded`).
+   *
+   * - `guarded`: rebuild from the latest successful trajectory, but write it over the reviewed
+   *   recipe only when the rebuilt steps, `preconditions` and `entry` all cover the reviewed
+   *   ones and the compile raised no incompleteness warning (`recipes/lifecycle.recompileFrom`);
+   *   otherwise keep the reviewed recipe and report the refusal. An accepted write is stamped
+   *   `provenance.machine_recompile: true` and labelled by `export`.
+   * - `off`: replay is strictly read-only against the map. The demotion to `candidate` still
+   *   happens — that is the 08 §5 signal, not a write to the recipe body — but the steps are
+   *   never rebuilt; a human recompiles with `compile_recipe` + `mark`.
+   *
+   * There is deliberately no value that restores the pre-#13 unguarded write.
+   */
+  recompile: RecompileMode;
 }
 
 export const CONFIG_DEFAULTS: Readonly<Omit<AppMapConfig, 'dir'>> & { dir: string } = {
@@ -47,6 +66,7 @@ export const CONFIG_DEFAULTS: Readonly<Omit<AppMapConfig, 'dir'>> & { dir: strin
   maxContextTokens: 600,
   simUdid: undefined,
   retentionDays: 14,
+  recompile: 'guarded',
 };
 
 export const ENV_VARS = {
@@ -59,6 +79,7 @@ export const ENV_VARS = {
   maxContextTokens: 'APP_MAP_MAX_CONTEXT_TOKENS',
   simUdid: 'APP_MAP_SIM_UDID',
   retentionDays: 'APP_MAP_RETENTION_DAYS',
+  recompile: 'APP_MAP_RECOMPILE',
 } as const;
 
 export function isPlatform(x: unknown): x is Platform {
@@ -83,6 +104,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd: string = p
   if (!(LOG_LEVELS as readonly string[]).includes(logLevel)) {
     throw new AppMapError(ERROR_CODES.BAD_INPUT, `${ENV_VARS.logLevel}=${logLevel} is not one of ${LOG_LEVELS.join('|')}`, 'use debug|info|warn|error');
   }
+  const recompile = get(ENV_VARS.recompile) ?? CONFIG_DEFAULTS.recompile;
+  if (!(RECOMPILE_MODES as readonly string[]).includes(recompile)) {
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, `${ENV_VARS.recompile}=${recompile} is not one of ${RECOMPILE_MODES.join('|')}`, 'use guarded (the default) or off to make replay read-only against the map (04 §8)');
+  }
   const intOr = (k: string, dflt: number, min: number): number => {
     const raw = get(k);
     if (raw === undefined) return dflt;
@@ -100,6 +125,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd: string = p
     maxContextTokens: intOr(ENV_VARS.maxContextTokens, CONFIG_DEFAULTS.maxContextTokens, 50),
     simUdid: get(ENV_VARS.simUdid),
     retentionDays: intOr(ENV_VARS.retentionDays, CONFIG_DEFAULTS.retentionDays, 1),
+    recompile: recompile as RecompileMode,
   };
 }
 
@@ -119,6 +145,7 @@ export function configToEnv(config: AppMapConfig): Record<string, string> {
     [ENV_VARS.logLevel]: config.logLevel,
     [ENV_VARS.maxContextTokens]: String(config.maxContextTokens),
     [ENV_VARS.retentionDays]: String(config.retentionDays),
+    [ENV_VARS.recompile]: config.recompile,
   };
   if (config.simUdid !== undefined) out[ENV_VARS.simUdid] = config.simUdid;
   return out;

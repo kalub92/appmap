@@ -13,7 +13,9 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 
 /**
  * Marks a screen root with `screen.<screen_id>` and exposes testTags below it as resource ids.
- * Exactly one marker is visible per full-screen state; sheets and modals carry their own.
+ * Each full-screen state marks itself exactly once; sheets and modals carry their own. That is a
+ * rule about what a screen publishes, not about what a capture contains: a reader that finds more
+ * than one marker prefers the deepest (01 R3, issue #10).
  *
  * ```
  * Box(Modifier.appMapScreen(AppMapId.Screen.INVOICE_LIST)) { … }

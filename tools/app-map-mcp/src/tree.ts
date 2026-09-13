@@ -4,21 +4,63 @@
  * Input shapes accepted by `normalizeTree` (detected by `detectTreeShape`):
  *  - `normalized`: our own `Tree` JSON (`{schema_version:1, platform, root:{role,…,children}}`),
  *    e.g. fixtures/trees/*.normalized.json — returned as-is after a structural check;
- *  - `argent`: XCUITest-like `{type, identifier?, label?, value?, enabled?, hasFocus?,
- *    selected?, frame:{x,y,width,height}, children[]}` possibly wrapped as `{root, screen:{width,
- *    height}, build_number?, bundle_id?, udid?}` (fixtures/raw/argent-snapshot.invoice_list.json
- *    — best-effort, field names unverified against the real driver). The wrapper's
- *    `build_number` → `Tree.build` and `bundle_id` → `Tree.app_id` (03 §3 `APP_MAP_BUILD=auto`,
- *    03 §13; observe.ts calls `ctx.setBuild`); `udid` is dropped (07 §2.2 device identifiers);
+ *  - `argent`: what `@swmansion/argent@0.25.0` really returns from `argent run
+ *    native-describe-screen --json` (issue #10) — a FLAT element list, no nesting at all:
+ *    `{status?:'ok', screenFrame:{x,y,width,height}, elements:[{frame, normalizedFrame,
+ *    normalizedTapPoint?, tapPoint?, traits:[…], value?, label?, identifier?, viewClassName}]}`.
+ *    There is no `type`, no `children`, no `enabled` and NO focus flag of any name — `hasFocus`
+ *    and `focused` belong to the nested shape below, not to Argent (issue #18 owns what that
+ *    means for `expect.focused`). See `fromArgentScreen` for the two-level rebuild;
+ *  - `xcuitest`: the nested XCUITest-like snapshot some other drivers emit — `{type,
+ *    identifier?, label?, value?, enabled?, hasFocus?, selected?, frame:{x,y,width,height},
+ *    children[]}` possibly wrapped as `{root, screen:{width,height}, build_number?, bundle_id?,
+ *    udid?}` (fixtures/raw/xcuitest-snapshot.invoice_list.json — best-effort). A reader that DOES
+ *    list containers sees an `appMapScreen` root twice — the container and the 1 pt marker
+ *    element inside it both carry `screen.<id>` (issue #15) — and the nesting SURVIVES here,
+ *    unlike the flat rebuild. `deepestMarker` therefore skips a marker that repeats a marker
+ *    ancestor's id, so `screenRoot`/`pathOf`/`resolve` get the container and not the childless
+ *    1 pt leaf (follow-up to #15 and #10). `structuralHash` still counts the pair twice and so
+ *    differs from a hand-written fixture; that is a hash-only difference and is left alone.
+ *    `fromArgentScreen` is unaffected either way (it discards the marker's own frame). The
+ *    wrapper's `build_number` → `Tree.build` and `bundle_id` → `Tree.app_id` (03 §3 `APP_MAP_BUILD=auto`,
+ *    03 §13; observe.ts calls `ctx.setBuild`); `udid` is dropped (07 §2.2 device identifiers).
+ *    The flat Argent capture carries neither, so `APP_MAP_BUILD=auto` falls back to config there;
  *  - `maestro`: `maestro hierarchy` JSON `{elements:[{attributes:{resource-id,text,
  *    accessibilityText,bounds:"[x1,y1][x2,y2]",class,enabled,focused,selected,…},children}]}`
  *    or the bare `{attributes, children}` root (fixtures/raw/maestro-hierarchy.invoice_list.json
- *    — best-effort, verify at implementation time).
+ *    — best-effort, verify at implementation time). Maestro ALSO keys on `elements`, so the flat
+ *    Argent branch is guarded on `screenFrame` plus the absence of maestro's `attributes`.
+ *  `argent run describe` returns `{description:'<indented text>', source}` instead of JSON; it is
+ *  deliberately `unknown` rather than mis-detected as one of the above.
  *
- * Role mapping (`ROLE_MAP_XCUI`, `ROLE_MAP_ANDROID`): unknown types → `other`; a `Button`
- * whose parent is a `TabBar` → `tab`; a `StaticText` inside a `Cell` stays `staticText`.
- * `bbox_norm` = frame ÷ viewport (viewport = wrapper `screen`, else the root frame), clamped to
- * [0,1] and rounded to 4 decimals. Empty strings for `identifier`/`resource-id` mean "absent".
+ * Role mapping (`ROLE_MAP_XCUI`, `ROLE_MAP_ANDROID`, `ROLE_MAP_ARGENT_CLASS`/`_TRAIT`): unknown
+ * types → `other`; a `Button` whose parent is a `TabBar` → `tab`; a `StaticText` inside a `Cell`
+ * stays `staticText`. `bbox_norm` = frame ÷ viewport (viewport = wrapper `screen`, else the root
+ * frame; `screenFrame` for the flat shape, which also ships a ready `normalizedFrame` that is
+ * used verbatim), clamped to [0,1] and rounded to 4 decimals. Empty strings for
+ * `identifier`/`resource-id` mean "absent".
+ *
+ * Flat-capture rebuild (`fromArgentScreen`, ported from the reference integration's Python
+ * bridge): `application > window > marker-subtree` and nothing deeper — deeper nesting
+ * is not recoverable from a flat list and is not needed, because `a11y_id` is the weight-1
+ * locator (02 §5.1) and inventing frame-containment would change every `path`,
+ * `fingerprint.parent_role` and `sibling_index` the map has already learned. Four rules:
+ *   1. exact-duplicate elements collapse (`dedupeArgentElements`) — the iOS AX service reports
+ *      the tab bar twice, once with identifiers and once without — but two elements carrying two
+ *      DIFFERENT identifiers never collapse, however identical the rest of the tuple (issue #15);
+ *   2. only the deepest marker survives (01 R3 as amended for pushed screens, see
+ *      `deepestMarker`); the markers it covers are dropped, not kept as siblings;
+ *   3. the surviving marker becomes a full-screen `container` (its own 1pt overlay frame — see
+ *      issue #15 — is discarded) and every non-tab element becomes its direct child, in capture
+ *      order, which is what `sibling_index` records;
+ *   4. elements whose role is `tab` are collected into a `tabBar`, sorted by x, appended as the
+ *      marker container's LAST child. Inside, not beside: `resolve` scopes its search to
+ *      `screenRoot(tree)` (02 §5.2), so a bar hung off `window` — as this branch did until the
+ *      follow-up to #10 — left every tab locator with zero in-scope matches and let the
+ *      weight-0.1 geometry fallback return the screen container as a `hit`, i.e. a silent tap on
+ *      the overlay instead of the tab. Appending last preserves rule 3's `sibling_index` values,
+ *      and neither `structuralHash` (a sorted multiset with no parent/child information) nor
+ *      `pathOf` (`tabBar/tab[i]` either way) can see the move.
  *
  * Maestro derivations (best-effort, architecture.md decisions 22 and 28: Android trees must
  * hash like the iOS ones, and `tab` is derived): the hierarchy root → `application`; a
@@ -30,8 +72,8 @@
  * the Android `text` attribute is the typed content and lands in `value` (07 §2.3.1 drops it),
  * never in `label`.
  *
- * `pathOf(tree, node)`: roles from the screen root (the marker node when exactly one exists,
- * else the tree root) — exclusive — down to `node`; each segment is `role` when the node is the
+ * `pathOf(tree, node)`: roles from the screen root (`deepestMarker`, else the tree root) —
+ * exclusive — down to `node`; each segment is `role` when the node is the
  * only child of that role among its siblings, else `role[i]` with `i` the 0-based index among
  * same-role siblings. Example: `navigationBar/button[1]`. This matches the pilot files exactly.
  * A node outside the marker subtree (an OS alert beside the screen container) is addressed from
@@ -45,7 +87,7 @@ import type { AnyTree, BBoxNorm, Role, Tree, TreeNode, TreeSource } from './type
 import { ROLES, TREE_SOURCES, isMarker } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 
-export type TreeShape = 'normalized' | 'argent' | 'maestro' | 'unknown';
+export type TreeShape = 'normalized' | 'argent' | 'xcuitest' | 'maestro' | 'unknown';
 
 /** XCUIElementType names → role (best-effort; unknown → `other`). */
 export const ROLE_MAP_XCUI: Readonly<Record<string, Role>> = {
@@ -121,7 +163,7 @@ function normalizeBBox(x: number, y: number, w: number, h: number, vw: number, v
   };
 }
 
-function isArgentNode(x: unknown): x is Record<string, unknown> {
+function isXcuiNode(x: unknown): x is Record<string, unknown> {
   return isRecord(x) && typeof x['type'] === 'string' && (isRecord(x['frame']) || Array.isArray(x['children']));
 }
 
@@ -129,12 +171,24 @@ function isMaestroNode(x: unknown): x is Record<string, unknown> {
   return isRecord(x) && isRecord(x['attributes']);
 }
 
+/**
+ * `argent run native-describe-screen --json` (issue #10): a viewport plus a flat `elements`
+ * array. Maestro dumps ALSO carry `elements`, so two things must both hold — a `screenFrame`
+ * (maestro has none) and no element carrying maestro's `attributes` object.
+ */
+function isArgentScreen(x: unknown): x is Record<string, unknown> {
+  if (!isRecord(x) || !isRecord(x['screenFrame'])) return false;
+  const elements = x['elements'];
+  return Array.isArray(elements) && !elements.some(isMaestroNode);
+}
+
 export function detectTreeShape(input: unknown): TreeShape {
   if (!isRecord(input)) return 'unknown';
   const self: unknown = input; // a fresh reference: the guards below must not narrow `input` to never
   const root = input['root'];
   if (input['schema_version'] === 1 && isRecord(root) && typeof root['role'] === 'string') return 'normalized';
-  if (isArgentNode(root) || isArgentNode(self)) return 'argent';
+  if (isXcuiNode(root) || isXcuiNode(self)) return 'xcuitest';
+  if (isArgentScreen(self)) return 'argent';
   const elements = input['elements'];
   if ((Array.isArray(elements) && elements.some(isMaestroNode)) || isMaestroNode(self)) return 'maestro';
   return 'unknown';
@@ -158,8 +212,13 @@ function assertDepth(depth: number): void {
 /**
  * Normalize any accepted shape to a raw `Tree` (never scrubbed). Throws `AppMapError(bad_input)`
  * with a hint naming the shape problem. `opts.source` defaults from the detected shape.
+ * `opts.roleHints` (`roleHintsFor(map)`) is consulted only by the flat Argent branch, the one
+ * shape whose elements carry no type of their own; every other shape ignores it.
  */
-export function normalizeTree(input: unknown, opts: { platform: Platform; source?: TreeSource }): Tree {
+export function normalizeTree(
+  input: unknown,
+  opts: { platform: Platform; source?: TreeSource; roleHints?: ReadonlyMap<string, Role> },
+): Tree {
   let data: unknown = input;
   if (typeof data === 'string') {
     try {
@@ -182,7 +241,10 @@ export function normalizeTree(input: unknown, opts: { platform: Platform; source
       break;
     }
     case 'argent':
-      tree = fromArgentSnapshot(data, opts.platform);
+      tree = fromArgentScreen(data, opts.platform, { ...(opts.roleHints !== undefined ? { roleHints: opts.roleHints } : {}) });
+      break;
+    case 'xcuitest':
+      tree = fromXcuiSnapshot(data, opts.platform);
       break;
     case 'maestro':
       tree = fromMaestroHierarchy(data, opts.platform);
@@ -190,21 +252,26 @@ export function normalizeTree(input: unknown, opts: { platform: Platform; source
     default:
       throw badInput(
         'unrecognized tree shape',
-        'expected a normalized Tree ({schema_version: 1, root: {role, …}}), an Argent snapshot ({root: {type, frame, children}}) or a maestro hierarchy ({elements: [{attributes, children}]})',
+        'expected a normalized Tree ({schema_version: 1, root: {role, …}}), an Argent screen capture ({screenFrame, elements: [{frame, traits, viewClassName}]}), an XCUITest-like snapshot ({root: {type, frame, children}}) or a maestro hierarchy ({elements: [{attributes, children}]})',
       );
   }
   return opts.source !== undefined && opts.source !== tree.source ? { ...tree, source: opts.source } : tree;
 }
 
 // ---------------------------------------------------------------------------------------------
-// Argent (XCUITest-like)
+// XCUITest-like nested snapshot
 // ---------------------------------------------------------------------------------------------
 
-export function fromArgentSnapshot(input: unknown, platform: Platform): Tree {
-  if (!isRecord(input)) throw badInput('argent snapshot is not an object', 'expected {root: {type, frame, children}} or a bare node');
+/**
+ * The nested `{type, frame, children}` snapshot (optionally wrapped in `{root, screen, …}`).
+ * NOT what `@swmansion/argent` returns — see `fromArgentScreen` for that (issue #10) — but some
+ * drivers do emit this shape and the hook fixtures use it, so it keeps its own branch.
+ */
+export function fromXcuiSnapshot(input: unknown, platform: Platform): Tree {
+  if (!isRecord(input)) throw badInput('XCUITest snapshot is not an object', 'expected {root: {type, frame, children}} or a bare node');
   const wrapper = isRecord(input['root']) ? input : undefined;
   const rawRoot = wrapper ? wrapper['root'] : input;
-  if (!isArgentNode(rawRoot)) throw badInput('argent snapshot has no root node', 'the root must carry a string `type` and a `frame` or `children`');
+  if (!isXcuiNode(rawRoot)) throw badInput('XCUITest snapshot has no root node', 'the root must carry a string `type` and a `frame` or `children`');
 
   const rootFrame = isRecord(rawRoot['frame']) ? rawRoot['frame'] : {};
   let vw = 0;
@@ -218,8 +285,8 @@ export function fromArgentSnapshot(input: unknown, platform: Platform): Tree {
     vw = num(rootFrame['width']);
     vh = num(rootFrame['height']);
   }
-  const root = convertArgentNode(rawRoot, undefined, vw, vh);
-  const tree: Tree = { schema_version: 1, platform, source: 'argent', root };
+  const root = convertXcuiNode(rawRoot, undefined, vw, vh);
+  const tree: Tree = { schema_version: 1, platform, source: 'xcuitest', root };
   if (vw > 0 && vh > 0) tree.viewport = { w: vw, h: vh };
   if (wrapper) {
     // 03 §3 / 03 §13: the driver-reported build; `udid` (07 §2.2) is deliberately not copied.
@@ -237,7 +304,7 @@ export function fromArgentSnapshot(input: unknown, platform: Platform): Tree {
   return reorderTree(tree);
 }
 
-function convertArgentNode(n: Record<string, unknown>, parentType: string | undefined, vw: number, vh: number, depth = 0): TreeNode {
+function convertXcuiNode(n: Record<string, unknown>, parentType: string | undefined, vw: number, vh: number, depth = 0): TreeNode {
   assertDepth(depth);
   const type = typeof n['type'] === 'string' ? n['type'] : '';
   const kids = n['children'];
@@ -262,9 +329,294 @@ function convertArgentNode(n: Record<string, unknown>, parentType: string | unde
   if (selected !== undefined) node.selected = selected;
   node.bbox_norm = normalizeBBox(num(frame['x']), num(frame['y']), num(frame['width']), num(frame['height']), vw, vh);
   if (Array.isArray(kids)) {
-    for (const k of kids) if (isRecord(k)) node.children.push(convertArgentNode(k, type, vw, vh, depth + 1));
+    for (const k of kids) if (isRecord(k)) node.children.push(convertXcuiNode(k, type, vw, vh, depth + 1));
   }
   return node;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Argent — the real `native-describe-screen` flat capture (03 §5, issue #10)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `viewClassName` → role. Exact match first, then the longest matching suffix (as `androidRole`
+ * does), so `SwiftUI.ListCollectionViewCell` lands on `ListCollectionViewCell`. The list-row
+ * classes are best-effort — the exact class SwiftUI reports for a `List` row is not documented —
+ * but a REGISTERED row is also covered by its `roleHints` entry whatever class it reports, so a
+ * wrong guess there degrades to the registry rather than to a wrong role.
+ */
+export const ROLE_MAP_ARGENT_CLASS: Readonly<Record<string, Role>> = {
+  UITextField: 'field', UITextView: 'field', UISearchBar: 'searchField',
+  UILabel: 'staticText', UIImageView: 'image', UISwitch: 'toggle', UIButton: 'button',
+  UITabBar: 'tabBar', UINavigationBar: 'navigationBar', UIToolbar: 'toolbar', UIScrollView: 'scrollView',
+  UITableView: 'list', UICollectionView: 'list', UIPickerView: 'picker', UIDatePicker: 'picker',
+  _UITabButton: 'tab', _UIButtonBarButton: 'button',
+  // suffix keys: SwiftUI list rows (`SwiftUI.ListCollectionViewCell`, `_UICollectionViewListCell`)
+  // and the UIKit cells they wrap
+  TableViewCell: 'cell', CollectionViewCell: 'cell', ListCollectionViewCell: 'cell',
+};
+
+/**
+ * A `traits[]` entry → role. The values the issue reports observing are `button`, `staticText`,
+ * `header`, `image` and `selected`; `link`, `searchField` and `keyboardKey` are the remaining
+ * UIAccessibilityTraits that name a role we have. `selected` carries no role (it becomes
+ * `TreeNode.selected`), and there is no focus trait at all — Argent does not report focus in any
+ * form (issue #10, issue #18).
+ */
+export const ROLE_MAP_ARGENT_TRAIT: Readonly<Record<string, Role>> = {
+  button: 'button', link: 'link', image: 'image', staticText: 'staticText',
+  header: 'staticText', searchField: 'searchField', keyboardKey: 'key',
+};
+
+/**
+ * Roles that are a MORE specific spelling of a registry kind's role. A `kind: field` hint must
+ * never demote a capture that says `searchField`/`secureField`, nor `kind: list` a `scrollView`.
+ */
+const KIND_SPECIALIZATIONS: Readonly<Partial<Record<Role, readonly Role[]>>> = {
+  field: ['searchField', 'secureField'],
+  list: ['scrollView'],
+};
+
+export interface ArgentScreenOptions {
+  /** `roleHintsFor(map)` — `ids.yaml` kinds as roles, for elements the capture cannot type */
+  roleHints?: ReadonlyMap<string, Role>;
+}
+
+const FULL_SCREEN: BBoxNorm = { x: 0, y: 0, w: 1, h: 1 };
+
+function full(): BBoxNorm {
+  return { ...FULL_SCREEN };
+}
+
+/** longest-suffix class lookup; exact matches win (`_UITabButton` is not a `UIButton`) */
+function argentClassRole(cls: string | undefined): Role | undefined {
+  if (cls === undefined) return undefined;
+  const short = cls.split(/[.$]/).pop() ?? cls;
+  const exact = ROLE_MAP_ARGENT_CLASS[short];
+  if (exact !== undefined) return exact;
+  let best: string | undefined;
+  for (const key of Object.keys(ROLE_MAP_ARGENT_CLASS)) {
+    if (short.endsWith(key) && (best === undefined || key.length > best.length)) best = key;
+  }
+  return best === undefined ? undefined : ROLE_MAP_ARGENT_CLASS[best];
+}
+
+/** first trait (in the element's own order) that names a role */
+function argentTraitRole(traits: unknown): Role | undefined {
+  if (!Array.isArray(traits)) return undefined;
+  for (const t of traits) {
+    if (typeof t !== 'string') continue;
+    const role = ROLE_MAP_ARGENT_TRAIT[t];
+    if (role !== undefined) return role;
+  }
+  return undefined;
+}
+
+function hasTrait(traits: unknown, want: string): boolean {
+  return Array.isArray(traits) && traits.some((t) => t === want);
+}
+
+/**
+ * Role of one flat element: the screen marker IS the screen container (01 R3) whatever class the
+ * 1pt overlay of issue #15 reports; otherwise `viewClassName`, then `traits`, then the registry
+ * hint — which only fills a gap and never demotes a more specific derived role.
+ */
+function argentRole(el: Record<string, unknown>, hints: ReadonlyMap<string, Role> | undefined): Role {
+  const id = optString(el['identifier']);
+  if (isMarker(id)) return 'container';
+  const derived = argentClassRole(optString(el['viewClassName'])) ?? argentTraitRole(el['traits']);
+  const hint = id === undefined ? undefined : hints?.get(id);
+  if (hint === undefined) return derived ?? 'other';
+  if (derived !== undefined && (KIND_SPECIALIZATIONS[hint] ?? []).includes(derived)) return derived;
+  return hint;
+}
+
+/**
+ * The element's frame in 0..1, UNCLAMPED: `normalizedFrame` verbatim (rounded to 4) when the
+ * driver sent one, else `frame` ÷ `screenFrame`. Verbatim matters — the real capture's
+ * `normalizedFrame.width` 0.7902 and its `frame.width / screenFrame.width` 0.790299 → 0.7903
+ * disagree in the last digit, and the map learned from the driver's own number. Unclamped
+ * matters for `dedupeArgentElements`: two list rows that both hang below the fold clamp to the
+ * same box but are not the same element.
+ */
+function argentFrame(el: Record<string, unknown>, vw: number, vh: number): BBoxNorm {
+  const nf = el['normalizedFrame'];
+  if (isRecord(nf)) {
+    return { x: round4(num(nf['x'])), y: round4(num(nf['y'])), w: round4(num(nf['width'])), h: round4(num(nf['height'])) };
+  }
+  const f = isRecord(el['frame']) ? el['frame'] : {};
+  const sx = vw > 0 ? vw : 0;
+  const sy = vh > 0 ? vh : 0;
+  return {
+    x: round4(sx ? num(f['x']) / sx : 0), y: round4(sy ? num(f['y']) / sy : 0),
+    w: round4(sx ? num(f['width']) / sx : 0), h: round4(sy ? num(f['height']) / sy : 0),
+  };
+}
+
+function clampBBox(b: BBoxNorm): BBoxNorm {
+  return { x: round4(clamp01(b.x)), y: round4(clamp01(b.y)), w: round4(clamp01(b.w)), h: round4(clamp01(b.h)) };
+}
+
+/**
+ * One element per `(normalized frame, label, value)`, preferring the twin that carries an
+ * `identifier` and keeping the first twin's position in capture order (`sibling_index`, 02 §5.1)
+ * — except that two elements carrying two DIFFERENT identifiers never collapse (issue #15).
+ *
+ * This is a GENERAL exact-duplicate rule, not a tab-bar special case, even though the tab bar is
+ * where it bites (the iOS AX service reports every tab twice, once identified and once not, and
+ * the map then sees six tabs and rejects every tab heal as `ambiguous` — issue #10). Two elements
+ * that share an identical normalized frame AND an identical label and value are one control the
+ * AX service reported twice: no locator strategy we have could ever tell them apart, so keeping
+ * both only manufactures ambiguity and doubles every `sibling_index`. Restricting the rule to the
+ * tab bar would need a tab-bar detector that itself depends on the duplicates already being gone.
+ *
+ * The exception exists because "no locator could tell them apart" is simply false once the two
+ * carry different `identifier`s — `a11y_id` is the weight-1.0 locator (02 §5.1). It became
+ * load-bearing with issue #15: `appMapScreen` now pins every marker as a 1 pt element at its
+ * screen root's top-leading corner, so two stacked screens (a `fullScreenCover`, a `TabView`
+ * swap, or a push whose detail root is flush with the top) report two markers with an identical
+ * frame, no label and no value. Collapsing those kept the twin that came FIRST — the marker of
+ * the screen underneath, because it already carried an identifier so the prefer-the-identified
+ * branch never fired — and `identify_screen` then answered the covered screen, re-introducing
+ * exactly the failure issue #10 fixed: `deepestMarker` never got to see the second marker
+ * because normalization had already eaten it.
+ *
+ * The deliberate cost is now narrower: two genuinely distinct, exactly coincident controls that
+ * share a label AND an identifier (or carry no identifier at all) collapse into one — which no
+ * locator could have addressed separately anyway.
+ */
+export function dedupeArgentElements(
+  elements: readonly Record<string, unknown>[], vw: number, vh: number,
+): Record<string, unknown>[] {
+  const slots = new Map<string, number>();
+  const out: Record<string, unknown>[] = [];
+  for (const el of elements) {
+    const b = argentFrame(el, vw, vh);
+    const key = `${b.x}|${b.y}|${b.w}|${b.h}|${optString(el['label']) ?? ''}|${optString(el['value']) ?? ''}`;
+    const at = slots.get(key);
+    if (at === undefined) {
+      slots.set(key, out.length);
+      out.push(el);
+      continue;
+    }
+    const kept = optString(out[at]!['identifier']);
+    const mine = optString(el['identifier']);
+    if (kept !== undefined && mine !== undefined && kept !== mine) {
+      // two identifiers = two elements a locator CAN tell apart (issue #15). Point the slot at
+      // the newest twin so a later UNidentified duplicate still merges into it rather than
+      // resurrecting the older one.
+      slots.set(key, out.length);
+      out.push(el);
+    } else if (kept === undefined && mine !== undefined) {
+      out[at] = el;
+    }
+  }
+  return out;
+}
+
+function argentNode(el: Record<string, unknown>, role: Role, vw: number, vh: number): TreeNode {
+  const node: TreeNode = { role, bbox_norm: clampBBox(argentFrame(el, vw, vh)), children: [] };
+  const id = optString(el['identifier']);
+  if (id !== undefined) node.a11y_id = id;
+  const label = optString(el['label']);
+  if (label !== undefined) node.label = label;
+  const value = optString(el['value']);
+  if (value !== undefined) node.value = value;
+  // only the positive: Argent reports `selected` as a trait and never its absence, and it reports
+  // neither `enabled` nor any focus flag — a false here would be an invention (issue #10/#18)
+  if (hasTrait(el['traits'], 'selected')) node.selected = true;
+  return node;
+}
+
+/**
+ * Normalize `argent run native-describe-screen --json` (issue #10). See the header for the
+ * two-level rebuild and the four rules; `opts.roleHints` types the elements the capture cannot.
+ */
+export function fromArgentScreen(input: unknown, platform: Platform, opts: ArgentScreenOptions = {}): Tree {
+  if (!isRecord(input)) throw badInput('argent screen capture is not an object', 'expected {screenFrame: {width, height}, elements: [{frame, traits, viewClassName}]}');
+  const status = input['status'];
+  if (typeof status === 'string' && status !== 'ok') {
+    throw badInput(`argent reported status ${JSON.stringify(status)}`, 'only a capture with `status: "ok"` carries a usable element list — retry the capture');
+  }
+  const screen = input['screenFrame'];
+  if (!isRecord(screen)) throw badInput('argent screen capture has no screenFrame', 'expected {screenFrame: {x, y, width, height}, elements: […]}');
+  const rawElements = input['elements'];
+  if (!Array.isArray(rawElements)) throw badInput('argent screen capture has no elements array', 'expected {screenFrame: {…}, elements: [{frame, traits, viewClassName}]}');
+  // `screenFrame.x/y` are ignored: `normalizedFrame` is already viewport-relative
+  const vw = num(screen['width']);
+  const vh = num(screen['height']);
+
+  const unique = dedupeArgentElements(rawElements.filter(isRecord), vw, vh);
+
+  // 01 R3 as amended (issue #10): a pushed detail screen leaves the covered screen's marker in
+  // the tree. This is `deepestMarker`'s rule applied before the rebuild, and it reduces to the
+  // same answer: a flat capture has no hierarchy, so every marker is at the same depth and `y`
+  // decides — the lower marker is the one the pushed screen drew — with document order (last
+  // wins) breaking an exact tie, exactly as `deepestMarker` does.
+  // Issue #15 makes that tie ROUTINE rather than a corner case: every marker is now a 1 pt box
+  // at its screen root's top-leading corner, so two roots flush with the top (a
+  // `fullScreenCover`, a `TabView` swap) report the same `y`. Last wins on the assumption that
+  // the AX service enumerates a presented screen after the one it covers — which the
+  // `invoice_detail` capture is consistent with but does not prove for a cover; only a real
+  // simulator capture can. Note the reference integration's Python bridge differs here
+  // (`max(key=y)` keeps the FIRST maximum).
+  let top: Record<string, unknown> | undefined;
+  let topY = -1;
+  for (const el of unique) {
+    if (!isMarker(optString(el['identifier']))) continue;
+    const y = argentFrame(el, vw, vh).y;
+    if (y >= topY) { top = el; topY = y; }
+  }
+
+  let marker: TreeNode | undefined;
+  const tabs: TreeNode[] = [];
+  const body: TreeNode[] = [];
+  for (const el of unique) {
+    const role = argentRole(el, opts.roleHints);
+    if (isMarker(optString(el['identifier']))) {
+      // every marker the top one covers is dropped: keeping it would shift every `sibling_index`
+      // and change `structural_hash` (02 §4.4)
+      if (el !== top) continue;
+      marker = argentNode(el, role, vw, vh);
+      // the 1pt marker overlay (issue #15) carries no geometry worth keeping: the screen
+      // container IS the screen, so `pathOf`/`resolve` get a real full-screen subtree
+      marker.bbox_norm = full();
+      continue;
+    }
+    (role === 'tab' ? tabs : body).push(argentNode(el, role, vw, vh));
+  }
+  // no marker on screen (an OS dialog, or a miss): the container still exists so `pathOf` works
+  if (marker === undefined) marker = { role: 'container', bbox_norm: full(), children: [] };
+  marker.children = body;
+
+  if (tabs.length > 0) {
+    let barY = 1;
+    for (const t of tabs) barY = Math.min(barY, t.bbox_norm.y);
+    // INSIDE the marker container and last, not beside it: `resolve` scopes every locator to
+    // `screenRoot(tree)` (02 §5.2), which IS this container, so a bar hung off `window` put the
+    // tabs out of reach — all four locators scored zero and the weight-0.1 geometry fallback
+    // matched the only in-scope node under the point, the full-screen container itself. That is
+    // a `hit` on the screen overlay, i.e. a silent wrong tap (follow-up to #10, the failure
+    // class #9 and #13 exist to eliminate). Every other tree shape already nests the bar inside
+    // the screen root; appending it keeps rule 3's `sibling_index` for `body` and leaves
+    // `structuralHash` (a sorted multiset, signature.ts) and `pathOf` (`tabBar/tab[i]` either
+    // way — via the lowest common ancestor before, directly now) untouched.
+    marker.children = [...body, {
+      role: 'tabBar',
+      bbox_norm: { x: 0, y: round4(barY), w: 1, h: round4(1 - barY) },
+      children: [...tabs].sort((a, b) => a.bbox_norm.x - b.bbox_norm.x),
+    }];
+  }
+
+  const root: TreeNode = {
+    role: 'application', bbox_norm: full(),
+    children: [{ role: 'window', bbox_norm: full(), children: [marker] }],
+  };
+  const tree: Tree = { schema_version: 1, platform, source: 'argent', root };
+  if (vw > 0 && vh > 0) tree.viewport = { w: vw, h: vh };
+  // no `build` / `app_id`: the flat capture reports neither (the bundle id is an *argument* to
+  // the CLI, not part of its answer), so `APP_MAP_BUILD=auto` falls back to config here (03 §3)
+  return reorderTree(tree);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -580,17 +932,69 @@ export function nodesWithRole(tree: AnyTree | TreeNode, role: Role): TreeNode[] 
   return out;
 }
 
-/** Nodes whose `a11y_id` matches `^screen\.` — `count` tells identify whether exactly one exists (03 §5.2). */
+/** Nodes whose `a11y_id` matches `^screen\.` — presence and count (drift.ts `marker_present`). Identification and `pathOf` want `deepestMarker` instead (01 R3, issue #10). */
 export function findMarkerNodes(tree: AnyTree): { nodes: TreeNode[]; count: number } {
   const nodes: TreeNode[] = [];
   walk(tree, (n) => { if (isMarker(n.a11y_id)) nodes.push(n); });
   return { nodes, count: nodes.length };
 }
 
-/** The marker node when exactly one exists, else the tree root (base for `pathOf`). */
+/**
+ * The marker that identification, `pathOf` and `resolve` must use when more than one is present
+ * (01 R3, issue #10). A pushed detail screen leaves the covered screen's marker in the
+ * accessibility tree, so "exactly one marker" is not a fact tooling can rely on; taking the first
+ * identifies the screen that is COVERED. Order of preference:
+ *  1. deepest in the node hierarchy — a marker nested inside another is the one drawn on top;
+ *  2. then the greatest `bbox_norm.y` — in a FLAT capture (`fromArgentScreen`) there is no real
+ *     hierarchy, so every marker sits at the same depth and `y` is the only cue there is;
+ *  3. then document order, last wins — a driver appends the screen it has just pushed.
+ * `undefined` when the tree carries no marker at all.
+ *
+ * A marker whose id repeats a marker ANCESTOR's id is SKIPPED, because it is that screen's own
+ * twin and not a deeper screen (follow-up to #15): `appMapScreen(_:)` and the UIKit
+ * `AppMapScreenMarkerView` both stamp `screen.<id>` on the `children: .contain` container AND on
+ * the 1 pt overlay nested inside it, so on any capture that preserves nesting (`xcuitest`,
+ * `maestro` — `drift.ts` runs `maestro hierarchy` on BOTH platforms) rule 1 would otherwise
+ * return the childless 1 pt leaf and `resolve` would search a subtree with zero children. Only a
+ * DIFFERENT id below an ancestor marker is a genuinely deeper screen (a push, a modal), so
+ * issue #10's ordering is untouched. The twin's own subtree is still traversed — a real push
+ * nested under it still wins. Two same-id markers that are SIBLINGS (neither an ancestor of the
+ * other) are not twins by this rule and both stay candidates; rules 2-3 pick one, which is the
+ * pre-existing behaviour and harmless, both naming the same screen. The deliberate cost is a
+ * screen pushed on top of ITSELF (invoice_detail → invoice_detail): the outer container wins, so
+ * `resolve` searches a superset of the screen rather than the childless leaf it searches today.
+ */
+export function deepestMarker(tree: AnyTree): TreeNode | undefined {
+  let best: TreeNode | undefined;
+  let bestDepth = -1;
+  let bestY = -1;
+  // pre-order, children left-to-right — `walk`'s order, which rule 3 ("last wins") depends on —
+  // carrying the marker ids seen on the path from the root so a twin can be recognised
+  const stack: Array<{ node: TreeNode; depth: number; markerAncestors: ReadonlySet<string> }> = [
+    { node: rootOf(tree), depth: 0, markerAncestors: new Set<string>() },
+  ];
+  while (stack.length > 0) {
+    const { node, depth, markerAncestors } = stack.pop()!;
+    let below = markerAncestors;
+    const id = node.a11y_id;
+    if (isMarker(id) && !markerAncestors.has(id)) {
+      const y = typeof node.bbox_norm?.y === 'number' ? node.bbox_norm.y : 0;
+      if (depth > bestDepth || (depth === bestDepth && y >= bestY)) {
+        best = node;
+        bestDepth = depth;
+        bestY = y;
+      }
+      below = new Set(markerAncestors).add(id);
+    }
+    const kids = Array.isArray(node.children) ? node.children : [];
+    for (let i = kids.length - 1; i >= 0; i--) stack.push({ node: kids[i]!, depth: depth + 1, markerAncestors: below });
+  }
+  return best;
+}
+
+/** The `deepestMarker`, else the tree root (base for `pathOf`). */
 export function screenRoot(tree: AnyTree): TreeNode {
-  const { nodes } = findMarkerNodes(tree);
-  return nodes.length === 1 ? nodes[0]! : tree.root;
+  return deepestMarker(tree) ?? tree.root;
 }
 
 /** root → … → node (inclusive); `undefined` when `node` is not in the tree (identity comparison). */

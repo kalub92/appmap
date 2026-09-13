@@ -5,13 +5,13 @@
  *
  * Import order below mirrors the dependency layers (no cycles):
  *   types/config/errors/paths/token/log → yaml,tree,scrub,signature → store,identify,resolve,
- *   plan,format → observe,recipes/*,heal,drift,router-import → server,cli.
+ *   plan,format → observe,recipes/*,heal,drift,router-import → tools → server,cli.
  */
 
 // ---- leaf -------------------------------------------------------------------------------------
 export * from './types.ts';
-export { CONFIG_DEFAULTS, ENV_VARS, LOG_LEVELS, PLATFORMS, configToEnv, driverToolPattern, isPlatform, loadConfig } from './config.ts';
-export type { AppMapConfig, LogLevel } from './config.ts';
+export { CONFIG_DEFAULTS, ENV_VARS, LOG_LEVELS, PLATFORMS, RECOMPILE_MODES, configToEnv, driverToolPattern, isPlatform, loadConfig } from './config.ts';
+export type { AppMapConfig, LogLevel, RecompileMode } from './config.ts';
 export { AppMapError, ERROR_CODES, NotImplementedError, toErrorJson } from './errors.ts';
 export type { ErrorCode, ErrorJson } from './errors.ts';
 export * as paths from './paths.ts';
@@ -21,11 +21,11 @@ export { LOG_ROTATE_BYTES, createLogger, createMemoryLogger, rotateIfNeeded, san
 export type { LogFields, Logger, LoggerOptions } from './log.ts';
 
 // ---- yaml / tree ------------------------------------------------------------------------------
-export { CHILD_TYPES, ID_SORTED_LISTS, KEY_ORDER, SORTED_STRING_SETS, YAML_STRINGIFY_OPTIONS, canonicalYaml, canonicalize, isCanonical } from './yaml/canonical.ts';
-export type { CanonicalType } from './yaml/canonical.ts';
-export { assertValid, getValidator, loadSchemas, validateAgainstSchema, validateEventLine } from './yaml/schemas.ts';
+export { AUTHORED_STRING_SCALARS, CHILD_TYPES, ID_SORTED_LISTS, KEY_ORDER, QUOTED_STRING_KEYS, SORTED_STRING_SETS, YAML_STRINGIFY_OPTIONS, canonicalYaml, canonicalize, isCanonical, parseYamlDoc } from './yaml/canonical.ts';
+export type { CanonicalType, ParsedYaml } from './yaml/canonical.ts';
+export { assertValid, getValidator, loadSchemas, schemaIssueDetail, schemaIssueHint, validateAgainstSchema, validateEventLine } from './yaml/schemas.ts';
 export type { SchemaIssue, SchemaValidator } from './yaml/schemas.ts';
-export { gitBlobHash, gitTreeHash, indexMap, loadMap, parseYamlFile, readAllowlist, readIds, readManifest, readRecipeFiles, readScreenFiles, readStaticStrings } from './yaml/load.ts';
+export { gitBlobHash, gitTreeHash, indexMap, loadMap, parseYamlFile, parseYamlFileDoc, readAllowlist, readIds, readManifest, readRecipeFiles, readScreenFiles, readStaticStrings } from './yaml/load.ts';
 export type { IndexMapInput, LoadMapOptions } from './yaml/load.ts';
 export { crossReferenceIssues, forbiddenContentIssues, formatIssues, nonCanonicalFiles, safeRegexIssue, validateMap } from './validate.ts';
 export type { CrossRefInput, ValidateOptions } from './validate.ts';
@@ -37,7 +37,7 @@ export { PII_PATTERNS, buildScrubPolicy, findForbiddenContent, perceptionBytes, 
 export { gateSignatureMatches, labelNorm, observedSignature, requiredIdsFraction, roleLabelMatches, structuralHash, titleOf } from './signature.ts';
 
 // ---- store / map --------------------------------------------------------------------------------
-export { AppMapDb, DB_SCHEMA_VERSION, DDL, openDb } from './store/db.ts';
+export { AppMapDb, DB_SCHEMA_VERSION, DDL, RECOMPILE_DIRTY_PREFIX, isMachineRecompile, openDb } from './store/db.ts';
 export type { CounterKind, CounterName, DirtyKind, DirtyRow, OpenDbOptions, RecipeStats, SessionRow } from './store/db.ts';
 export { exportMap, renderEntities, unifiedDiff } from './store/export.ts';
 export type { ExportOptions } from './store/export.ts';
@@ -55,12 +55,14 @@ export * as format from './format.ts';
 export { declareTask, finishTask, hookPayloadToObservation, inferTaskOutcome, ingestObservation, isDriverTool, lastObservation, nameScreen, readTrajectory, recordHookPayload, recordObservation } from './observe.ts';
 export { MATCH_CONFIDENCE, eligibleRecipes, inferParams, matchRecipe, paramsNeeded } from './recipes/match.ts';
 export * as compile from './recipes/compile.ts';
-export { THRESHOLDS, decideTransition, eligibleForCiGate, markRecipe, markVerified, recordRunOutcome, retireRecipesForScreen, screensReferenced, shouldRecompile } from './recipes/lifecycle.ts';
-export type { LifecycleDecision, VerifiedEntities } from './recipes/lifecycle.ts';
+export { ARGENT_VERBS, DRIVER_VERBS, UNIVERSAL_VERBS, bareToolName, classifyVerb, isStepVerb, normalizeVerb } from './recipes/verbs.ts';
+export type { DriverVerbTable, StepVerb, VerbKind } from './recipes/verbs.ts';
+export { THRESHOLDS, conditionKey, decideTransition, deepLinkCovers, eligibleForCiGate, markRecipe, markScreen, markVerified, recompileCovers, recompileCoversEntry, recordRunOutcome, retireRecipesForScreen, screensReferenced, shouldRecompile, stepIdentity } from './recipes/lifecycle.ts';
+export type { LifecycleDecision, RecompileOutcome, RecompileRefusal, VerifiedEntities } from './recipes/lifecycle.ts';
 export { COMPATIBLE_ROLES, applyHeal, bboxProximity, heal, healedElement, jaroWinkler, lcsLength, proposeHeal, rejectHeal, scoreCandidates, toPendingHeal } from './heal.ts';
 export type { HealProposal } from './heal.ts';
-export { assertDebugSandbox, checkExpect, defaultBuildProbe, expandSteps, reportStep, resolveRunSession, startGuidedRun, substituteParams, toRunStep } from './recipes/guided.ts';
-export type { BuildInfoProbe, GuidedRunOptions, StartGuidedRunInput } from './recipes/guided.ts';
+export { BUILD_PROBE_KEY, assertDebugSandbox, buildProbeStrategies, checkExpect, defaultBuildProbe, expandSteps, parseProbeOutput, parseXmlPlist, readBuildProbe, reportStep, resolveRunSession, startGuidedRun, substituteParams, toRunStep } from './recipes/guided.ts';
+export type { BuildInfoProbe, GuidedRunOptions, ProbeExec, ProbeFormat, ProbeStrategy, StartGuidedRunInput } from './recipes/guided.ts';
 export { maestroExport, maestroSelectorFor, readParamsFile, recipeToMaestroFlow, resolveRecipeParams, stepForCommandIndex } from './recipes/maestro.ts';
 export type { FlowOptions, MaestroExportOptions, MaestroFlow, MaestroSelector } from './recipes/maestro.ts';
 export { checkMaestroVersion, defaultExec, defaultHierarchy, fallbackStepFor, parseMaestroResult, runAllHeadless, runHeadless } from './recipes/headless.ts';
@@ -71,8 +73,10 @@ export { importRouter, mergeRouterScreen, routerScreenToScreenFile } from './rou
 export type { ImportRouterOptions } from './router-import.ts';
 
 // ---- top ------------------------------------------------------------------------------------------
-export { RESOURCE_TEMPLATES, SERVER_NAME, TOOL_NAMES, createServer, startServer, toolError, toolJson, toolText } from './server.ts';
-export type { RunningServer, ToolName, ToolResult } from './server.ts';
+export { TOOL_NAMES, toolCompileRecipe, toolError, toolExport, toolFindElement, toolGetScreen, toolIdentifyScreen, toolJson, toolMark, toolMatchRecipe, toolNameScreen, toolPlanPath, toolRecordObservation, toolReportStep, toolRunRecipe, toolSummary, toolText } from './tools.ts';
+export type { ToolName, ToolOptions, ToolResult } from './tools.ts';
+export { RESOURCE_TEMPLATES, SERVER_NAME, createServer, startServer } from './server.ts';
+export type { RunningServer } from './server.ts';
 export { INGEST_TIMEOUT_MS, MAX_REQUEST_BYTES, parseRequestLine, postToIngestSocket, startIngestServer } from './ingest-socket.ts';
 export type { IngestResponse, IngestServer } from './ingest-socket.ts';
 export { KIND_SYNONYMS, constantNames, findStringLiteralIds, lintIds } from './lint-ids.ts';

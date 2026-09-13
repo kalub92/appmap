@@ -8,8 +8,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { parse } from 'yaml';
-import type { IdsRegistry, RecipeFile, ScreenFile, ValidationIssue } from '../types.ts';
+import type { ElementDef, IdsRegistry, RecipeFile, ScreenFile, ValidationIssue } from '../types.ts';
+import { isUnlearnedEdgeElement } from '../types.ts';
 import { canonicalYaml } from '../yaml/canonical.ts';
+import { loadMap } from '../yaml/load.ts';
 import type { YamlKind } from '../paths.ts';
 import { crossReferenceIssues, forbiddenContentIssues, formatIssues, nonCanonicalFiles, safeRegexIssue, validateMap } from '../validate.ts';
 import { PILOT_APP_MAP_DIR, loadRouterExportFixture, makeTempAppMapDir } from './helpers.ts';
@@ -45,6 +47,123 @@ describe('validateMap on the pilot (positive cases)', () => {
     const r = validateMap(config, { platforms: ['android'] });
     assert.deepEqual(errors(r.issues), [], formatIssues(r.issues));
     assert.equal(r.files_checked, 11);
+  });
+});
+
+describe('rule 2 — `expect.focused` on a platform whose driver reports no focus (issue #18)', () => {
+  it('warns, naming the step, when a platform: ios recipe expects focus Argent never reports', () => {
+    const t = makeTempAppMapDir();
+    try {
+      editYaml<RecipeFile>(t, 'ios/recipes/create_invoice.yaml', 'recipe', (d) => { d.steps[0]!.expect = { focused: 'invoice.amount.field' }; });
+      const r = validateMap(t.config, { platforms: ['ios'] });
+      const warned = r.issues.filter((i) => i.rule === 2 && i.severity === 'warning' && i.message.includes('expect.focused'));
+      assert.equal(warned.length, 1, formatIssues(r.issues));
+      assert.equal(warned[0]!.file, 'ios/recipes/create_invoice.yaml');
+      assert.equal(warned[0]!.location, '/steps/0/expect/focused');
+      assert.match(warned[0]!.message, /^s1: /, 'the step the author has to go and fix');
+      assert.match(warned[0]!.message, /can never be satisfied on ios/);
+      assert.match(warned[0]!.message, /Android\/Maestro-only/);
+      assert.match(warned[0]!.message, /visible: \[invoice\.amount\.field\]/, 'and what to write instead');
+      // a warning, never an error: the file is well-formed and Maestro satisfies it, so 06 R1
+      // must not block the PR and recipe.schema.json keeps accepting the key
+      assert.ok(r.ok);
+      assert.deepEqual(errors(r.issues), [], formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('stays silent on android, where the Maestro hierarchy carries a `focused` attribute (04 §10)', () => {
+    const t = makeTempAppMapDir({ platform: 'android' });
+    try {
+      // guard the premise: the android pilot legitimately keeps `focused`, so this test fails
+      // loudly if someone strips it along with the ios one
+      const android = parse(readFileSync(join(t.dir, 'android/recipes/create_invoice.yaml'), 'utf8')) as RecipeFile;
+      assert.deepEqual(android.steps[0]!.expect, { focused: 'invoice.amount.field' });
+      const r = validateMap(t.config, { platforms: ['android'] });
+      assert.deepEqual(r.issues.filter((i) => i.message.includes('expect.focused')), [], formatIssues(r.issues));
+      assert.deepEqual(errors(r.issues), [], formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('the shipped ios pilot no longer teaches the pattern (issue #18 acceptance criterion 2)', () => {
+    const t = makeTempAppMapDir({ copyPilot: false });
+    try {
+      const r = validateMap({ ...t.config, dir: PILOT_APP_MAP_DIR }, { platforms: ['ios'] });
+      assert.deepEqual(r.issues.filter((i) => i.message.includes('expect.focused')), [], formatIssues(r.issues));
+      assert.deepEqual(errors(r.issues), [], formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+describe('rule 2 — a `kind: list` element no capture has ever produced (issue #19)', () => {
+  it('warns on a registered kind: list element that no screen file declares', () => {
+    const t = makeTempAppMapDir();
+    try {
+      // the five ids the first real SwiftUI integration registered and then deleted again: the
+      // container is not an accessibility element, so no capture ever contained it
+      editYaml<IdsRegistry>(t, 'ids.yaml', 'ids', (d) => { d.elements.push({ id: 'people.list.table', kind: 'list', dynamic: true }); });
+      const r = validateMap(t.config, { platforms: ['ios'] });
+      const warned = r.issues.filter((i) => i.rule === 2 && i.severity === 'warning' && i.message.includes('people.list.table'));
+      assert.equal(warned.length, 1, formatIssues(r.issues));
+      assert.equal(warned[0]!.file, 'ids.yaml');
+      assert.match(warned[0]!.message, /never reaches the driver/);
+      assert.match(warned[0]!.message, /select \{cell, match\}/);
+      // a warning, never an error: on a young map exploration may just not have got there yet
+      assert.ok(r.ok);
+      assert.deepEqual(errors(r.issues), [], formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('does not warn for a list a screen declares in elements[], nor for one only a variant requires', () => {
+    const t = makeTempAppMapDir();
+    try {
+      // `invoice.list.table`, `client.picker.list` and `invoice.detail.items.list` are in
+      // `elements[]`; `invoice.list.collection` appears ONLY in a variant's `required_ids`, and
+      // that is a capture-derived section too, so it counts as observed
+      const r = validateMap(t.config);
+      assert.deepEqual(r.issues.filter((i) => i.rule === 2 && i.severity === 'warning'), [], formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('the rule is about containers: an unobserved `kind: cell` id is not warned', () => {
+    const t = makeTempAppMapDir();
+    try {
+      editYaml<IdsRegistry>(t, 'ids.yaml', 'ids', (d) => { d.elements.push({ id: 'people.list.cell', kind: 'cell', dynamic: true }); });
+      const r = validateMap(t.config, { platforms: ['ios'] });
+      assert.deepEqual(r.issues.filter((i) => i.rule === 2 && i.message.includes('people.list.cell')), [], formatIssues(r.issues));
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('a `select {cell, match}` step validates and its cell is cross-referenced like any step element', () => {
+    const t = makeTempAppMapDir();
+    try {
+      editYaml<RecipeFile>(t, 'ios/recipes/create_invoice.yaml', 'recipe', (d) => {
+        d.steps[3] = { id: 's4', action: 'select', cell: 'client.picker.cell', match: { text: '{client}' }, expect: { screen: 'invoice_new' } };
+      });
+      const ok = validateMap(t.config);
+      assert.deepEqual(errors(ok.issues), [], formatIssues(ok.issues));
+      assert.ok(ok.ok);
+      // ... and an unregistered cell is the same rule 2 error the `list` form gets
+      editYaml<RecipeFile>(t, 'ios/recipes/create_invoice.yaml', 'recipe', (d) => { (d.steps[3] as { cell: string }).cell = 'client.picker.nope'; });
+      const bad = validateMap(t.config);
+      const hit = errors(bad.issues, 2).find((i) => i.message.includes('client.picker.nope'));
+      assert.ok(hit, formatIssues(bad.issues));
+      assert.match(hit.message, /^s4: /);
+      assert.equal(hit.file, 'ios/recipes/create_invoice.yaml');
+    } finally {
+      t.cleanup();
+    }
   });
 });
 
@@ -187,6 +306,272 @@ describe('rule 2 — every id is registered in ids.yaml', () => {
   });
 });
 
+describe('rule 2 — a router-export seed warns until exploration learns its elements (02 §10 rule 2, issue #12)', () => {
+  /** Exactly what `router-import.routerScreenToScreenFile` writes: the app's edges, nothing learned. */
+  const seededScreen = (over: Partial<ScreenFile> = {}): ScreenFile => ({
+    id: 'settings',
+    kind: 'screen',
+    title: 'Settings',
+    deep_link: 'appmap://settings',
+    signature: { marker: 'screen.settings', route: 'appmap://settings', nav_class: 'SettingsView' },
+    elements: [],
+    edges: [
+      { action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list', status: 'candidate' },
+      { action: { type: 'tap', element: 'invoice.list.cell' }, to: 'invoice_detail', status: 'candidate' },
+    ],
+    meta: { sources: ['router_export'], status: 'candidate' },
+    ...over,
+  });
+  /** the pilot registry plus `settings`, so only the EDGE ELEMENTS are undeclared, never unregistered */
+  const idsWithSettings = (): IdsRegistry => ({
+    schema_version: 1,
+    screens: [{ id: 'invoice_detail' }, { id: 'invoice_list' }, { id: 'settings', title: 'Settings', deep_link: 'appmap://settings' }],
+    gates: [],
+    elements: [{ id: 'invoice.add.button', kind: 'button' }, { id: 'invoice.list.cell', kind: 'cell', dynamic: true }],
+  });
+  /** an element as an already-explored neighbour declares it (role/dynamic taken from the registry) */
+  const declaredAs = (id: string): ElementDef => {
+    const reg = idsWithSettings().elements.find((e) => e.id === id)!;
+    return {
+      id,
+      role: reg.kind as ElementDef['role'],
+      ...(reg.dynamic === true ? { dynamic: true } : {}),
+      status: 'verified',
+      locators: [{ strategy: 'a11y_id', value: id, weight: 1 }, { strategy: 'path', value: `${reg.kind}[0]`, weight: 0.25 }],
+    };
+  };
+  /**
+   * A neighbouring screen. `declares` are the element ids it records as PRESENT, which is the set
+   * rule 2's carve-out reads ("has any capture ever produced this id?"). It DEFAULTS TO NOTHING on
+   * purpose: which neighbour declares what decides the severity of half the cases below, so every
+   * test that depends on it says so at its own call site rather than inheriting it from here.
+   */
+  const stub = (id: string, declares: string[] = []): ScreenFile => ({
+    id, kind: 'screen', deep_link: `appmap://${id}`, signature: { marker: `screen.${id}` },
+    elements: declares.map(declaredAs), edges: [],
+    meta: declares.length > 0 ? { sources: ['exploration'], status: 'verified' } : { sources: ['manual'], status: 'candidate' },
+  });
+  /**
+   * `neighbours`: what the already-explored `invoice_list` next door declares (see `stub`).
+   * `build`: the build `manifest.yaml` names, which rule 2's third subject compares against a
+   * screen's `meta.last_verified_build`. Omitted, as the pilot's own manifest is not, it stays
+   * undefined and that subject never fires.
+   */
+  const crossRef = (screen: ScreenFile, opts: { neighbours?: string[]; build?: string } = {}): ValidationIssue[] => crossReferenceIssues({
+    platform: 'ios',
+    ids: idsWithSettings(),
+    screens: new Map([['ios/screens/settings.yaml', screen], ['ios/screens/invoice_list.yaml', stub('invoice_list', opts.neighbours ?? [])], ['ios/screens/invoice_detail.yaml', stub('invoice_detail')]]),
+    recipes: new Map(),
+    ...(opts.build !== undefined ? { build: opts.build } : {}),
+  });
+  const edgeElementIssues = (issues: ValidationIssue[]): ValidationIssue[] => issues.filter((i) => i.rule === 2 && i.location?.endsWith('/action/element') === true);
+  /** the seed on disk in a pilot copy, registered in ids.yaml so the elements are the only gap */
+  const writeSeed = (t: TempAppMapDir, screen: ScreenFile): void => {
+    editYaml<IdsRegistry>(t, 'ids.yaml', 'ids', (d) => {
+      d.screens.push({ id: 'settings', title: 'Settings', deep_link: 'appmap://settings' });
+      d.screens.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    });
+    writeFileSync(join(t.dir, 'ios/screens/settings.yaml'), canonicalYaml('screen', screen));
+  };
+
+  it('a candidate screen with no elements warns instead of erroring, and the map still loads (issue #12 criterion 1)', () => {
+    const t = makeTempAppMapDir();
+    try {
+      writeSeed(t, seededScreen());
+      const r = validateMap(t.config, { platforms: ['ios'] });
+      assert.deepEqual(errors(r.issues), [], formatIssues(r.issues));
+      assert.ok(r.ok, 'a seed that has never been explored must not fail validate');
+      const warned = edgeElementIssues(r.issues);
+      assert.equal(warned.length, 2, formatIssues(r.issues));
+      assert.deepEqual(warned.map((i) => i.location), ['/edges/0/action/element', '/edges/1/action/element']);
+      for (const w of warned) assert.equal(w.severity, 'warning', formatIssues([w]));
+      assert.ok(warned[0]!.message.includes('invoice.add.button') && warned[1]!.message.includes('invoice.list.cell'), formatIssues(warned));
+      // and the loader agrees: it throws on errors only, and carries the warnings (issue #12)
+      const map = loadMap(t.config);
+      assert.ok(map.screens.has('settings'));
+      assert.equal(map.validationWarnings.filter(isUnlearnedEdgeElement).length, 2);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  /** the seed once ONE element is known, so the SCREEN subject (`elements: []`) no longer applies */
+  const partlyLearned = (): ScreenFile => seededScreen({
+    elements: [{ id: 'invoice.add.button', role: 'button', label: 'New Invoice', status: 'candidate', locators: [{ strategy: 'a11y_id', value: 'invoice.add.button', weight: 1 }, { strategy: 'path', value: 'button[0]', weight: 0.25 }] }],
+  });
+
+  it('errors again for the other edge element once ONE element is declared, when a capture HAS produced it elsewhere', () => {
+    // Was "…once ONE element is declared" full stop, which is how the first #12 fix behaved: the
+    // screen subject was the only one, so losing it meant a hard error whatever the element was.
+    // It needs the neighbour to declare `invoice.list.cell` now — see the test below for the half
+    // of this case that became hole (b) and is deliberately no longer an error.
+    const issues = edgeElementIssues(crossRef(partlyLearned(), { neighbours: ['invoice.add.button', 'invoice.list.cell'] }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error');
+    assert.equal(issues[0]!.location, '/edges/1/action/element');
+    assert.equal(issues[0]!.message, 'edge element invoice.list.cell is not declared on this screen');
+    assert.equal(isUnlearnedEdgeElement(issues[0]!), false, 'an observed screen is past "not learned yet"');
+  });
+
+  it('…but WARNS there when no capture has produced it anywhere — one learned element is not exploration reaching this one (issue #12 hole b)', () => {
+    // The same screen and the same edge as above with ONE thing changed: nothing in the map
+    // declares `invoice.list.cell`. `name_screen` learns a screen's ids one capture at a time and
+    // `import-router` keeps appending the app's newer edges to it, so "this screen has SOME
+    // element" never meant "exploration reached THIS element". Erroring here is #12's cycle.
+    const issues = edgeElementIssues(crossRef(partlyLearned()));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'warning', formatIssues(issues));
+    assert.equal(issues[0]!.location, '/edges/1/action/element');
+    assert.ok(isUnlearnedEdgeElement(issues[0]!), formatIssues(issues));
+    assert.match(issues[0]!.message, /no capture has produced this id on any screen/, issues[0]!.message);
+  });
+
+  it('a screen past candidate with elements: [] errors for an element some capture HAS produced', () => {
+    // `verified` and `retired` are both past the point where the SCREEN subject explains anything;
+    // with both edge elements observed next door, neither of the other two subjects applies either.
+    for (const status of ['verified', 'retired'] as const) {
+      const issues = edgeElementIssues(crossRef(seededScreen({ meta: { sources: ['router_export'], status } }), { neighbours: ['invoice.add.button', 'invoice.list.cell'] }));
+      assert.equal(issues.length, 2, `${status}: ${formatIssues(issues)}`);
+      for (const i of issues) assert.equal(i.severity, 'error', `${status}: ${formatIssues([i])}`);
+    }
+  });
+
+  it('a screen past candidate with elements: [] still WARNS for an element no capture has produced (issue #12 hole b)', () => {
+    // Where the old blanket claim — "verified and retired are both beyond not-learned-yet" — stopped
+    // being true. The screen is past `candidate`, so the seed carve-out is off, but the ELEMENT is
+    // still unreached and that is the subject rule 2 answers to.
+    for (const status of ['verified', 'retired'] as const) {
+      const issues = edgeElementIssues(crossRef(seededScreen({ meta: { sources: ['router_export'], status } })));
+      assert.equal(issues.length, 2, `${status}: ${formatIssues(issues)}`);
+      for (const i of issues) assert.ok(isUnlearnedEdgeElement(i), `${status}: ${formatIssues([i])}`);
+    }
+  });
+
+  // ---- the carve-out's other two subjects: the element and the capture, not the screen ----
+  // (issue #12 holes (b) and (c) — a build N+1 `import-router` refresh of an EXPLORED screen)
+
+  /** an already-explored screen: `name_screen` learned `invoice.add.button` from a capture on 4412 */
+  const exploredScreen = (edges: ScreenFile['edges'], over: Partial<ScreenFile> = {}): ScreenFile => seededScreen({
+    elements: [{ id: 'invoice.add.button', role: 'button', label: 'New Invoice', status: 'verified', locators: [{ strategy: 'a11y_id', value: 'invoice.add.button', weight: 1 }, { strategy: 'path', value: 'button[0]', weight: 0.25 }] }],
+    edges,
+    meta: { sources: ['exploration', 'router_export'], status: 'verified', last_verified_build: '4412' },
+    ...over,
+  });
+  const tapCell = (status: 'candidate' | 'verified'): ScreenFile['edges'][number] => ({ action: { type: 'tap', element: 'invoice.list.cell' }, to: 'invoice_detail', status });
+
+  it('a new candidate edge on an ALREADY-EXPLORED screen warns when no capture has ever produced its element (issue #12 hole b)', () => {
+    // Build N+1: `mergeRouterScreen` appends the new build's edge and never touches `elements[]`
+    // or `meta.status`, so the screen is `verified` and non-empty — neither half of the original
+    // carve-out applies and rule 2 hard-errored, on every app's SECOND build. The capture is
+    // CURRENT here (4412 both sides), so the ELEMENT is the only subject that can be doing the work.
+    const explored = exploredScreen([
+      { action: { type: 'tap', element: 'invoice.add.button' }, to: 'invoice_list', status: 'verified' },
+      tapCell('candidate'),
+    ]);
+    // `invoice.list.cell` is registered in ids.yaml and declared on NO screen in this map
+    const issues = edgeElementIssues(crossRef(explored, { neighbours: ['invoice.add.button'], build: '4412' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'warning', formatIssues(issues));
+    assert.equal(issues[0]!.location, '/edges/1/action/element');
+    assert.ok(isUnlearnedEdgeElement(issues[0]!), formatIssues(issues));
+    assert.match(issues[0]!.message, /no capture has produced this id on any screen/, issues[0]!.message);
+  });
+
+  it('an edge element observed on ANOTHER screen is an ERROR on a CURRENT capture — that is a gap, not an unreached element', () => {
+    // same screen as above, but now `invoice_list` declares `invoice.list.cell` — a capture HAS
+    // produced it — and this screen's own capture is of the build the manifest names, so neither
+    // "no capture has produced it" nor "this capture is too old to have contained it" is available
+    const issues = edgeElementIssues(crossRef(exploredScreen([tapCell('candidate')]), { neighbours: ['invoice.add.button', 'invoice.list.cell'], build: '4412' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error', formatIssues(issues));
+    assert.equal(issues[0]!.message, 'edge element invoice.list.cell is not declared on this screen');
+    assert.equal(isUnlearnedEdgeElement(issues[0]!), false);
+  });
+
+  it('…and a WARNING once the manifest has moved on and this screen has not been recaptured (issue #12 hole c: shared chrome)', () => {
+    // The residual deadlock the element subject cannot reach. `import-router` on build 4413 appends
+    // an edge for a tab bar / back button that some OTHER screen already declares, so `observed` is
+    // true, onto a screen whose `elements[]` was captured on 4412 and which the merge does not
+    // recapture. The 4412 capture could not have contained a 4413 id whatever it is.
+    const issues = edgeElementIssues(crossRef(exploredScreen([tapCell('candidate')]), { neighbours: ['invoice.add.button', 'invoice.list.cell'], build: '4413' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'warning', formatIssues(issues));
+    assert.ok(isUnlearnedEdgeElement(issues[0]!), formatIssues(issues));
+    assert.match(issues[0]!.message, /the router added after this screen was last captured/, issues[0]!.message);
+  });
+
+  it('a build_number that does not compare numerically is stale whenever it differs (issue #12 hole c, non-integer builds)', () => {
+    // `isNewerBuild` compares numerically only (architecture decision 18) and both schemas allow
+    // `^[0-9A-Za-z][0-9A-Za-z.\-]*$`, so for an app that versions builds `1.2.3` or `4413-rc1`
+    // every comparison is false. Taking decision 18's conservative branch here lands on the hard
+    // ERROR, which is hole (c)'s deadlock in full: measured on a pilot copy, `import-router` at
+    // `2026.9.13` appending a `nav.settings.tab` edge to `invoice_detail` failed validate and
+    // `openContext` came back `invalid_map`. For THIS rule the conservative branch is the warning.
+    for (const [captured, manifest] of [['2026.9.12', '2026.9.13'], ['4413-rc1', '4413-rc2'], ['1.2.3', '1.10.0']] as const) {
+      const stale = exploredScreen([tapCell('candidate')], { meta: { sources: ['exploration', 'router_export'], status: 'verified', last_verified_build: captured } });
+      const issues = edgeElementIssues(crossRef(stale, { neighbours: ['invoice.add.button', 'invoice.list.cell'], build: manifest }));
+      assert.equal(issues.length, 1, `${captured}→${manifest}: ${formatIssues(issues)}`);
+      assert.equal(issues[0]!.severity, 'warning', `${captured}→${manifest}: ${formatIssues(issues)}`);
+      assert.ok(isUnlearnedEdgeElement(issues[0]!), formatIssues(issues));
+    }
+  });
+
+  it('…but the SAME non-integer build on both sides is a current capture, and still an ERROR', () => {
+    // the relaxation is keyed on the capture being of a different build, not on the comparison
+    // failing: a screen recaptured on the build the manifest names has nothing left to excuse it
+    const current = exploredScreen([tapCell('candidate')], { meta: { sources: ['exploration', 'router_export'], status: 'verified', last_verified_build: '2026.9.13' } });
+    const issues = edgeElementIssues(crossRef(current, { neighbours: ['invoice.add.button', 'invoice.list.cell'], build: '2026.9.13' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error', formatIssues(issues));
+    assert.equal(isUnlearnedEdgeElement(issues[0]!), false);
+  });
+
+  it('a capture from a demonstrably NEWER integer build is not stale — decision 18 still decides when it can', () => {
+    // a `--build` override running ahead of `manifest.yaml`: 4414 > 4413, so the capture is current
+    // or better and the element it does not contain is a real contradiction
+    const ahead = exploredScreen([tapCell('candidate')], { meta: { sources: ['exploration', 'router_export'], status: 'verified', last_verified_build: '4414' } });
+    const issues = edgeElementIssues(crossRef(ahead, { neighbours: ['invoice.add.button', 'invoice.list.cell'], build: '4413' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error', formatIssues(issues));
+  });
+
+  it('a stale capture only excuses a screen the ROUTER writes — a hand-authored one keeps the hard error', () => {
+    // `sources` without `router_export`: nothing appends edges to this file on its own, so an
+    // undeclared element is someone naming the wrong id and there is no cycle to break.
+    const handAuthored = exploredScreen([tapCell('candidate')], { meta: { sources: ['exploration', 'manual'], status: 'verified', last_verified_build: '4412' } });
+    const issues = edgeElementIssues(crossRef(handAuthored, { neighbours: ['invoice.add.button', 'invoice.list.cell'], build: '4413' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error', formatIssues(issues));
+    assert.equal(isUnlearnedEdgeElement(issues[0]!), false);
+  });
+
+  it('a VERIFIED edge whose element no capture has produced is still an ERROR — it claims the tap happened here', () => {
+    // and a stale capture does not excuse it either: `verified` says the tap was replayed HERE
+    const issues = edgeElementIssues(crossRef(exploredScreen([tapCell('verified')]), { neighbours: ['invoice.add.button'], build: '4413' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error', formatIssues(issues));
+    assert.equal(isUnlearnedEdgeElement(issues[0]!), false);
+  });
+
+  it('an edge element absent from ids.yaml is an ERROR even when no capture has produced it — a typo is not a gap', () => {
+    const explored = exploredScreen([{ action: { type: 'tap', element: 'settings.ghost.button' }, to: 'invoice_list', status: 'candidate' }]);
+    const issues = edgeElementIssues(crossRef(explored, { neighbours: ['invoice.add.button'], build: '4413' }));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error');
+    assert.equal(issues[0]!.message, 'edge element settings.ghost.button is not registered in ids.yaml');
+  });
+
+  it('an edge element absent from ids.yaml is still an ERROR on a seeded screen — a typo is not a gap (issue #12 criterion 4)', () => {
+    const issues = edgeElementIssues(crossRef(seededScreen({
+      edges: [{ action: { type: 'tap', element: 'settings.ghost.button' }, to: 'invoice_list', status: 'candidate' }],
+    })));
+    assert.equal(issues.length, 1, formatIssues(issues));
+    assert.equal(issues[0]!.severity, 'error');
+    assert.equal(issues[0]!.message, 'edge element settings.ghost.button is not registered in ids.yaml');
+    assert.equal(isUnlearnedEdgeElement(issues[0]!), false);
+  });
+});
+
 describe('rule 3 — screen references resolve to screen files', () => {
   it('edge to, fallback_path, expect.screen, condition screen and _previous on a screen', () => {
     const t = makeTempAppMapDir();
@@ -283,6 +668,23 @@ describe('rule 7 — canonical serialization', () => {
       const r = validateMap(t.config);
       assert.deepEqual(errors(r.issues, 7).map((i) => i.file), ['ios/manifest.yaml', 'ios/screens/login.yaml']);
       assert.deepEqual(errors(validateMap(t.config, { canonical: false }).issues, 7), []);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  // issue #20: `version: 1.0` / `git_sha: 0000000` used to be a rule 1 schema error, which meant
+  // `map failed to load` blocked every other command during first-run setup. Rule 1 now reads the
+  // authored strings, so the file is merely non-canonical — a re-quoting diff, not a hard stop.
+  it('an unquoted build scalar is a rule 7 diff, not a rule 1 schema error (issue #20)', () => {
+    const t = makeTempAppMapDir();
+    try {
+      const p = join(t.dir, 'ios/manifest.yaml');
+      writeFileSync(p, readFileSync(p, 'utf8').replace(/^build:\n(?:  .*\n)+/m, 'build:\n  version: 1.0\n  build_number: 1\n  git_sha: 0000000\n'));
+      const r = validateMap(t.config);
+      assert.deepEqual(errors(r.issues, 1).filter((i) => i.file === 'ios/manifest.yaml'), [], formatIssues(r.issues));
+      assert.deepEqual(errors(r.issues, 7).map((i) => i.file), ['ios/manifest.yaml']);
+      assert.ok(nonCanonicalFiles(t.config).includes('ios/manifest.yaml'));
     } finally {
       t.cleanup();
     }

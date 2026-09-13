@@ -35,7 +35,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { AppMapContext } from '../context.ts';
 import type { AnyTree, ElementDef, ElementId, HealCandidate, HealInput, HealRecord, HealResult, HeadlessErrorCode, HeadlessReport, HealReport, LoadedMap, RecipeFile, RecipeParams, RecipeStatus, RecipeStep, RunRecord, ScreenId, SessionId, StepId, Tree } from '../types.ts';
-import { DEEP_LINK_REGEX, UNKNOWN_SCREEN, now, probeConditions } from '../types.ts';
+import { DEEP_LINK_REGEX, UNKNOWN_SCREEN, now, probeConditions, selectTarget } from '../types.ts';
 import type { BuildInfoProbe } from './guided.ts';
 import { defaultBuildProbe } from './guided.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
@@ -117,10 +117,10 @@ function elementDefFor(map: LoadedMap, id: ElementId, screen?: ScreenId): Elemen
   return refs[0]?.element;
 }
 
-/** the element a step acts on (`element`, or the `list` of a `select`), when it has one */
+/** the element a step acts on (`element`, or the `list`/`cell` a `select` names), when it has one */
 function elementOfStep(step: RecipeStep): ElementId | undefined {
   if ('element' in step && typeof step.element === 'string') return step.element;
-  if (step.action === 'select') return step.list;
+  if (step.action === 'select') return selectTarget(step);
   return undefined;
 }
 

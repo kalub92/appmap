@@ -10,7 +10,7 @@ Define exactly what is stored, where, in what shape, and how it survives a share
 
 1. One file per entity: `screens/<screen_id>.yaml` (screen + its elements + outgoing edges), `recipes/<recipe_id>.yaml`. Two developers exploring different screens never touch the same file.
 2. **Durable fields only in git.** Structure, locators, status, provenance, `last_verified_build`. Counters, timings, and per-session state live in `app-map/.local/cache.sqlite` (git-ignored). `app-map export` writes durable fields deterministically.
-3. Deterministic serialization: fixed key order per schema, lists sorted by `id`, block style, 2-space indent, LF, no trailing timestamps except `manifest.generated_at`. `app-map export` twice in a row produces no diff.
+3. Deterministic serialization: fixed key order per schema, lists sorted by `id`, block style, 2-space indent, LF, no trailing timestamps except `manifest.generated_at`; string-typed scalars whose natural values read as numbers (`build.version`, `build.build_number`, `build.git_sha`) are always double-quoted. `app-map export` twice in a row produces no diff.
 4. Structure only (07 §2). A YAML file never contains a screenshot path, a field value, cell text, or a user identifier.
 5. Every file validates against `app-map/schema/<type>.schema.json`.
 
@@ -23,9 +23,9 @@ app_id: com.example.app
 platform: ios                      # ios | android
 deep_link_scheme: appmap
 build:                             # last build the map was exported against
-  version: "2026.9.1"
+  version: "2026.9.1"              # quote all three: unquoted, 1.0 is a float and 0000000 is the integer 0
   build_number: "4412"
-  git_sha: a1b2c3d
+  git_sha: "a1b2c3d"
 generated_at: 2026-09-10T00:00:00Z
 generator: app-map-mcp@0.1.0
 ```
@@ -157,21 +157,26 @@ entry:
   deep_link: appmap://invoice_new?fixture=logged_in
   fallback_path: [invoice_list, invoice_new]        # screen ids; edges resolved at run time
 steps:
-  - {id: s1, action: tap,   element: invoice.amount.field,  expect: {focused: invoice.amount.field}}
+  - {id: s1, action: tap,   element: invoice.amount.field,  expect: {visible: [invoice.amount.field]}}
   - {id: s2, action: type,  element: invoice.amount.field,  text: "{amount}"}
   - {id: s3, action: tap,   element: invoice.client.picker, expect: {screen: client_picker}}
   - {id: s4, action: select, list: client.picker.list, match: {text: "{client}"}, expect: {screen: invoice_new}}
+  # … or, where the list container is not an accessibility element (SwiftUI, 01 R4), name the row:
+  # - {id: s4, action: select, cell: client.picker.cell, match: {text: "{client}"}, expect: {screen: invoice_new}}
   - {id: s5, action: tap,   element: invoice.save.button,   expect: {screen: invoice_detail}, intent_critical: true}
 verify: {screen: invoice_detail, visible: [invoice.detail.amount.text]}
 status: verified                     # candidate | verified | ci_gate | retired
 provenance:
   compiled_from: traj_2026-09-01_0007
   compiled_by: app-map-mcp@0.1.0
+  # machine_recompile: true          # set by the 04 §8 automatic recompile; see below
   reviewed_by: caleb
 last_verified_build: "4412"
 ```
 
-Step actions: `tap`, `type`, `select`, `swipe`, `open_link`, `wait_for`, `dismiss_gate`. `expect` conditions: `screen`, `focused`, `visible`, `not_visible`, `text_present` (static copy only). Every step with an `expect` is a verification point; steps without one inherit "screen unchanged".
+Step actions: `tap`, `type`, `select`, `swipe`, `open_link`, `wait_for`, `dismiss_gate`. `select` picks one row out of repeated content and has two forms carrying the same `match.text`: `{list, match}` names a container that is itself an accessibility element, and `{cell, match}` names the repeated row id every row shares — the only form a SwiftUI list can express, since its container never reaches the driver (01 R4). Exactly one of `list`/`cell` is present; a step carrying both matches no branch of the schema. `expect` conditions: `screen`, `focused`, `visible`, `not_visible`, `text_present` (static copy only). Every step with an `expect` is a verification point; steps without one inherit "screen unchanged". `focused` is **Android/Maestro-only**: the Maestro hierarchy carries a `focused` attribute, while Argent's iOS accessibility snapshot carries no focus flag at all, so an `expect.focused` on `platform: ios` can never be satisfied however well the tap worked — `validate` warns (rule 2 below, 04 §10) and the compiler writes `visible` there instead.
+
+`provenance.machine_recompile: true` means this version's *steps* were rebuilt by the automatic recompile (04 §8), not authored or approved by a human. It sits directly above `reviewed_by` because that is what it qualifies: the signature is historical, carried over from the version the reviewer actually read. `mark(ci_gate, reviewer)` deletes the key (07 §7).
 
 Status lifecycle (04 §8): `candidate` on compile → `verified` after ≥3 successful replays across ≥2 sessions → `ci_gate` after ≥95% replay success across ≥3 builds → `retired` when a screen it depends on is removed.
 
@@ -182,7 +187,7 @@ Never committed. Retention: 14 days, then deleted by the server on start.
 ```jsonl
 // app-map/.local/trajectories/<session>.jsonl — one observation per driver tool call
 {"ts":"2026-09-10T17:02:11Z","session":"…","seq":12,"task":"create invoice for $50 for Acme",
- "tool":"mcp__argent__tap","input":{"id":"invoice.add.button"},
+ "tool":"mcp__argent__gesture-tap","input":{"id":"invoice.add.button"},
  "screen_before":"invoice_list","screen_after":"invoice_new",
  "signature_after":{"marker":"screen.invoice_new","structural_hash":"sha1:…","required_present":1.0},
  "snapshot":{"…scrubbed compact tree…"},"ok":true,"latency_ms":420}
@@ -200,7 +205,12 @@ SQLite (`cache.sqlite`, WAL mode) holds the loaded map plus volatile counters: p
 - `last_verified_build` is the build number of the last successful verification. On a new build, confidence decays: `confidence = base × 0.9^(builds_since_verified)`, floor 0.2. Decay is computed, not stored.
 - A renamed id is a migration: `app-map migrate-id <old> <new>` rewrites every reference across screens, recipes, and `ids.yaml` in one commit.
 - A screen removed from the router export is marked `status: retired` (not deleted) for one release, then deleted; recipes depending on it become `retired`.
+- A screen with `elements: []` is **never** verified, whatever a replay reports: verification is a clean observation of the screen's required ids, and a router-export seed (01 R6) has by definition never had one — `name_screen`, which is what fills `elements[]`, is the way out of `candidate` for such a screen. Nor is an edge whose `action.element` its screen does not declare: a `verified` edge asserts the tap happened there, while §10 rule 2 is still only warning that the element has not been learned there. Promoting either would silently withdraw that carve-out and stop the map loading with no human edit in between. Emptiness **alone** is the test, even for a seed whose edges name no element yet: `import-router` appends the app's new edges on every later build, and a screen promoted in the meantime is unrecoverable — the map does not load, so every tool but `export` is short-circuited and nobody can `mark` it back to `candidate`. The narrower rule defers that deadlock rather than preventing it. The accepted cost: a screen that genuinely has no registered non-marker id (a splash, an interstitial) stays `candidate` and carries no `last_verified_build`, so the decay above is not applied to it and `report`'s deep-link coverage does not count it.
+- A screen's `verified` is **earned by observation** (08 §5 row 5: marker + every `required_id` + a matching structural hash, on one observation) and **withdrawn only by a human**: `mark {screen_id, status: candidate}` / `app-map mark-screen <id> candidate`. The demote deletes `last_verified_build` — the confidence decay above must not report a verification that has been taken back — and records `meta.reviewed_by`. `verified` cannot be marked by hand without `force` plus a `reviewer`: a hand-signed verification is exactly the self-certification the demote exists to undo. Marking a screen `retired` by hand cascades to its recipes like a router-export removal, and KEEPS `last_verified_build`, which is what `import-router --purge-retired` reads to mean "retired for one release".
+- `name_screen` with `force` re-learns a screen that is no longer `candidate` (the signature is rebuilt from the current observation), drops it back to `candidate`, and records `meta.relearned_from: <the overridden status>` so the override is visible in the PR diff. A human `mark` with a `reviewer` clears the marker — the same contract `provenance.machine_recompile` has for recipes (§6).
+- A demote is not a lock: the next clean observation re-verifies the screen. Demote, then re-learn.
 - `schema_version` bumps require a migration script under `tools/app-map-mcp/migrations/`.
+- The schemas are part of the MAP, not of the package: `validate` compiles `<APP_MAP_DIR>/schema/*.schema.json`, the copy the consuming repo vendored. So an **additive** optional field (`meta.reviewed_by`, `meta.relearned_from`, `provenance.machine_recompile`) needs no `schema_version` bump — every existing file stays valid — but a consumer still has to re-copy `app-map/schema/` when it upgrades the package, because `meta` and `provenance` are `additionalProperties: false` and the first file a newer package writes then fails rule 1 (`must NOT have additional properties`), which cascades: a screen file that fails to load takes its recipes' `expect.screen` down with it (rule 3). A bump plus a migration is for the other kind of change — one that makes an EXISTING file invalid.
 
 ## 9. Merge rules
 
@@ -210,8 +220,55 @@ SQLite (`cache.sqlite`, WAL mode) holds the loaded map plus volatile counters: p
 
 ## 10. Validation rules (`app-map validate`)
 
+Rules produce **errors** and **warnings**. `app-map validate` exits non-zero on any error and the
+server refuses to load a map that has one (`invalid_map`); warnings are printed, counted and carried
+on the loaded map (`summary` names them), but never block either.
+
 1. Every file validates against its JSON Schema.
-2. Every element id, screen id, gate id exists in `ids.yaml`.
+2. Every element id, screen id, gate id exists in `ids.yaml`, and every edge `action.element` is
+   also declared in its own screen's `elements[]`. The second half is a **warning, not an error**
+   while exploration has not reached it. Three subjects can be unreached, and **any one** makes it
+   a warning:
+   - the **screen** — `meta.status: candidate` with `elements: []`, a router-export seed (01 R6)
+     whose elements exploration has not learned yet (03 §5). Erroring would make the seed unloadable
+     before exploration can start: the map would not load, so no observation could be ingested, so
+     `name_screen` could never populate `elements[]`.
+   - the **element** — a `status: candidate` edge whose element **no screen file records as present
+     anywhere in the map** (no `elements[]`, `signature.required_ids`, `dynamic_regions` or variant
+     `required_ids` entry), i.e. no capture has ever produced that id. This is what a build N+1
+     `import-router` refresh appends to an already-explored screen, where the first condition cannot
+     apply — `mergeRouterScreen` adds the new build's edges and touches neither `elements[]` nor
+     `meta.status`.
+   - the **capture** — a `status: candidate` edge on a screen whose `sources` include
+     `router_export` and whose `meta.last_verified_build` is **not the build `manifest.yaml` names,
+     and not demonstrably newer than it**. For two integer build numbers that is exactly "older
+     than"; `build_number` may be any `^[0-9A-Za-z][0-9A-Za-z.\-]*$` string (§3), and builds that do
+     not compare numerically (`1.2.3`, `4413-rc1`) count as stale whenever they differ, because the
+     conservative branch of a rule whose job is to keep the map loadable is the warning — comparing
+     them as "not newer, so error" would leave the deadlock below fully intact for such an app.
+     `elements[]` is the id set the last `name_screen` captured, at that
+     build; the refresh above appends the next build's edges to the same file and recaptures
+     nothing, so the capture could not have contained an id the app registered since. This is the
+     same refresh as the element condition, for the case where the new edge names **shared chrome**
+     — a tab bar, a back button — that another screen already declares, so "no capture has produced
+     it" is false. It self-heals: re-explore the screen and `name_screen` stamps the current build,
+     after which an element that really is absent is an error again.
+
+   None of the three subsumes another. The element condition alone would not cover first-run setup,
+   because a seed's edges routinely name that same shared chrome while the screen has never been
+   captured at all. The screen condition alone only survives the first import. The capture condition
+   alone would let a fresh, current capture be contradicted for ever. An element recorded on another
+   screen, on a screen whose capture is of this build, is a real gap rather than an unreached one
+   and stays an error; so does a non-`candidate` edge, which asserts the tap already happened on
+   this screen; and so does any undeclared element on a screen the router does not write, where
+   nothing appends edges on its own and there is no cycle to break. An element missing from
+   `ids.yaml` altogether is always an error — that is a typo, not a gap. §8 keeps the conditions
+   honest: `markVerified` never promotes a screen whose `elements` is empty, nor an edge whose
+   element that screen does not declare.
+
+   Also a **warning** for an `expect.focused` on a platform whose driver reports no focus: Argent's
+   iOS snapshot carries no focus flag, so the assertion can never be satisfied and every replay of
+   the step falls back (04 §10).
 3. Every edge `to`, every recipe `entry.fallback_path` entry, every `expect.screen` references an existing screen.
 4. Every committed element has ≥2 locators and an `a11y_id` locator unless `role_label` is the only possible strategy (OS gates).
 5. No `text` strategy stands alone.

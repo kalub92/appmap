@@ -8,19 +8,20 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { AppMapContext } from '../context.ts';
 import { openContext } from '../context.ts';
-import type { HookPayload, Observation, ScrubbedTree } from '../types.ts';
+import type { HookPayload, Observation, ScreenFile, ScrubbedTree } from '../types.ts';
 import { REDACTED, UNKNOWN_SCREEN, isScrubbed, now } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { readEvents } from '../events.ts';
 import { idsFile, trajectoryFile } from '../paths.ts';
 import { buildScrubPolicy, scrub } from '../scrub.ts';
 import { observedSignature } from '../signature.ts';
-import { normalizeTree } from '../tree.ts';
+import { findByA11yId, normalizeTree, nodesWithRole } from '../tree.ts';
 import {
   declareTask, finishTask, hookPayloadToObservation, inferTaskOutcome, ingestObservation, isDriverTool, lastObservation,
   nameScreen, readTrajectory, recordHookPayload, recordObservation,
 } from '../observe.ts';
-import { loadFixtureTree, loadHookFixture, makeTempAppMapDir } from './helpers.ts';
+import { COMMANDS } from '../cli.ts';
+import { loadFixtureTree, loadHookFixture, makeTempAppMapDir, readJsonFixture } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';
 
 const SESSION = 'sess_2026-09-10_0007';
@@ -217,10 +218,48 @@ describe('element resolution — 04 §2 step 4', () => {
   });
 });
 
+describe('ingest of a real flat Argent capture — 03 §5, issue #10', () => {
+  const flat = (screen: string): unknown => readJsonFixture(`raw/argent-native-describe-screen.${screen}.json`);
+
+  it('ingests the driver\'s own output end to end, with the registry kinds wired in', () => {
+    const payload = tapPayload({
+      tool_input: { id: 'nav.invoices.tab' },
+      tool_response: { structuredContent: { ok: true, latency_ms: 12, snapshot: flat('invoice_list') } },
+    });
+    recordHookPayload(ctx, payload);
+    const obs = ctx.db.lastObservation(SESSION)!;
+    assert.equal(obs.screen_after, 'invoice_list');
+    assert.equal(obs.signature_after.marker, 'screen.invoice_list');
+    const snapshot = obs.snapshot!;
+    assert.ok(isScrubbed(snapshot));
+    assert.equal(snapshot.source, 'argent');
+    // the capture carries no element type: `cell` comes from the SwiftUI list-cell class, with
+    // the registry kind (`roleHintsFor`) behind it as the net for classes we cannot read
+    const cells = findByA11yId(snapshot, 'invoice.list.cell');
+    assert.equal(cells.length, 3);
+    assert.ok(cells.every((c) => c.role === 'cell'));
+    // AC4 end to end: three tabs, not six
+    assert.equal(findByA11yId(snapshot, 'nav.clients.tab').length, 1);
+    assert.equal(nodesWithRole(snapshot, 'tab').length, 3);
+  });
+
+  it('a pushed screen is recorded as the pushed screen, not the one it covers (01 R3)', () => {
+    recordHookPayload(ctx, tapPayload({
+      tool_input: { id: 'invoice.list.cell' },
+      tool_response: { structuredContent: { ok: true, latency_ms: 12, snapshot: flat('invoice_detail') } },
+    }));
+    const obs = ctx.db.lastObservation(SESSION)!;
+    assert.equal(obs.screen_after, 'invoice_detail');
+    // observe.ts step 7 grades the evidence by comparing this against `markerOfScreen(screen_after)`
+    assert.equal(obs.signature_after.marker, 'screen.invoice_detail');
+    assert.equal(readEvents(t.config).events.filter((e) => e.kind === 'identify').at(-1)?.signal, 'marker');
+  });
+});
+
 describe('build auto-detection — 03 §3', () => {
   it('a driver-reported build_number becomes the effective build when APP_MAP_BUILD=auto', () => {
     const payload = tapPayload();
-    // the Argent wrapper carries `build_number` next to `root` (tree.ts fromArgentSnapshot)
+    // the XCUITest-like wrapper carries `build_number` next to `root` (tree.ts fromXcuiSnapshot)
     ((payload.tool_response as { structuredContent: { snapshot: Record<string, unknown> } }).structuredContent.snapshot)['build_number'] = '4500';
     assert.equal(ctx.config.build, 'auto');
     recordHookPayload(ctx, payload);
@@ -529,6 +568,44 @@ describe('name_screen (03 §8) — explore mode only', () => {
 
   it('a missing screen_id is bad_input', () => {
     assert.throws(() => nameScreen(ctx, { screen_id: '' }), isCode(ERROR_CODES.BAD_INPUT));
+  });
+
+  // issue #16: a screen learned from a slightly wrong tree self-certifies on the next clean
+  // observation, and before `force` there was no way to replace the data it locked in.
+  it('force re-learns a verified screen and records the override in meta (02 §8, issue #16)', () => {
+    const original = ctx.map.screens.get('invoice_new')!.signature.structural_hash;
+    // the stale signature the reporter was stuck with: verified, and wrong
+    const stale: ScreenFile = structuredClone(ctx.map.screens.get('invoice_new')!);
+    stale.signature = { ...stale.signature, structural_hash: 'sha1:0000000000000000000000000000000000000000' };
+    ctx.db.putScreen(stale, { dirty: false });
+    ctx.db.insertObservation(observation({ seq: 1, screen_after: UNKNOWN_SCREEN, snapshot: scrubbedFixture('invoice_new') }));
+
+    assert.throws(() => nameScreen(ctx, { screen_id: 'invoice_new', session: SESSION }), isCode(ERROR_CODES.BAD_INPUT));
+
+    const r = nameScreen(ctx, { screen_id: 'invoice_new', session: SESSION, force: true });
+    assert.equal(r.relearned_from, 'verified');
+    assert.equal(r.created, false);
+    assert.equal(r.screen.meta.status, 'candidate', 'a re-learned screen is unverified again');
+    assert.equal(r.screen.meta.relearned_from, 'verified', 'the override is visible in the exported YAML');
+    assert.equal(r.screen.meta.last_verified_build, undefined, '02 §8: the stamp goes with the verification');
+    assert.equal(r.screen.signature.structural_hash, original, 'the stale signature is rebuilt, not merged');
+    assert.ok(ctx.db.listDirty().some((d) => d.kind === 'screen' && d.key === 'invoice_new' && d.reason === 'name_screen:force'));
+  });
+
+  // issue #16 criterion 3: the old hint pointed at "a reviewed edit or a heal", neither of which
+  // was reachable. Pin the hint against the real command list so it cannot drift back.
+  it('the already-verified hint names a command that actually exists (issue #16)', () => {
+    ctx.db.insertObservation(observation({ seq: 1, screen_after: UNKNOWN_SCREEN }));
+    try {
+      nameScreen(ctx, { screen_id: 'invoice_new', session: SESSION });
+      assert.fail('naming a verified screen without force must throw');
+    } catch (e) {
+      assert.ok(AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT, String(e));
+      assert.match(e.hint, /app-map mark-screen invoice_new candidate/);
+      assert.match(e.hint, /force/, 'the other way out is named too');
+      const named = /app-map ([a-z-]+)/.exec(e.hint)?.[1];
+      assert.ok(named !== undefined && (COMMANDS as readonly string[]).includes(named), `the hint names \`app-map ${String(named)}\`, which is not a command`);
+    }
   });
 });
 

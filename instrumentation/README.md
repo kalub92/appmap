@@ -44,7 +44,7 @@ rejects literals, orphan constants and unreferenced screen markers in CI.
 ```swift
 // SwiftUI
 NavigationStack { … }
-    .appMapScreen(AppMapID.Screen.invoiceList)        // .accessibilityElement(children: .contain) + identifier
+    .appMapScreen(AppMapID.Screen.invoiceList)        // container + a 1pt marker element the driver can see (issue #15)
 Button("New Invoice") { … }.appMapID(AppMapID.Element.invoiceAddButton)
 // UIKit, in viewDidLoad
 appMapScreen(AppMapID.Screen.invoiceList)
@@ -55,9 +55,60 @@ Box(Modifier.appMapScreen(AppMapId.Screen.INVOICE_LIST)) { … }   // semantics 
 Button(onClick = …, modifier = Modifier.appMapId(AppMapId.Element.INVOICE_ADD_BUTTON)) { … }
 // Views: android:id resource ids named after the registry id (dots → underscores)
 ```
-Exactly one marker is visible per full-screen state; sheets and modals carry their own. Cells of one
-kind share an id (`invoice.list.cell`); containers with data-driven content are `dynamic: true` in
-`ids.yaml` so the scrubber drops their text (07 §2.3).
+A screen marker is **two** things, and both are load-bearing (issue #15). The screen root is an
+accessibility *container* carrying `screen.<screen_id>` — VoiceOver groups by it, and readers that
+list containers find the id there. Inside it, `appMapScreen` also pins a **1pt marker element**
+carrying the same id: the iOS simulator's accessibility service renders a *flat* tree and does not
+list containers at all, so a driver reading it (`argent run native-describe-screen --json`) sees
+every element id and no `screen.<id>`. The marker element is what actually reaches the driver, and
+`marker` is the only weight-1.0 identification signal there is (03 §5.2) — without it
+identification falls back to the weaker `required_ids` / structural-hash cascade, which is
+ambiguous between screens that share an element set.
+
+The marker is 1 × 1 pt of clear colour with hit testing off, pinned to the root's top-leading
+corner: it changes no layout, swallows no tap and announces nothing. It is deliberately **not**
+`accessibilityHidden` / `accessibilityElementsHidden` — the driver reads the same accessibility
+tree VoiceOver does, so hiding it from VoiceOver hides it from the driver. The accepted cost is one
+extra unlabeled VoiceOver stop per screen. `overlay(alignment:)` needs iOS 15+/macOS 12+ (the
+package targets iOS 16 / macOS 13). The UIKit call installs the equivalent 1pt
+`AppMapScreenMarkerView` subview and is idempotent: calling it from both `viewDidLoad` and
+`viewWillAppear` retargets the marker rather than stacking a second one.
+
+Each full-screen state marks itself exactly once; sheets and modals carry their own. That is a rule
+about what a screen publishes, not about what a capture contains — a pushed screen leaves the
+covered screen's marker in the accessibility tree, so app-map prefers the **deepest** marker
+(01 R3). Since every marker is now a 1pt box at its root's top-leading corner, two stacked screens
+whose roots are both flush with the top (a `fullScreenCover`, a `TabView` swap) report markers with
+an *identical* frame, so `tree.ts` never collapses two elements carrying different identifiers even
+when the rest of their geometry, label and value match, and on an exact `y` tie the later element
+in capture order — the screen just presented — wins.
+
+Cells of one kind share an id (`invoice.list.cell`); containers with data-driven content are
+`dynamic: true` in `ids.yaml` so the scrubber drops their text (07 §2.3).
+
+**Do not give a SwiftUI `List`, `Section` or `ForEach` an id** (01 R4, issue #19). They are not
+accessibility elements — the same reason the screen *container* alone was invisible above — so the
+container never reaches the driver and an id registered for it is dead weight: it can never be
+observed, never resolved, and a recipe step written against it can never run. `app-map validate`
+warns about a registered `kind: list` element that no screen file has ever recorded, which is what
+that mistake looks like from the map's side. `invoice.list.table` in the pilot is a UIKit/Compose
+pattern (a `UITableView`/`LazyColumn` IS an element); on SwiftUI there is nothing to register.
+
+Worse, `.appMapID` on a `Section` does not just fail to register the container — it **overwrites
+the rows**. SwiftUI propagates `accessibilityIdentifier` from a container to each child, so every
+row reports the section's id and the row id disappears from the tree:
+
+```swift
+Section("Characters (\(people.count))") {
+    ForEach(people) { person in
+        NavigationLink(value: person) { Text(person.name) }
+            .appMapID(AppMapID.Element.filmDetailCharacterCell)    // the row id — put it HERE
+    }
+}
+// .appMapID(AppMapID.Element.filmDetailCharactersList)            // ← never: it clobbers every row
+```
+
+To pick a row, a recipe names the ROW id and matches its label — `select {cell: film.detail.character.cell, match: {text: "{name}"}}` (04 §3.3) — which needs no container id at all.
 
 ## 4. Register routes for the router export (01 R6)
 
@@ -92,7 +143,12 @@ The JSON matches 01 R6 (`schema_version`, `app_id`, `platform`, `build{version,b
 seeds screens with `source: router_export`. `git_sha` must be 7–40 hex: `router-export.sh` passes the checkout's
 sha (`SIMCTL_CHILD_APP_MAP_GIT_SHA` on iOS, `--es git_sha` on Android); for other launches set the Info.plist key
 `AppMapGitSHA` on iOS and `AppMapRouterRegistry.gitSha = BuildConfig.GIT_SHA` on Android, otherwise the
-placeholder `0000000` is written and a warning logged.
+placeholder `"0000000"` is written and a warning logged. It is a *string* of seven hex digits everywhere it
+appears: in `manifest.yaml` write `git_sha: "0000000"` with the quotes, or YAML reads it as the number `0`.
+The map still loads without them — the value is read back as the text you wrote — but `app-map export --check`
+reports the file as non-canonical until the quotes are there; an unquoted `version: 1.0` behaves the same way
+(issue #20). Add the quotes by hand: `app-map export` rewrites only the files the map itself changed, so it
+leaves a merely non-canonical manifest alone.
 
 ## 5. Wire the deep link through the real router (01 R5)
 
@@ -160,10 +216,31 @@ router registry. OS dialogs cannot carry your ids; the map stores their label si
 ## 8. Debug probe for the server (07 §3)
 
 iOS: call `AppMapDebugEndpoint.publish(sandbox: Environment.current == .sandbox)` at launch. It writes a
-build/environment record to `UserDefaults` (no network listener) which the server reads with
-`xcrun simctl spawn booted defaults read com.example.app app_map_debug_probe`; the type does not exist
-in Release, so the key is never present there and the server refuses to run. Android: the export
-receiver exists only in debug builds; a matching probe is a follow-up for the Android pilot.
+build/environment record to `UserDefaults` (no network listener). The server reads it first through
+`cfprefsd`:
+
+```sh
+xcrun simctl spawn <udid|booted> defaults export com.example.app - | plutil -convert json -o - -
+```
+
+**On iOS 26 simulators that read comes back empty.** `defaults` no longer resolves a sandboxed app's
+domain, so `defaults read com.example.app app_map_debug_probe` answers "does not exist" and
+`defaults export` prints `{}` even for a Debug build that published the probe correctly. The server
+therefore falls back to the same record in the app's own data container, which is also the command to
+check by hand:
+
+```sh
+plutil -convert xml1 -o - \
+  "$(xcrun simctl get_app_container <udid|booted> com.example.app data)/Library/Preferences/com.example.app.plist"
+```
+
+`plutil -p` on that file is fine for eyeballing, but **`plutil -convert json` and `plutil -extract … json`
+are not**: they refuse the whole file ("invalid object in plist for destination format") as soon as the app
+stores any `Data` in `UserDefaults` — one ordinary `JSONEncoder` blob is enough — which is why the server
+reads `xml1`. The record is whatever `cfprefsd` has flushed, so publish at launch and do not expect a probe
+taken in the same millisecond as the write. The `AppMapDebugEndpoint` type does not exist in Release, so the
+key is never present there and the server refuses to run. Android: the export receiver exists only in debug
+builds; a matching probe is a follow-up for the Android pilot.
 
 ## 9. Release proof (01 §4)
 
@@ -201,11 +278,27 @@ source or an MCP config, and refuses the commit on any error. Bypass one commit 
 `APP_MAP_SKIP_PRECOMMIT=1 git commit` (or `git commit -n`). CI runs the same commands, so the hook
 only moves the feedback earlier — it is never the only gate.
 
+## Answered
+
+- *Can a SwiftUI `List`/`Section` container carry an app-map id, so a recipe can `select` within
+  it?* **No** (issue #19). The container is not an accessibility element, so no capture ever
+  contains it and no `select {list, …}` written against it can resolve; five such ids were
+  registered in the first real integration and deleted again unused. And an id applied to a
+  `Section` propagates down and overwrites the row ids. Put ids on rows and select by row id plus
+  match text (§3); `validate` now warns about a `kind: list` id no screen file has recorded.
+- *Do SwiftUI containers with `.accessibilityElement(children: .contain)` reach the driver, and do
+  they swallow child taps?* They do **not** swallow child taps — every element id is reported and
+  tappable — but the container itself never reaches the driver (issue #15). The iOS simulator's
+  accessibility service renders a flat tree in which containers are not elements at all, so the
+  container form alone is never listed and `screen.<id>` was simply missing. `appMapScreen` now
+  pins a 1pt marker element inside the container (§3); the container modifier stays for VoiceOver
+  grouping and for readers that do list containers.
+
 ## Open questions (01 §5)
 
 - Verify that Argent surfaces Compose `testTag` values as resource ids when `testTagsAsResourceId` is
-  set; if not, fall back to Views ids for the pilot.
-- Confirm whether SwiftUI containers with `.accessibilityElement(children: .contain)` remain hittable
-  for Argent's tap and do not swallow child taps.
+  set; if not, fall back to Views ids for the pilot. Compose produces a resource-id on a semantics
+  node rather than a container, so the iOS container problem above does not obviously apply — but
+  nobody has checked it against a real Argent Android capture.
 - Decide whether fixtures live in the app target or a debug-only module; prefer a debug module to keep
   production binary size flat.

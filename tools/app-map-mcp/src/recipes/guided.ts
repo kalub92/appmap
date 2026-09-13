@@ -9,9 +9,14 @@
  *  3. `opts.probe(config, app_id)` (07 §3): `build_type !== 'debug'` or `sandbox !== true` or
  *     probe `null` (endpoint absent = Release) → `release_build_refused`. A successful probe is
  *     cached with `ctx.setProbe(probe)` so identification can evaluate variants
- *     (`probeConditions`, 02 §4.3). Tests inject a fake probe; the default probe runs
- *     `xcrun simctl spawn <udid|booted> defaults read <app_id> app_map_debug_probe` (iOS) /
- *     `adb shell run-as <app_id> cat files/app_map_debug_probe.json` (Android, best-effort);
+ *     (`probeConditions`, 02 §4.3). Tests inject a fake probe; the default probe tries, in order
+ *     (iOS): `xcrun simctl spawn <udid|booted> defaults export <app_id> - | plutil -convert json
+ *     -o - -`, then — because iOS 26's `defaults` no longer resolves a sandboxed app's domain
+ *     through `cfprefsd` and prints `{}` — the same record straight out of the app's data
+ *     container (`simctl get_app_container … data` + `plutil -convert xml1`, read by
+ *     `parseXmlPlist` so a `Data` value elsewhere in the domain cannot hide the probe);
+ *     Android (best-effort): `adb shell run-as <app_id> cat files/app_map_debug_probe.json`.
+ *     Every strategy reads the app's OWN record, so a Release build still comes back `null`;
  *  4. session: `input.session` ?? the newest observation's session; none → `no_observation`
  *     (a run needs a session to verify against, 03 §2 — many instances share the cache);
  *     `start_seq = last_seq = db.getSession(session)?.last_seq ?? 0`;
@@ -66,7 +71,7 @@ import type {
   HealCandidate, HealInput, HealSummary, LoadedMap, Locator, Observation, RecipeFile, RecipeParams, RecipeStep,
   ReportStepInput, ReportStepResult, RunRecipeResult, RunRecord, RunStep, ScreenId, SessionId, StepId,
 } from '../types.ts';
-import { GUIDED_LIMITS, UNKNOWN_SCREEN, now, probeConditions, routeKey } from '../types.ts';
+import { GUIDED_LIMITS, UNKNOWN_SCREEN, now, probeConditions, routeKey, selectTarget } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { identify } from '../identify.ts';
 import { resolve as resolveElement } from '../resolve.ts';
@@ -119,14 +124,17 @@ function sessionMap(ctx: AppMapContext): LoadedMap {
   });
 }
 
-/** the element a step acts on (`element`, or `list` for `select`, or the gate's dismiss control) */
+/**
+ * the element a step acts on (`element`; the `list` or repeated `cell` of a `select` — both forms,
+ * issue #19; or the gate's dismiss control)
+ */
 function stepElement(map: LoadedMap, step: RecipeStep): ElementId | undefined {
   switch (step.action) {
     case 'tap':
     case 'type':
       return step.element;
     case 'select':
-      return step.list;
+      return selectTarget(step);
     case 'swipe':
       return step.element;
     case 'dismiss_gate':
@@ -175,20 +183,238 @@ function targetForLocator(locator: Locator): RunStep['target'] | undefined {
 
 const execFileAsync = promisify(execFile);
 
-/** best-effort parse of whatever the probe command printed */
-function parseProbe(text: string, key: string): BuildProbeResult | null {
-  let value: unknown;
+/** The UserDefaults key (iOS) / file stem (Android) the instrumentation publishes the probe under (07 §3). */
+export const BUILD_PROBE_KEY = 'app_map_debug_probe';
+
+/** How a strategy encodes what it prints: a JSON object, or an XML property list (`plutil -convert xml1`). */
+export type ProbeFormat = 'json' | 'xml1';
+
+/** One way to read the probe: a `/bin/sh -c` command line plus the encoding of its stdout. */
+export interface ProbeStrategy {
+  readonly command: string;
+  readonly format: ProbeFormat;
+}
+
+/** Runs one `/bin/sh -c` command and resolves its stdout; rejects when the command fails. */
+export type ProbeExec = (command: string) => Promise<string>;
+
+/** POSIX single-quoting for a value interpolated into a `/bin/sh -c` string (07 §4: no shell injection). */
+function shQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * The ordered list of shell commands that can produce the app's 07 §3 probe record.
+ *
+ * iOS has two, tried in order:
+ *  1. `defaults export` through `cfprefsd` — the historical read, still correct on older runtimes;
+ *  2. the same record read straight out of the app's data container. On iOS 26 simulators
+ *     `defaults` no longer resolves a sandboxed app's domain, so (1) prints `{}` for a Debug build
+ *     that published the probe correctly and every recipe was refused as a Release build (#11).
+ *
+ * (2) converts to `xml1`, not `json`: `plutil -convert json` — and `plutil -extract … json`, which
+ * validates the whole file first — refuses a domain holding ANY `Data` value, and one ordinary
+ * `JSONEncoder` blob saved by the app is enough to break the read halfway through a session.
+ * `xml1` is lossless, so it always prints, and `parseXmlPlist` drops `<data>` payloads instead of
+ * choking on them. `plutil` ships with macOS and strategy (1) already depends on it, so the
+ * fallback adds no new runtime dependency (07 §5); an interpreter such as `python3` would, and is
+ * not guaranteed to be present on a machine that only has Xcode.app.
+ *
+ * Both strategies read the app's OWN record, so a Release build — which has no debug endpoint and
+ * therefore publishes nothing — still yields no record and `assertDebugSandbox` refuses (07 §3).
+ */
+export function buildProbeStrategies(config: AppMapConfig, appId: string, key: string): ProbeStrategy[] {
+  if (config.platform !== 'ios') {
+    // Android: the debug-only file the instrumentation writes, already JSON.
+    const target = config.simUdid !== undefined ? `-s ${shQuote(config.simUdid)} ` : '';
+    return [{ command: `adb ${target}shell run-as ${shQuote(appId)} cat files/${key}.json`, format: 'json' }];
+  }
+  const udid = shQuote(config.simUdid ?? 'booted');
+  // 07 §4: `"$( … )"` keeps a container path containing spaces a single word, and the trailing
+  // segment is a SEPARATE single-quoted word concatenated onto it (adjacent quoted words are still
+  // one argument), so `appId` never lands inside those double quotes — where `$( )` or a backtick
+  // in a bundle id would be executed. `-o -` is mandatory: `plutil -convert` without it rewrites
+  // the app's own preferences file in place.
+  const containerPlist =
+    `"$(xcrun simctl get_app_container ${udid} ${shQuote(appId)} data)"/Library/Preferences/${shQuote(`${appId}.plist`)}`;
+  return [
+    { command: `xcrun simctl spawn ${udid} defaults export ${shQuote(appId)} - | plutil -convert json -o - -`, format: 'json' },
+    { command: `plutil -convert xml1 -o - ${containerPlist}`, format: 'xml1' },
+  ];
+}
+
+/** What an XML property list can hold once `<data>` payloads are dropped (see `parseXmlPlist`). */
+type PlistValue = string | number | boolean | null | PlistValue[] | { [key: string]: PlistValue };
+
+const XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+const MAX_CODE_POINT = 0x10ffff;
+
+/** `&amp;`-style entities; an out-of-range numeric one is left alone (`String.fromCodePoint` throws). */
+function decodeXmlText(text: string): string {
+  return text.replace(/&(#[Xx]?[0-9A-Fa-f]+|[A-Za-z]+);/g, (whole: string, body: string): string => {
+    if (body.startsWith('#')) {
+      const hex = body[1] === 'x' || body[1] === 'X';
+      const code = Number.parseInt(hex ? body.slice(2) : body.slice(1), hex ? 16 : 10);
+      if (!Number.isInteger(code) || code < 0 || code > MAX_CODE_POINT) return whole;
+      return String.fromCodePoint(code);
+    }
+    return XML_ENTITIES[body] ?? whole;
+  });
+}
+
+/** one `<tag …>`, `</tag>` or `<tag/>` found by the scanner; `end` is the index just past `>` */
+interface XmlTag {
+  name: string;
+  closing: boolean;
+  selfClosing: boolean;
+  end: number;
+}
+
+/**
+ * Minimal XML property-list reader — enough for a UserDefaults domain as `plutil -convert xml1`
+ * prints it, with no XML dependency (07 §5). `<data>` becomes `null`: the 07 §3 record is never
+ * binary, and dropping the payload is exactly what lets a domain that `plutil -convert json`
+ * refuses still give up the probe (#11). Malformed input returns `null` rather than throwing, so
+ * a half-written plist or a `plutil` error printed on stdout just makes the strategy fall through.
+ */
+export function parseXmlPlist(xml: string): unknown {
+  const text = xml
+    .replace(/<\?[\s\S]*?\?>/g, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<!DOCTYPE[^>]*>/g, '');
+  const tags = /<(\/?)([A-Za-z][A-Za-z0-9]*)\b[^>]*?(\/?)>/g;
+  // One cursor for the whole parse, kept here rather than in `tags.lastIndex`: `exec` RESETS
+  // `lastIndex` to 0 when it finds nothing, which would restart the scan and never terminate.
+  let cursor = 0;
+  let exhausted = false;
+  const scan = (): RegExpExecArray | null => {
+    if (exhausted) return null;
+    tags.lastIndex = cursor;
+    const m = tags.exec(text);
+    if (m === null) { exhausted = true; return null; }
+    cursor = tags.lastIndex;
+    return m;
+  };
+
+  const nextTag = (): XmlTag | null => {
+    const m = scan();
+    if (m === null) return null;
+    return { name: m[2] ?? '', closing: m[1] === '/', selfClosing: m[3] === '/', end: cursor };
+  };
+  /** the raw text of a leaf element, cursor left past its close tag; `null` when it is not closed as expected */
+  const contentOf = (open: XmlTag): string | null => {
+    const m = scan();
+    if (m === null || m[1] !== '/' || m[2] !== open.name) return null;
+    return text.slice(open.end, m.index);
+  };
+  /** consume an element we do not model, nesting included */
+  const skipElement = (): void => {
+    for (let depth = 1; depth > 0;) {
+      const t = nextTag();
+      if (t === null) return;
+      if (t.selfClosing) continue;
+      depth += t.closing ? -1 : 1;
+    }
+  };
+  const parseValue = (open: XmlTag): PlistValue => {
+    if (open.selfClosing) {
+      switch (open.name) {
+        case 'true': return true;
+        case 'false': return false;
+        case 'array': return [];
+        case 'dict': return {};
+        case 'string': return '';
+        default: return null;
+      }
+    }
+    switch (open.name) {
+      case 'dict': return parseDict();
+      case 'array': return parseArray();
+      case 'true': skipElement(); return true;
+      case 'false': skipElement(); return false;
+      case 'string':
+      case 'date': {
+        const raw = contentOf(open);
+        return raw === null ? null : decodeXmlText(raw);
+      }
+      case 'integer':
+      case 'real': {
+        const raw = contentOf(open);
+        if (raw === null) return null;
+        const n = Number(raw.trim());
+        return Number.isFinite(n) ? n : null;
+      }
+      case 'data':
+        // the payload is consumed and dropped — see the header doc
+        contentOf(open);
+        return null;
+      default:
+        skipElement();
+        return null;
+    }
+  };
+  const parseDict = (): PlistValue => {
+    const out: { [key: string]: PlistValue } = {};
+    for (;;) {
+      const t = nextTag();
+      if (t === null || t.closing) return out; // `</dict>`, or truncated input: keep what we have
+      if (t.name !== 'key') { parseValue(t); continue; } // a value with no key: skip it
+      const name = t.selfClosing ? '' : decodeXmlText(contentOf(t) ?? '');
+      const value = nextTag();
+      if (value === null || value.closing) return out;
+      out[name] = parseValue(value);
+    }
+  };
+  const parseArray = (): PlistValue[] => {
+    const out: PlistValue[] = [];
+    for (;;) {
+      const t = nextTag();
+      if (t === null || t.closing) return out;
+      out.push(parseValue(t));
+    }
+  };
+
   try {
-    value = JSON.parse(text);
+    for (;;) {
+      const t = nextTag();
+      if (t === null) return null;
+      if (t.closing) continue;
+      if (t.name === 'plist') {
+        if (t.selfClosing) return null;
+        continue;
+      }
+      return parseValue(t);
+    }
   } catch {
+    // deliberately total: a parse failure means "this strategy found nothing", never a crash
     return null;
   }
-  // `defaults export … | plutil -convert json` prints the whole domain; the record lives under `key`
-  if (typeof value === 'object' && value !== null && key in (value as Record<string, unknown>)) {
-    value = (value as Record<string, unknown>)[key];
+}
+
+/**
+ * Pure: turn one strategy's stdout into a probe record (07 §3). Both shapes parse — the whole
+ * exported domain (what `defaults export` and `plutil -convert xml1` print, with the record under
+ * `key`) and a bare record — so a strategy may print either.
+ */
+export function parseProbeOutput(text: string, key: string, format: ProbeFormat): BuildProbeResult | null {
+  if (format === 'json') {
+    try {
+      return probeFromValue(JSON.parse(text), key);
+    } catch {
+      return null;
+    }
   }
-  if (typeof value !== 'object' || value === null) return null;
-  const record = value as Record<string, unknown>;
+  return probeFromValue(parseXmlPlist(text), key);
+}
+
+/** the domain-or-record unwrap plus field coercion shared by every strategy */
+function probeFromValue(value: unknown, key: string): BuildProbeResult | null {
+  let found: unknown = value;
+  if (typeof found === 'object' && found !== null && key in (found as Record<string, unknown>)) {
+    found = (found as Record<string, unknown>)[key];
+  }
+  if (typeof found !== 'object' || found === null) return null;
+  const record = found as Record<string, unknown>;
   if (typeof record.build_type !== 'string') return null;
   return {
     schema_version: 1,
@@ -205,24 +431,38 @@ function parseProbe(text: string, key: string): BuildProbeResult | null {
   };
 }
 
-/** Default probe: shells out to `xcrun simctl` / `adb` (best-effort; see module doc). */
+/**
+ * Try each strategy in order and return the first probe record one of them produces.
+ *
+ * A strategy that fails (no toolchain, no container, a `plutil` that refuses the file) or that
+ * comes back without a record (iOS 26's empty `defaults export` domain, #11) is not an answer yet
+ * — the next one is tried. 07 §3: when no strategy finds a record, that absence IS the answer,
+ * because the debug endpoint does not exist in Release builds; `assertDebugSandbox(null)` refuses.
+ */
+export async function readBuildProbe(
+  strategies: readonly ProbeStrategy[],
+  key: string,
+  exec: ProbeExec,
+): Promise<BuildProbeResult | null> {
+  for (const strategy of strategies) {
+    let stdout: string;
+    try {
+      stdout = await exec(strategy.command);
+    } catch {
+      continue;
+    }
+    const probe = parseProbeOutput(stdout, key, strategy.format);
+    if (probe !== null) return probe;
+  }
+  return null;
+}
+
+/** Default probe: shells out to `xcrun simctl` / `adb` (best-effort; see `buildProbeStrategies`). */
 export const defaultBuildProbe: BuildInfoProbe = async (config, appId) => {
   if (typeof appId !== 'string' || appId === '') return null;
-  const key = 'app_map_debug_probe';
-  const quoted = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
-  // iOS: the UserDefaults record (architecture §7 decision 20); `defaults export` + `plutil` turns
-  // the old-style plist `defaults read` prints into JSON without a plist parser here.
-  // Android: the debug-only file the instrumentation writes, already JSON.
-  const command = config.platform === 'ios'
-    ? `xcrun simctl spawn ${quoted(config.simUdid ?? 'booted')} defaults export ${quoted(appId)} - | plutil -convert json -o - -`
-    : `adb ${config.simUdid !== undefined ? `-s ${quoted(config.simUdid)} ` : ''}shell run-as ${quoted(appId)} cat files/${key}.json`;
-  try {
-    const { stdout } = await execFileAsync('/bin/sh', ['-c', command], { timeout: 5000, maxBuffer: 1024 * 1024 });
-    return parseProbe(stdout, key);
-  } catch {
-    // 07 §3: the endpoint does not exist in Release builds — an error IS the answer
-    return null;
-  }
+  const exec: ProbeExec = async (command) =>
+    (await execFileAsync('/bin/sh', ['-c', command], { timeout: 5000, maxBuffer: 1024 * 1024 })).stdout;
+  return readBuildProbe(buildProbeStrategies(config, appId, BUILD_PROBE_KEY), BUILD_PROBE_KEY, exec);
 };
 
 /** Throws `release_build_refused` unless `probe` is a sandbox Debug build. Pure. */
@@ -264,7 +504,18 @@ function deepLinkOfScreen(map: LoadedMap, screen: ScreenId): string | undefined 
   return typeof link === 'string' && link !== '' && link !== 'none' ? link : undefined;
 }
 
-/** an entry edge (02 §4.2 action) as a recipe step; `type`/`select` edges degrade to a tap */
+/**
+ * an entry edge (02 §4.2 action) as a recipe step; `type`/`select` edges degrade to a tap. A
+ * `select` edge carries no match text — 02 §4.2 records the element, never the row that was
+ * picked — so neither `select` form can be rebuilt from one (issue #19); the tap on the cell id
+ * lands on whichever row is first, which is all an entry approximation can promise.
+ *
+ * `undefined` means "this edge cannot be expressed as a step" and the caller drops the leg. A
+ * swipe edge with no `direction` is one of those: screen.schema.json REQUIRES `direction` on a
+ * swipe edge, so only an unvalidated map can produce one, and substituting `up` would swipe the
+ * wrong way through someone's entry path while looking like a plan that worked (same reasoning as
+ * `compile.swipeDirection` — a direction is never invented, 04 §3.3).
+ */
 function edgeStepFor(id: StepId, action: { type: string; element?: ElementId; url?: string; gate?: GateId; direction?: 'up' | 'down' | 'left' | 'right' }, to: ScreenId): RecipeStep | undefined {
   const expect: Expect = { screen: to };
   switch (action.type) {
@@ -273,7 +524,7 @@ function edgeStepFor(id: StepId, action: { type: string; element?: ElementId; ur
     case 'dismiss_gate':
       return action.gate === undefined ? undefined : { id, action: 'dismiss_gate', gate: action.gate, expect };
     case 'swipe':
-      return { id, action: 'swipe', direction: action.direction ?? 'up', ...(action.element !== undefined ? { element: action.element } : {}), expect };
+      return action.direction === undefined ? undefined : { id, action: 'swipe', direction: action.direction, ...(action.element !== undefined ? { element: action.element } : {}), expect };
     default:
       // tap, and the navigation-by-typing edges a guided entry can only approximate
       return action.element === undefined ? undefined : { id, action: 'tap', element: action.element, expect };
@@ -392,6 +643,14 @@ export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams
       }
     }
   }
+  // 04 §3.3 `select {cell, match}`: every row carries the SAME registered id (01 R4), so the
+  // `{by: 'id'}` target resolved above cannot say WHICH row this step means — it only proves the
+  // row id is on screen. The match text can, and it is exactly what the Maestro export taps
+  // (04 §6.2). `resolved` deliberately keeps the a11y_id evidence while `target` addresses the
+  // one row; the two disagreeing is the point, not a bug (issue #19).
+  if (step.action === 'select' && 'cell' in step && out.match_text !== undefined && out.match_text !== '') {
+    out.target = { by: 'text', text: out.match_text };
+  }
   return out;
 }
 
@@ -469,7 +728,7 @@ function missingParams(recipe: RecipeFile, params: RecipeParams): string[] {
     .map((p) => p.name);
 }
 
-/** the recipe as the session knows it (cache first: `mark_recipe` and lifecycle land there) */
+/** the recipe as the session knows it (cache first: `mark` and lifecycle land there) */
 function recipeOf(ctx: AppMapContext, id: string): RecipeFile | undefined {
   return ctx.db.getRecipe(id) ?? ctx.map.recipes.get(id);
 }

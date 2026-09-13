@@ -1,21 +1,47 @@
-/** [B1] tree.ts — normalization of the three input shapes, queries, paths (02 §5.1), bbox. */
+/** [B1] tree.ts — normalization of the four input shapes, queries, paths (02 §5.1), bbox. */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { parse as parseYaml } from 'yaml';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
+import { structuralHash } from '../signature.ts';
 import {
   MAX_TREE_DEPTH,
-  allNodes, centerOf, compactJson, countNodes, detectTreeShape, extractSnapshot, findByA11yId, findMarkerNodes,
-  fromArgentSnapshot, fromMaestroHierarchy, isNormalizedTree, labelOf, nodeAtPath, nodesWithRole, normalizeTree,
-  parentOf, pathOf, rolePath, screenRoot, siblingIndex, walk,
+  allNodes, centerOf, compactJson, countNodes, dedupeArgentElements, deepestMarker, detectTreeShape, extractSnapshot,
+  findByA11yId,
+  findMarkerNodes, fromArgentScreen, fromMaestroHierarchy, fromXcuiSnapshot, isNormalizedTree, labelOf, nodeAtPath,
+  nodesWithRole, normalizeTree, parentOf, pathOf, rolePath, screenRoot, siblingIndex, walk,
 } from '../tree.ts';
-import type { ScreenFile, Tree, TreeNode } from '../types.ts';
-import { PILOT_APP_MAP_DIR, PILOT_SCREEN_TREES, cloneTree, loadFixtureTree, loadHookFixture, readJsonFixture } from './helpers.ts';
+import type { Role, ScreenFile, Tree, TreeNode } from '../types.ts';
+import {
+  PILOT_APP_MAP_DIR, PILOT_SCREEN_TREES, cloneTree, doubledMarkerMaestroFixture, doubledMarkerXcuiFixture,
+  loadFixtureTree, loadHookFixture, readJsonFixture,
+} from './helpers.ts';
 
-const argentRaw = (): unknown => readJsonFixture('raw/argent-snapshot.invoice_list.json');
+const xcuiRaw = (): unknown => readJsonFixture('raw/xcuitest-snapshot.invoice_list.json');
 const maestroRaw = (): unknown => readJsonFixture('raw/maestro-hierarchy.invoice_list.json');
+/** a real `argent run native-describe-screen --json` capture (issue #10) */
+const argentRaw = (screen: string): unknown => readJsonFixture(`raw/argent-native-describe-screen.${screen}.json`);
+
+/**
+ * `roleHintsFor(map)` for the reference integration's registry, inlined: the swapi map is not a
+ * fixture of this package, and the hint is plain data by design (types.ts `roleHintsFor`).
+ */
+const SWAPI_HINTS: ReadonlyMap<string, Role> = new Map<string, Role>([
+  ['people.search.field', 'field'], ['people.list.cell', 'cell'], ['people.count.text', 'staticText'],
+  ['people.sort.button', 'button'], ['films.list.cell', 'cell'],
+  ['nav.people.tab', 'tab'], ['nav.films.tab', 'tab'], ['nav.favorites.tab', 'tab'],
+]);
+/** the pilot registry's kinds, for the fixtures that use pilot ids */
+const PILOT_HINTS: ReadonlyMap<string, Role> = new Map<string, Role>([
+  ['invoice.filter.button', 'button'], ['invoice.add.button', 'button'], ['invoice.list.cell', 'cell'],
+  ['invoice.detail.back.button', 'button'], ['invoice.detail.edit.button', 'button'],
+  ['invoice.detail.amount.text', 'staticText'], ['invoice.detail.client.text', 'staticText'],
+  ['invoice.detail.status.text', 'staticText'], ['invoice.detail.item.cell', 'cell'],
+  ['invoice.detail.send.button', 'button'],
+  ['nav.invoices.tab', 'tab'], ['nav.clients.tab', 'tab'], ['nav.settings.tab', 'tab'],
+]);
 
 /** the comparable shape of a tree: role, id, label, bbox and flags per node in pre-order */
 function projection(t: Tree): string[] {
@@ -27,25 +53,36 @@ function loadScreenFile(id: string): ScreenFile {
 }
 
 describe('detectTreeShape', () => {
-  it('recognizes the three shapes and rejects the rest', () => {
+  it('recognizes the four shapes and rejects the rest', () => {
     assert.equal(detectTreeShape(loadFixtureTree('invoice_list')), 'normalized');
-    assert.equal(detectTreeShape(argentRaw()), 'argent');
-    assert.equal(detectTreeShape((argentRaw() as { root: unknown }).root), 'argent', 'bare Argent node');
+    assert.equal(detectTreeShape(xcuiRaw()), 'xcuitest');
+    assert.equal(detectTreeShape((xcuiRaw() as { root: unknown }).root), 'xcuitest', 'bare XCUITest node');
+    assert.equal(detectTreeShape(argentRaw('people_list')), 'argent');
     assert.equal(detectTreeShape(maestroRaw()), 'maestro');
     assert.equal(detectTreeShape((maestroRaw() as { elements: unknown[] }).elements[0]), 'maestro', 'bare maestro node');
     for (const bad of [null, undefined, 42, 'text', [], {}, { root: {} }, { elements: [] }, { elements: [{}] }]) {
       assert.equal(detectTreeShape(bad), 'unknown', JSON.stringify(bad));
     }
   });
+
+  it('never confuses the flat Argent shape with maestro, nor `argent run describe` with either (issue #10)', () => {
+    // maestro ALSO keys on `elements`; its nodes carry `attributes`, which is the guard
+    const maestroish = { screenFrame: { width: 402, height: 874 }, elements: [{ attributes: { class: 'android.view.View', bounds: '[0,0][10,10]' }, children: [] }] };
+    assert.equal(detectTreeShape(maestroish), 'maestro');
+    // `argent run describe` answers with a human-readable text rendering, not JSON
+    assert.equal(detectTreeShape({ description: 'Application\n  Button "Sort"', source: 'ax' }), 'unknown');
+    // an element list without a viewport is not a capture
+    assert.equal(detectTreeShape({ elements: [{ frame: { x: 0, y: 0, width: 1, height: 1 } }] }), 'unknown');
+  });
 });
 
 describe('normalizeTree', () => {
-  it('normalizes the Argent snapshot, the maestro hierarchy and the normalized file to the same shape', () => {
+  it('normalizes the XCUITest snapshot, the maestro hierarchy and the normalized file to the same shape', () => {
     const expected = loadFixtureTree('invoice_list');
-    const fromArgent = normalizeTree(argentRaw(), { platform: 'ios' });
+    const fromArgent = normalizeTree(xcuiRaw(), { platform: 'ios' });
     const fromMaestro = normalizeTree(maestroRaw(), { platform: 'android' });
     const fromNormalized = normalizeTree(expected, { platform: 'ios' });
-    assert.equal(fromArgent.source, 'argent');
+    assert.equal(fromArgent.source, 'xcuitest');
     assert.equal(fromMaestro.source, 'maestro');
     assert.equal(fromNormalized.source, 'normalized');
     assert.deepEqual(projection(fromArgent), projection(expected));
@@ -58,7 +95,7 @@ describe('normalizeTree', () => {
 
   it('keeps every bbox within 0.01 of the reference (architecture.md B1)', () => {
     const expected = allNodes(loadFixtureTree('invoice_list'));
-    for (const t of [normalizeTree(argentRaw(), { platform: 'ios' }), normalizeTree(maestroRaw(), { platform: 'android' })]) {
+    for (const t of [normalizeTree(xcuiRaw(), { platform: 'ios' }), normalizeTree(maestroRaw(), { platform: 'android' })]) {
       const got = allNodes(t);
       assert.equal(got.length, expected.length);
       got.forEach((n, i) => {
@@ -73,11 +110,11 @@ describe('normalizeTree', () => {
     const t = normalizeTree(input, { platform: 'ios', source: 'synthetic' });
     assert.equal(t.source, 'synthetic');
     assert.equal(JSON.stringify(input), before);
-    assert.equal(normalizeTree(argentRaw(), { platform: 'ios', source: 'synthetic' }).source, 'synthetic');
+    assert.equal(normalizeTree(xcuiRaw(), { platform: 'ios', source: 'synthetic' }).source, 'synthetic');
   });
 
   it('accepts a JSON string and rejects garbage with bad_input + hint', () => {
-    const t = normalizeTree(JSON.stringify(argentRaw()), { platform: 'ios' });
+    const t = normalizeTree(JSON.stringify(xcuiRaw()), { platform: 'ios' });
     assert.equal(t.root.role, 'application');
     for (const bad of ['{not json', { hello: 'world' }, 42, null]) {
       assert.throws(() => normalizeTree(bad, { platform: 'ios' }), (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT && e.hint.length > 0);
@@ -98,9 +135,9 @@ describe('normalizeTree', () => {
   });
 });
 
-describe('fromArgentSnapshot', () => {
+describe('fromXcuiSnapshot', () => {
   it('maps the wrapper: build_number → build, bundle_id → app_id, udid dropped (07 §2.2)', () => {
-    const t = fromArgentSnapshot(argentRaw(), 'ios');
+    const t = fromXcuiSnapshot(xcuiRaw(), 'ios');
     assert.equal(t.build, '4412');
     assert.equal(t.app_id, 'com.example.app');
     assert.ok(!JSON.stringify(t).includes('00000000-0000'), 'udid must not survive');
@@ -114,7 +151,7 @@ describe('fromArgentSnapshot', () => {
       type: 'Application', frame: { x: 0, y: 0, width: 200, height: 400 },
       children: [{ type: 'TextField', identifier: 'x.y.field', label: 'Email', value: 'a@b.co', hasFocus: true, enabled: false, frame: { x: 10, y: 20, width: 100, height: 40 }, children: [] }],
     };
-    const t = fromArgentSnapshot(raw, 'ios');
+    const t = fromXcuiSnapshot(raw, 'ios');
     assert.deepEqual(t.viewport, { w: 200, h: 400 });
     const f = t.root.children[0]!;
     assert.equal(f.role, 'field');
@@ -123,8 +160,8 @@ describe('fromArgentSnapshot', () => {
     assert.equal(f.focused, true);
     assert.equal(f.enabled, false);
     assert.deepEqual(f.bbox_norm, { x: 0.05, y: 0.05, w: 0.5, h: 0.1 });
-    assert.equal(fromArgentSnapshot({ root: raw, build_number: 4413 }, 'ios').build, '4413');
-    assert.throws(() => fromArgentSnapshot({ root: { label: 'no type' } }, 'ios'), (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT);
+    assert.equal(fromXcuiSnapshot({ root: raw, build_number: 4413 }, 'ios').build, '4413');
+    assert.throws(() => fromXcuiSnapshot({ root: { label: 'no type' } }, 'ios'), (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT);
   });
 
   it('derives roles: Button under TabBar → tab, StaticText in Cell stays, unknown type → other, empty identifier → absent', () => {
@@ -136,7 +173,7 @@ describe('fromArgentSnapshot', () => {
         { type: 'Slider', frame: { x: 0, y: 0, width: 10, height: 10 }, children: [] },
       ],
     };
-    const t = fromArgentSnapshot(raw, 'ios');
+    const t = fromXcuiSnapshot(raw, 'ios');
     const [tabBar, cell, slider] = t.root.children;
     assert.equal(tabBar!.role, 'tabBar');
     assert.equal(tabBar!.children[0]!.role, 'tab');
@@ -154,13 +191,360 @@ describe('fromArgentSnapshot', () => {
       ] },
       screen: { width: 390, height: 844 },
     };
-    const t = fromArgentSnapshot(raw, 'ios');
+    const t = fromXcuiSnapshot(raw, 'ios');
     assert.deepEqual(t.root.children[0]!.bbox_norm, { x: 0, y: 0.9479, w: 1, h: 0.1185 });
     assert.deepEqual(t.root.children[1]!.bbox_norm, { x: 0.0026, y: 0.0012, w: 0.0026, h: 0.0012 });
-    const zero = fromArgentSnapshot({ type: 'Application', frame: { x: 0, y: 0, width: 0, height: 0 }, children: [] }, 'ios');
+    const zero = fromXcuiSnapshot({ type: 'Application', frame: { x: 0, y: 0, width: 0, height: 0 }, children: [] }, 'ios');
     assert.deepEqual(zero.root.bbox_norm, { x: 0, y: 0, w: 0, h: 0 });
     assert.equal(zero.viewport, undefined);
     assert.ok(isNormalizedTree(t) && isNormalizedTree(zero));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The real Argent flat capture (03 §5 input, issue #10)
+// ---------------------------------------------------------------------------------------------
+
+describe('fromArgentScreen — real @swmansion/argent@0.25.0 output (03 §5, issue #10)', () => {
+  it('normalizes the flat element list: roles from traits/viewClassName, viewport from screenFrame', () => {
+    const t = fromArgentScreen(argentRaw('people_list'), 'ios');
+    assert.equal(t.source, 'argent');
+    assert.equal(t.platform, 'ios');
+    assert.deepEqual(t.viewport, { w: 402, h: 874 }, 'the viewport is `screenFrame`');
+    assert.ok(isNormalizedTree(t));
+    // two levels and no more: application > window > [marker subtree, tabBar?]
+    assert.equal(t.root.role, 'application');
+    assert.deepEqual(t.root.bbox_norm, { x: 0, y: 0, w: 1, h: 1 });
+    const window = t.root.children[0]!;
+    assert.equal(window.role, 'window');
+    assert.equal(window.children.length, 1, 'people_list has no tab bar');
+    // roles come from viewClassName first, traits second
+    assert.equal(findByA11yId(t, 'people.search.field')[0]!.role, 'field', 'UITextField');
+    assert.equal(findByA11yId(t, 'people.count.text')[0]!.role, 'staticText', 'UILabel');
+    assert.equal(findByA11yId(t, 'people.sort.button')[0]!.role, 'button', '_UIButtonBarButton');
+    const title = nodesWithRole(t, 'staticText').find((n) => n.label === 'Characters')!;
+    assert.equal(title.a11y_id, undefined, 'an unregistered nav label keeps no id');
+    // the driver's `value` lands on the node; `traits: []` adds nothing
+    assert.equal(findByA11yId(t, 'people.search.field')[0]!.value, 'Search characters');
+    // `build`/`app_id` are NOT invented: the flat capture reports neither (03 §3)
+    assert.equal(t.build, undefined);
+    assert.equal(t.app_id, undefined);
+  });
+
+  it('reproduces the reference map learned from a real capture: roles, paths, sibling_index, bbox_norm (issue #10)', () => {
+    const t = normalizeTree(argentRaw('people_list'), { platform: 'ios', roleHints: SWAPI_HINTS });
+    // the marker IS the screen container and owns the whole viewport (its 1pt overlay frame,
+    // issue #15, is discarded)
+    const root = screenRoot(t);
+    assert.equal(root.a11y_id, 'screen.people_list');
+    assert.equal(root.role, 'container');
+    assert.deepEqual(root.bbox_norm, { x: 0, y: 0, w: 1, h: 1 });
+    // every value below is copied from swapi-explorer app-map/ios/screens/people_list.yaml
+    const expected = [
+      { id: 'people.search.field', role: 'field', path: 'field', sibling: 0, bbox: { x: 0.1401, y: 0.2025, w: 0.7902, h: 0.0252 }, centre: { x: 0.5352, y: 0.2151 } },
+      { id: 'people.list.cell', role: 'cell', path: 'cell[0]', sibling: 1, bbox: { x: 0.0398, y: 0.2933, w: 0.9204, h: 0.0763 }, centre: { x: 0.5, y: 0.3315 } },
+      { id: 'people.count.text', role: 'staticText', path: 'staticText[0]', sibling: 11, bbox: { x: 0.0398, y: 0.2471, w: 0.9204, h: 0.0461 }, centre: { x: 0.5, y: 0.2702 } },
+      { id: 'people.sort.button', role: 'button', path: 'button', sibling: 12, bbox: { x: 0.8607, y: 0.0755, w: 0.0896, h: 0.0412 }, centre: { x: 0.9055, y: 0.0961 } },
+    ] as const;
+    for (const e of expected) {
+      const n = findByA11yId(t, e.id)[0]!;
+      assert.ok(n, e.id);
+      assert.equal(n.role, e.role, `${e.id} role`);
+      assert.equal(pathOf(t, n), e.path, `${e.id} path`);
+      assert.equal(nodeAtPath(t, e.path), n, `${e.id} nodeAtPath`);
+      assert.equal(siblingIndex(t, n), e.sibling, `${e.id} sibling_index`);
+      assert.equal(parentOf(t, n)!.role, 'container', `${e.id} parent_role`);
+      assert.deepEqual(n.bbox_norm, e.bbox, `${e.id} bbox_norm`);
+      assert.deepEqual(centerOf(n), e.centre, `${e.id} geometry locator`);
+    }
+    assert.equal(findByA11yId(t, 'people.list.cell').length, 10);
+    // the hint is a net, not a crutch: every role above is also reachable from
+    // `viewClassName`/`traits` alone, so an unregistered id on these screens still types correctly
+    const unhinted = normalizeTree(argentRaw('people_list'), { platform: 'ios' });
+    assert.deepEqual(
+      allNodes(unhinted).map((n) => n.role),
+      allNodes(t).map((n) => n.role),
+      'no element of the reference map depends on the registry for its role',
+    );
+    assert.equal(
+      structuralHash(t, ['people.count.text', 'people.list.cell']),
+      'sha1:09acab35a2c649202fe3f1555d277651cf99fb50',
+      'people_list.yaml signature.structural_hash',
+    );
+  });
+
+  it('nests the tabBar INSIDE the screen container, last, so resolve\u2019s scope reaches the tabs (follow-up to #10)', () => {
+    const t = normalizeTree(argentRaw('invoice_list'), { platform: 'ios', roleHints: PILOT_HINTS });
+    const window = t.root.children[0]!;
+    // the bar used to be a SIBLING of the marker container here — the only tree shape that put
+    // it outside `screenRoot`, i.e. outside everything `resolve` searches (resolve.ts)
+    assert.equal(window.role, 'window');
+    assert.deepEqual(window.children.map((c) => c.role), ['container'], 'nothing sits beside the screen container');
+    const root = screenRoot(t);
+    assert.equal(root.a11y_id, 'screen.invoice_list');
+    assert.equal(nodesWithRole(root, 'tab').length, 3, 'the tabs are reachable from the screen root');
+    assert.equal(nodesWithRole(t, 'tab').length, 3, 'and nowhere else');
+
+    // rule 4: appended LAST, so rule 3's capture-order `sibling_index` for the body is untouched
+    const bar = root.children[root.children.length - 1]!;
+    assert.equal(bar.role, 'tabBar');
+    assert.equal(bar.a11y_id, undefined, 'the bar carries no id, so no fingerprint.sibling_index tracks it');
+    assert.deepEqual(
+      root.children.slice(0, -1).map((c) => `${siblingIndex(t, c)}:${c.role}:${c.a11y_id}`),
+      ['0:button:invoice.filter.button', '1:button:invoice.add.button', '2:cell:invoice.list.cell',
+        '3:cell:invoice.list.cell', '4:cell:invoice.list.cell'],
+      'every body element keeps the index the map learned',
+    );
+    assert.equal(siblingIndex(t, bar), 5);
+
+    // the learned `path` locators are unaffected: `tabBar/tab[i]` either way (via the lowest
+    // common ancestor before the move, directly from the screen root now)
+    assert.deepEqual(bar.children.map((c) => c.a11y_id), ['nav.invoices.tab', 'nav.clients.tab', 'nav.settings.tab']);
+    assert.deepEqual(bar.children.map((c) => pathOf(t, c)), ['tabBar/tab[0]', 'tabBar/tab[1]', 'tabBar/tab[2]']);
+    assert.deepEqual(bar.children.map((c) => siblingIndex(t, c)), [0, 1, 2]);
+    assert.deepEqual(bar.children.map((c) => parentOf(t, c)!.role), ['tabBar', 'tabBar', 'tabBar']);
+    for (const tab of bar.children) assert.equal(nodeAtPath(t, pathOf(t, tab)), tab);
+    assert.equal(pathOf(t, bar), 'tabBar');
+
+    // `structuralHash` hashes a SORTED MULTISET of `<role>\t<a11y_id>` with no parent/child
+    // information (signature.ts), so moving a subtree cannot move it — pinned to prove it
+    assert.equal(structuralHash(t, []), 'sha1:c4ae6dc478aef88a8f77c3af33c47190895e016b');
+    assert.equal(structuralHash(t, ['invoice.list.table']), 'sha1:c4ae6dc478aef88a8f77c3af33c47190895e016b');
+  });
+
+  it('uses normalizedFrame verbatim and only falls back to frame ÷ screenFrame', () => {
+    // the real capture disagrees with itself: 317.7 / 402 = 0.790299 → 0.7903, the driver says
+    // 0.7902, and the map learned the driver's number
+    const field = findByA11yId(normalizeTree(argentRaw('people_list'), { platform: 'ios' }), 'people.search.field')[0]!;
+    assert.equal(field.bbox_norm.w, 0.7902);
+    assert.equal(field.bbox_norm.x, 0.1401);
+    const recomputed = fromArgentScreen({
+      screenFrame: { x: 0, y: 0, width: 402, height: 874 },
+      elements: [{ frame: { x: 56.3, y: 177, width: 317.7, height: 22 }, identifier: 'a.b.field', viewClassName: 'UITextField', traits: [] }],
+    }, 'ios');
+    assert.deepEqual(findByA11yId(recomputed, 'a.b.field')[0]!.bbox_norm, { x: 0.14, y: 0.2025, w: 0.7903, h: 0.0252 });
+    // out-of-viewport rows clamp, but they are still distinct elements (the dedupe key is the
+    // UNCLAMPED normalized frame)
+    const below = fromArgentScreen({
+      screenFrame: { width: 100, height: 100 },
+      elements: [
+        { normalizedFrame: { x: 0, y: 1.02, width: 1, height: 0.1 }, identifier: 'x.list.cell', traits: [] },
+        { normalizedFrame: { x: 0, y: 1.14, width: 1, height: 0.1 }, identifier: 'x.list.cell', traits: [] },
+      ],
+    }, 'ios');
+    assert.equal(findByA11yId(below, 'x.list.cell').length, 2);
+    assert.deepEqual(findByA11yId(below, 'x.list.cell')[0]!.bbox_norm, { x: 0, y: 1, w: 1, h: 0.1 });
+  });
+
+  it('collapses the doubled tab bar to one element per (frame, label), keeping the identified twin', () => {
+    const raw = argentRaw('films_list') as { elements: Array<Record<string, unknown>> };
+    assert.equal(raw.elements.filter((e) => e['viewClassName'] === '_UITabButton').length, 6, 'the capture really does report six');
+    assert.equal(raw.elements.filter((e) => e['viewClassName'] === '_UITabButton' && e['identifier'] === undefined).length, 3);
+    const t = normalizeTree(raw, { platform: 'ios', roleHints: SWAPI_HINTS });
+    // the bar is the screen container's last child, not a sibling of it (follow-up to #10)
+    const root = screenRoot(t);
+    const bar = root.children[root.children.length - 1]!;
+    assert.equal(bar.role, 'tabBar');
+    assert.deepEqual(bar.bbox_norm, { x: 0, y: 0.9096, w: 1, h: 0.0904 });
+    assert.equal(bar.children.length, 3, 'three tabs, not six');
+    assert.deepEqual(bar.children.map((c) => c.a11y_id), ['nav.people.tab', 'nav.films.tab', 'nav.favorites.tab'], 'sorted by x, identified twin kept');
+    assert.deepEqual(bar.children.map((c) => pathOf(t, c)), ['tabBar/tab[0]', 'tabBar/tab[1]', 'tabBar/tab[2]']);
+    assert.deepEqual(bar.children.map((c) => siblingIndex(t, c)), [0, 1, 2]);
+    assert.deepEqual(centerOf(bar.children[1]!), { x: 0.5001, y: 0.9405 }, 'films_list.yaml geometry locator');
+    assert.equal(bar.children[1]!.selected, true, 'the `selected` trait, and only the positive');
+    assert.equal(bar.children[0]!.selected, undefined, 'Argent never reports the negative');
+    assert.equal(
+      structuralHash(t, ['films.list.cell']),
+      'sha1:f146624953c6f612abb0b886da783c60421173ff',
+      'films_list.yaml signature.structural_hash',
+    );
+  });
+
+  it('never collapses two markers that share a 1pt frame — the 1pt overlay makes that routine (issue #15)', () => {
+    // `AppMapKit.appMapScreen` now pins every marker as a 1pt element at its screen root's
+    // top-leading corner, so two roots flush with the top (a `fullScreenCover`, a `TabView`
+    // swap) report two markers with an IDENTICAL normalized frame, no label and no value.
+    // Collapsing them kept the first — the covered screen's, because it already carried an
+    // identifier — and `identify_screen` then answered the screen underneath.
+    const marker = (id: string): Record<string, unknown> => ({
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      normalizedFrame: { x: 0, y: 0, width: 0.0026, height: 0.0012 },
+      traits: [], identifier: id, viewClassName: 'SwiftUI.AccessibilityNode',
+    });
+    const elements = [
+      marker('screen.invoice_list'),
+      marker('screen.invoice_detail'),
+      { normalizedFrame: { x: 0.04, y: 0.12, width: 0.2, height: 0.04 }, traits: ['button'], identifier: 'invoice.detail.back.button', viewClassName: 'UIButton' },
+    ];
+    assert.deepEqual(
+      dedupeArgentElements(elements, 390, 844).map((e) => e['identifier']),
+      ['screen.invoice_list', 'screen.invoice_detail', 'invoice.detail.back.button'],
+      'two different identifiers are two elements a locator can tell apart (02 §5.1)',
+    );
+    const t = fromArgentScreen({ status: 'ok', screenFrame: { x: 0, y: 0, width: 390, height: 844 }, elements }, 'ios', { roleHints: PILOT_HINTS });
+    const { nodes, count } = findMarkerNodes(t);
+    assert.equal(count, 1, 'the covered marker is still dropped by the rebuild, not by the dedupe');
+    assert.equal(nodes[0]!.a11y_id, 'screen.invoice_detail', 'document order breaks the exact `y` tie: last wins');
+    assert.deepEqual(screenRoot(t).bbox_norm, { x: 0, y: 0, w: 1, h: 1 }, 'the 1pt overlay frame is replaced by the screen');
+
+    // the identified/unidentified rule is untouched: an unlabeled twin with no identifier still
+    // merges into the marker sharing its frame (the doubled tab bar, issue #10)
+    const withTwin = dedupeArgentElements([
+      ...elements,
+      { frame: { x: 0, y: 0, width: 1, height: 1 }, normalizedFrame: { x: 0, y: 0, width: 0.0026, height: 0.0012 }, traits: [], viewClassName: 'SwiftUI.AccessibilityNode' },
+    ], 390, 844);
+    assert.equal(withTwin.length, 3, 'the unidentified twin merges rather than becoming a fourth element');
+    assert.deepEqual(withTwin.map((e) => e['identifier']), ['screen.invoice_list', 'screen.invoice_detail', 'invoice.detail.back.button']);
+  });
+
+  it('keeps only the deepest marker — a pushed detail leaves the parent marker behind', () => {
+    const raw = argentRaw('invoice_detail') as { elements: Array<Record<string, unknown>> };
+    assert.equal(raw.elements.filter((e) => String(e['identifier'] ?? '').startsWith('screen.')).length, 2, 'the capture carries both');
+    const t = normalizeTree(raw, { platform: 'ios', roleHints: PILOT_HINTS });
+    const { nodes, count } = findMarkerNodes(t);
+    assert.equal(count, 1, 'the covered marker is dropped, not kept as a sibling');
+    assert.equal(nodes[0]!.a11y_id, 'screen.invoice_detail');
+    assert.equal(screenRoot(t), nodes[0]);
+    // dropping it (rather than keeping it as a body child) is what keeps `sibling_index` and the
+    // structural hash stable
+    assert.equal(siblingIndex(t, findByA11yId(t, 'invoice.detail.back.button')[0]!), 0);
+  });
+
+  it('prefers the registry kind only where the capture has no type, never over a more specific role', () => {
+    const raw = argentRaw('invoice_detail');
+    const withHints = normalizeTree(raw, { platform: 'ios', roleHints: PILOT_HINTS });
+    const without = normalizeTree(raw, { platform: 'ios' });
+    assert.equal(findByA11yId(withHints, 'invoice.detail.item.cell')[0]!.role, 'cell', 'ids.yaml kind: cell');
+    assert.equal(findByA11yId(without, 'invoice.detail.item.cell')[0]!.role, 'cell', 'and the SwiftUI list-cell class agrees, so the hint never contradicts it');
+    // a row whose class we cannot read falls back to its traits, and only the hint rescues it
+    const odd = {
+      screenFrame: { width: 100, height: 200 },
+      elements: [
+        { normalizedFrame: { x: 0, y: 0.1, width: 1, height: 0.1 }, identifier: 'x.list.cell', traits: ['button'], viewClassName: 'App.MysteryRow' },
+        { normalizedFrame: { x: 0, y: 0.3, width: 1, height: 0.05 }, identifier: 'x.search.field', traits: [], viewClassName: 'UISearchBar' },
+      ],
+    };
+    const hints = new Map<string, Role>([['x.list.cell', 'cell'], ['x.search.field', 'field']]);
+    assert.equal(findByA11yId(fromArgentScreen(odd, 'ios'), 'x.list.cell')[0]!.role, 'button', 'traits only');
+    assert.equal(findByA11yId(fromArgentScreen(odd, 'ios', { roleHints: hints }), 'x.list.cell')[0]!.role, 'cell');
+    assert.equal(
+      findByA11yId(fromArgentScreen(odd, 'ios', { roleHints: hints }), 'x.search.field')[0]!.role,
+      'searchField',
+      'a `field` hint must not demote a derived searchField',
+    );
+    // the marker is a container whatever the 1pt overlay reports (01 R3)
+    assert.equal(screenRoot(normalizeTree(argentRaw('people_list'), { platform: 'ios' })).role, 'container');
+  });
+
+  it('reports no focus and no enabled flag — Argent does not expose them (issue #10, issue #18)', () => {
+    const t = normalizeTree(argentRaw('people_list'), { platform: 'ios', roleHints: SWAPI_HINTS });
+    for (const n of allNodes(t)) {
+      assert.equal(n.focused, undefined, `${n.a11y_id ?? n.role} focused`);
+      assert.equal(n.enabled, undefined, `${n.a11y_id ?? n.role} enabled`);
+    }
+    assert.ok(!/"focused"|"hasFocus"|"enabled"/.test(compactJson(t)));
+  });
+
+  it('rejects a non-ok status and a capture that is not an object with bad_input + hint', () => {
+    const bad = (input: unknown): void => {
+      assert.throws(() => fromArgentScreen(input, 'ios'), (e: unknown) => AppMapError.is(e) && e.code === ERROR_CODES.BAD_INPUT && e.hint.length > 0, JSON.stringify(input));
+    };
+    assert.throws(
+      () => fromArgentScreen({ status: 'error', screenFrame: { width: 1, height: 1 }, elements: [] }, 'ios'),
+      (e: unknown) => AppMapError.is(e) && /status "error"/.test(e.message),
+    );
+    bad('nope');
+    bad({ elements: [] });
+    bad({ screenFrame: { width: 1, height: 1 } });
+    // an empty capture is not an error: the screen container still exists so `pathOf` keeps
+    // working, and with no marker `screenRoot` falls back to the tree root as everywhere else
+    const empty = fromArgentScreen({ status: 'ok', screenFrame: { width: 402, height: 874 }, elements: [] }, 'ios');
+    const container = empty.root.children[0]!.children[0]!;
+    assert.equal(container.role, 'container');
+    assert.equal(container.a11y_id, undefined);
+    assert.equal(screenRoot(empty), empty.root);
+    assert.ok(isNormalizedTree(empty));
+  });
+});
+
+describe('deepestMarker / screenRoot (01 R3, issues #10 and #15)', () => {
+  const marked = (id: string, y: number, children: TreeNode[] = []): TreeNode =>
+    ({ role: 'container', a11y_id: id, bbox_norm: { x: 0, y, w: 1, h: 1 - y }, children });
+  const tree = (children: TreeNode[]): Tree =>
+    ({ schema_version: 1, platform: 'ios', source: 'synthetic', root: { role: 'application', bbox_norm: { x: 0, y: 0, w: 1, h: 1 }, children } });
+
+  it('prefers depth, then y, then document order, and bases pathOf on it', () => {
+    const leaf: TreeNode = { role: 'button', a11y_id: 'x.ok.button', bbox_norm: { x: 0, y: 0.5, w: 1, h: 0.1 }, children: [] };
+    // depth beats y: the covering screen sits lower on the screen but higher in the tree
+    const nested = tree([marked('screen.invoice_list', 0.5, [marked('screen.invoice_detail', 0.1, [leaf])])]);
+    assert.equal(deepestMarker(nested)!.a11y_id, 'screen.invoice_detail');
+    assert.equal(screenRoot(nested), deepestMarker(nested));
+    assert.equal(pathOf(nested, leaf), 'button', 'paths are relative to the deepest marker');
+    assert.equal(nodeAtPath(nested, 'button'), leaf);
+
+    // equal depth → the greater y (a flat capture has no hierarchy to compare)
+    const flat = tree([marked('screen.a', 0), marked('screen.b', 0.3)]);
+    assert.equal(deepestMarker(flat)!.a11y_id, 'screen.b');
+
+    // equal depth and equal y → document order, last wins
+    const tie = tree([marked('screen.a', 0.2), marked('screen.b', 0.2)]);
+    assert.equal(deepestMarker(tie)!.a11y_id, 'screen.b');
+
+    const noIds = loadFixtureTree('invoice_list.no_ids');
+    assert.equal(deepestMarker(noIds), undefined, 'no marker at all');
+    assert.equal(screenRoot(noIds), noIds.root);
+  });
+
+  /** every `a11y_id` under `n`, deduped — "is the whole screen still reachable from here" */
+  const idsUnder = (n: TreeNode): string[] =>
+    [...new Set(allNodes(n).map((x) => x.a11y_id).filter((x): x is string => x !== undefined))].sort();
+
+  it('skips the doubled marker on a nested xcuitest capture: screenRoot is the CONTAINER, not the 1pt overlay (issue #15)', () => {
+    const plain = normalizeTree(xcuiRaw(), { platform: 'ios' });
+    const doubled = normalizeTree(doubledMarkerXcuiFixture(), { platform: 'ios' });
+    assert.equal(findMarkerNodes(doubled).count, 2, 'the capture really does carry the container AND its twin');
+
+    const sr = screenRoot(doubled);
+    assert.equal(sr, findByA11yId(doubled, 'screen.invoice_list')[0], 'the outermost marker — the container — wins');
+    assert.ok(sr.children.length > 0, 'the childless 1pt overlay would leave resolve nothing to search');
+    assert.deepEqual(sr.bbox_norm, screenRoot(plain).bbox_norm, 'the full-screen container frame, not 1pt');
+    assert.deepEqual(idsUnder(sr), idsUnder(screenRoot(plain)), 'every element stays reachable from the screen root');
+    assert.equal(pathOf(doubled, findByA11yId(doubled, 'invoice.add.button')[0]!), 'navigationBar/button[1]');
+  });
+
+  it('skips the doubled marker on a nested maestro capture too (drift.ts runs `maestro hierarchy` on both platforms)', () => {
+    const plain = normalizeTree(maestroRaw(), { platform: 'android' });
+    const doubled = normalizeTree(doubledMarkerMaestroFixture(), { platform: 'android' });
+    assert.equal(findMarkerNodes(doubled).count, 2);
+
+    const sr = screenRoot(doubled);
+    assert.equal(sr, findByA11yId(doubled, 'screen.invoice_list')[0]);
+    assert.ok(sr.children.length > 0);
+    assert.deepEqual(sr.bbox_norm, screenRoot(plain).bbox_norm);
+    assert.deepEqual(idsUnder(sr), idsUnder(screenRoot(plain)));
+    assert.equal(pathOf(doubled, findByA11yId(doubled, 'invoice.add.button')[0]!), pathOf(plain, findByA11yId(plain, 'invoice.add.button')[0]!));
+  });
+
+  it('a genuine push still picks the DEEPER screen when both markers are doubled (issue #10 is not regressed)', () => {
+    const leaf: TreeNode = { role: 'button', a11y_id: 'invoice.detail.send.button', bbox_norm: { x: 0, y: 0.5, w: 1, h: 0.1 }, children: [] };
+    // the 1pt overlay `appMapScreen(_:)` puts inside its own container, as the LAST child
+    const twin = (id: string): TreeNode => ({ role: 'container', a11y_id: id, bbox_norm: { x: 0, y: 0, w: 0.0026, h: 0.0012 }, children: [] });
+    const detail = marked('screen.invoice_detail', 0.1, [leaf, twin('screen.invoice_detail')]);
+    const pushed = tree([marked('screen.invoice_list', 0.5, [detail, twin('screen.invoice_list')])]);
+    assert.equal(deepestMarker(pushed), detail, 'a DIFFERENT id below a marker is a real push and still wins');
+    assert.equal(screenRoot(pushed), detail);
+    assert.equal(pathOf(pushed, leaf), 'button');
+  });
+
+  it('same-id markers that are SIBLINGS are not twins: y and document order still decide', () => {
+    const siblings = tree([marked('screen.invoice_list', 0.2), marked('screen.invoice_list', 0.4)]);
+    assert.equal(deepestMarker(siblings), siblings.root.children[1], 'the greater y wins, exactly as before — both name the same screen');
+  });
+
+  it('the flat Argent path is untouched: the pushed capture still normalizes to invoice_detail', () => {
+    const flat = normalizeTree(argentRaw('invoice_detail'), { platform: 'ios' });
+    assert.equal(deepestMarker(flat)!.a11y_id, 'screen.invoice_detail');
+    assert.ok(screenRoot(flat).children.length > 0);
   });
 });
 
@@ -233,7 +617,7 @@ describe('extractSnapshot', () => {
   it('finds the snapshot in the hook fixture and normalizes it', () => {
     const snap = extractSnapshot(loadHookFixture('post-tool-use.tap').tool_response);
     assert.notEqual(snap, undefined);
-    assert.equal(detectTreeShape(snap), 'argent');
+    assert.equal(detectTreeShape(snap), 'xcuitest');
     const t = normalizeTree(snap, { platform: 'ios' });
     assert.equal(findMarkerNodes(t).nodes[0]?.a11y_id, 'screen.invoice_new');
   });
@@ -289,8 +673,11 @@ describe('traversal and queries', () => {
     assert.equal(screenRoot(noIds), noIds.root);
     const two = cloneTree(tree);
     two.root.children[0]!.children[0]!.a11y_id = 'screen.other';
-    assert.equal(findMarkerNodes(two).count, 2);
-    assert.equal(screenRoot(two), two.root, 'two markers → tree root');
+    assert.equal(findMarkerNodes(two).count, 2, 'findMarkerNodes still reports both (drift.ts asks for presence)');
+    // 01 R3 as amended by issue #10: two markers no longer make the tree root the base — the
+    // deepest wins, and at equal depth that is the one with the greater `y` (`screen.other` is
+    // the status-bar node at y 0, the real marker container is at 0.0557)
+    assert.equal(screenRoot(two), findByA11yId(two, 'screen.invoice_list')[0], 'two markers → the deepest');
   });
 
   it('parentOf / siblingIndex agree with the pilot fingerprints', () => {
