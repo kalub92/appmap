@@ -142,7 +142,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
       - name: Unit tests + release gate (01 §4)
         run: ./gradlew :appmap:testDebugUnitTest :appmap:testReleaseUnitTest
 
