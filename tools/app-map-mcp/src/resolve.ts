@@ -112,7 +112,13 @@ export function gateHealScope(
   map: LoadedMap, def: ElementDef, tree: AnyTree, named?: GateId,
 ): { candidateRoot?: TreeNode; forbiddenNodes?: ReadonlySet<TreeNode> } | undefined {
   const gateId = gateOfElement(map, def, named);
-  if (gateId === undefined) return {};
+  if (gateId === undefined) {
+    // an id under the reserved `gate.` prefix whose owning gate we cannot find is NOT an ordinary
+    // screen element: it is a gate control in a half-integrated map (registered in ids.yaml,
+    // missing its gate file, or the file failed to load). Returning `{}` there would hand it the
+    // unbounded walk this function exists to prevent.
+    return /^gate\./.test(def.id) ? undefined : {};
+  }
   const root = gateDialogRoot(map, tree, gateId);
   if (root === undefined) return undefined;
   const siblings = new Set<TreeNode>();
@@ -120,11 +126,13 @@ export function gateHealScope(
   const others = [registered?.dismiss, ...(registered?.controls ?? []).map((c) => c.id)]
     .filter((id): id is ElementId => typeof id === 'string' && id !== '' && id !== def.id);
   for (const id of others) {
+    // A sibling that cannot be EXCLUDED is the dangerous case, not a benign one, whichever way it
+    // fails — its node is still in the dialog and is now the best-scoring lookalike for the control
+    // being healed. So both of these refuse rather than skip: a control ids.yaml registers but the
+    // gate file does not declare, and one that declares but does not resolve.
     const otherDef = map.gates.get(gateId)?.elements?.find((e) => e.id === id);
-    if (otherDef === undefined) continue;
+    if (otherDef === undefined) return undefined;
     const hit = resolve(map, otherDef, tree);
-    // a sibling that does NOT resolve is the dangerous case, not a benign one: its node is still in
-    // the dialog and is now the best-scoring lookalike for the control being healed
     if (hit.status !== 'hit') return undefined;
     siblings.add(hit.node);
   }

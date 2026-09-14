@@ -172,6 +172,26 @@ describe('healing can never cross from one gate control to another (04 §7.3, is
       'an unbounded walk here could propose the button next to the one we lost');
   });
 
+  it('REFUSES when a registered sibling control is missing from the gate file', () => {
+    // half-integrated map: ids.yaml registers the confirm control, the gate file does not declare
+    // it. Skipping the sibling would leave its node in the candidate set — the exact node a heal
+    // of the dismiss must never land on.
+    ctx.close();
+    writeFileSync(idsFile(t.config), readIds().replace(
+      `  - id: ${GATE}\n    dismiss: ${DISMISS}\n`,
+      `  - id: ${GATE}\n    dismiss: ${DISMISS}\n    controls:\n      - id: ${CONFIRM}\n        intent_critical: true\n`,
+    ), 'utf8');
+    ctx = openContext(t.config, { logSink: 'none', skipRetention: true });
+    const dismissDef = ctx.map.gates.get(GATE)!.elements.find((e) => e.id === DISMISS)!;
+    assert.equal(gateHealScope(ctx.map, dismissDef, dialogTree(), GATE), undefined);
+  });
+
+  it('REFUSES a `gate.`-prefixed element whose owning gate cannot be found', () => {
+    // returning `{}` here would hand a gate control the unbounded walk this exists to prevent
+    const orphan = { id: 'gate.unknown_thing.confirm', role: 'button', locators: [], status: 'candidate' } as unknown as ElementDef;
+    assert.equal(gateHealScope(ctx.map, orphan, dialogTree()), undefined);
+  });
+
   it('an ordinary screen element is unaffected — it heals exactly as before', () => {
     const def = ctx.map.screens.get('invoice_list')!.elements.find((e) => e.id === 'invoice.add.button')!;
     assert.deepEqual(gateHealScope(ctx.map, def, dialogTree()), {}, 'no gate, no bounds');

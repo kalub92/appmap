@@ -519,8 +519,9 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
       // issue #24: same rule as a recipe step — a plain `tap` edge naming a gate control would be
       // expanded into a step the runner dismisses the gate before executing. A gate's OWN file is
       // the exception: `{tap <dismiss>} → _previous` is how a gate has always modelled its escape.
-      if (!isGate && a.type === 'tap' && gateControlIds.has(a.element)) {
-        issues.push(issue(2, file, `edge element ${a.element} is a control of ${gateControlIds.get(a.element)} — a gate is dismissed, never navigated through; model the interrupter on ${gateControlIds.get(a.element)} and let the runner handle it (01 R7, issue #24)`, `${loc}/action/element`));
+      const edgeElementId = 'element' in a ? a.element : undefined;
+      if (!isGate && edgeElementId !== undefined && gateControlIds.has(edgeElementId)) {
+        issues.push(issue(2, file, `edge element ${edgeElementId} is a control of ${gateControlIds.get(edgeElementId)} — a gate is dismissed, never navigated through; model the interrupter on ${gateControlIds.get(edgeElementId)} and let the runner handle it (01 R7, issue #24)`, `${loc}/action/element`));
       }
       if ('element' in a && a.element !== undefined) {
         if (!registry.has(a.element)) issues.push(issue(2, file, `edge element ${a.element} is not registered in ids.yaml`, `${loc}/action/element`));
@@ -608,8 +609,8 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
       // issue #24: a gate control now has its own actions, so a plain `tap` naming one is a
       // mistake with teeth — guided treats the gate as blocking and auto-dismisses it (pressing
       // the SAFE escape) immediately before the step meant to press the other button.
-      if (st.action === 'tap' && gateControlIds.has(st.element)) {
-        issues.push(issue(2, file, `${st.id}: ${st.element} is a control of ${gateControlIds.get(st.element)} — a plain tap on it is dismissed by the runner before it happens. Use \`action: dismiss_gate\` for the safe escape, or \`action: tap_gate\` with \`control:\` for any other control (issue #24)`, `${loc}/element`));
+      if (st.action !== 'tap_gate' && el !== undefined && gateControlIds.has(el)) {
+        issues.push(issue(2, file, `${st.id}: ${el} is a control of ${gateControlIds.get(el)} — the runner dismisses a present gate before the step runs, so this presses the safe escape instead. Use \`action: dismiss_gate\` for that escape, or \`action: tap_gate\` with \`control:\` for any other control (issue #24)`, `${loc}/element`));
       }
       if (st.action === 'dismiss_gate' && !gateIds.has(st.gate)) issues.push(issue(2, file, `${st.id}: gate ${st.gate} is not registered in ids.yaml gates[]`, `${loc}/gate`));
       if (st.action === 'tap_gate') {

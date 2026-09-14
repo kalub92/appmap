@@ -74,7 +74,7 @@ import type {
 import { CANONICAL_DEEP_LINK_SCHEME, DEEP_LINK_SCHEME_REGEX, GUIDED_LIMITS, UNKNOWN_SCREEN, emitDeepLink, now, probeConditions, routeKey, selectTarget } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { identify } from '../identify.ts';
-import { gateHealScope, resolve as resolveElement } from '../resolve.ts';
+import { gateHealScope, gateOfElement, resolve as resolveElement } from '../resolve.ts';
 import { labelOf, walk } from '../tree.ts';
 import { shortestEdgePath } from '../plan.ts';
 import { indexMap } from '../yaml/load.ts';
@@ -1290,8 +1290,12 @@ function prepareNextStep(
       }),
     };
   }
+  // a gate control is DECLARED on its gate file, never on the screen the dialog happens to be over
+  // — heal writes the new locator back to `screen`, so pointing it at the identified screen would
+  // fail `element … is not declared on <screen>` on every gate heal (issue #24)
+  const healScreen = gateOfElement(map, def, next.step.action === 'dismiss_gate' || next.step.action === 'tap_gate' ? next.step.gate : undefined) ?? screen ?? UNKNOWN_SCREEN;
   const healInput: HealInput = {
-    recipe: recipe.id, step: next.step, screen: screen ?? UNKNOWN_SCREEN, element: def,
+    recipe: recipe.id, step: next.step, screen: healScreen, element: def,
     intent_critical: isIntentCritical(map, next.step, def), tree, trigger, build: run.build ?? ctx.build, run_id: run.run_id,
     ...(bounds ?? {}),
   };

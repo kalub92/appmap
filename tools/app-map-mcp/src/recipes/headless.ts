@@ -43,7 +43,7 @@ import { PACKAGE_ROOT, maestroFlowFile, maestroOutDir } from '../paths.ts';
 import { fromMaestroHierarchy, normalizeTree } from '../tree.ts';
 import { buildScrubPolicy, scrub } from '../scrub.ts';
 import { identify } from '../identify.ts';
-import { gateHealScope, resolve as resolveElement } from '../resolve.ts';
+import { gateHealScope, gateOfElement, resolve as resolveElement } from '../resolve.ts';
 import { heal as healOnce } from '../heal.ts';
 import { markVerified as lifecycleMarkVerified, recordRunOutcome as lifecycleRecordRunOutcome } from './lifecycle.ts';
 import type { VerifiedEntities } from './lifecycle.ts';
@@ -308,7 +308,10 @@ export async function runHeadless(ctx: AppMapContext, input: HeadlessInput, opts
     const healInput: HealInput = {
       recipe: recipe.id,
       step,
-      screen: screenId ?? (map.elements.get(def.id)?.[0]?.screen ?? UNKNOWN_SCREEN),
+      // the GATE owns its controls (issue #24): heal writes the new locator back to this screen, and
+      // a gate control is declared on the gate file, not on whatever screen the dialog is over
+      screen: gateOfElement(map, def, step.action === 'dismiss_gate' || step.action === 'tap_gate' ? step.gate : undefined)
+        ?? screenId ?? (map.elements.get(def.id)?.[0]?.screen ?? UNKNOWN_SCREEN),
       element: def,
       // the REGISTRY is the third source, as guided.isIntentCritical reads it (02 §10.6): a gate
       // control declares its criticality in ids.yaml `gates[].controls[]`, not in the screen file,
