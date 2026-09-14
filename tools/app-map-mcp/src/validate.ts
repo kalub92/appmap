@@ -415,6 +415,17 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
     // ---- rule 2: registration ----
     if (isGate) {
       if (!gateIds.has(doc.id)) issues.push(issue(2, file, `gate ${doc.id} is not registered in ids.yaml gates[]`, '/id'));
+      // issue #24: a control ids.yaml registers but this gate file does not declare is the
+      // half-integrated state the heal guard has to refuse on — 04 §7.3 cannot scope a search
+      // around a sibling it has no locators for, so it declines to heal the gate at all. Surfacing
+      // it here means a reviewer sees the omission instead of a silent loss of healing. A WARNING,
+      // and only for a gate file that exists: a staged rollout (08 §6) instruments one platform
+      // first, and the other platform's gate file is legitimately absent until it catches up.
+      for (const c of ids.gates.find((g) => g.id === doc.id)?.controls ?? []) {
+        if (!doc.elements.some((e) => e.id === c.id)) {
+          issues.push(issue(2, file, `gate control ${c.id} is registered in ids.yaml but not declared here — healing is refused for the whole gate while a sibling control has no locators (01 R7, 04 §7.3)`, '/elements', 'warning'));
+        }
+      }
     } else if (!screenIds.has(doc.id)) {
       issues.push(issue(2, file, `screen ${doc.id} is not registered in ids.yaml screens[]`, '/id'));
     }

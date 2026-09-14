@@ -279,6 +279,12 @@ on the loaded map (`summary` names them), but never block either.
    honest: `markVerified` never promotes a screen whose `elements` is empty, nor an edge whose
    element that screen does not declare.
 
+   Also a **warning** for a `gates[].controls[]` entry ids.yaml registers that the gate's own file
+   does not declare (issue #24): 04 §7.3 cannot scope a heal around a sibling control it has no
+   locators for, so it refuses to heal the gate at all — a silent loss of healing that a reviewer
+   should see. Only where the gate file exists; a staged rollout (08 §6) instruments one platform
+   first, and the other's gate file is legitimately absent until it catches up.
+
    Also a **warning** for an `expect.focused` on a platform whose driver reports no focus: Argent's
    iOS snapshot carries no focus flag, so the assertion can never be satisfied and every replay of
    the step falls back (04 §10).
