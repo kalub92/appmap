@@ -51,7 +51,9 @@
  *  9. every declared recipe param is ASSERTED on — an `expect.value`/`verify.value` slot, or a
  *     `select match.text` slot (the row is addressed by that text at replay, so the step really
  *     fails when nothing matches). A `type` step's slot does NOT count: typing is not observing,
- *     which is issue #23 entire. WARNING while `candidate`, ERROR at `verified`/`ci_gate`
+ *     which is issue #23 entire. WARNING at `candidate`/`verified`, ERROR at `ci_gate` only —
+ *     `verified` is reached automatically by the lifecycle, so erroring there would stop an
+ *     existing map loading with no human edit in between (02 §10.9)
  *
  * Also enforced: file name equals `id` (02 §2.1); recipe `platform` equals its directory;
  * dynamic elements carry no `label` (07 §2.3).
@@ -63,7 +65,7 @@ import { basename, join, relative, sep } from 'node:path';
 import type { AppMapConfig, Platform } from './config.ts';
 import { PLATFORMS } from './config.ts';
 import type { BuildNumber, Condition, ElementId, Expect, IdsElement, IdsRegistry, Manifest, RecipeFile, RecipeParam, ScreenFile, UnlearnedEdgeElementReason, ValidateResult, ValidationIssue } from './types.ts';
-import { CANONICAL_DEEP_LINK_SCHEME, ID_REGEX, PREVIOUS_SCREEN, focusObservable, gateControlEntries, isNewerBuild, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
+import { ID_REGEX, PREVIOUS_SCREEN, focusObservable, gateControlEntries, isNewerBuild, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
 import { AppMapError } from './errors.ts';
 import { allowlistFile, idsFile, kindForPath, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from './paths.ts';
 import type { YamlKind } from './paths.ts';
@@ -213,7 +215,7 @@ export function validateMap(config: AppMapConfig, opts: ValidateOptions = {}): V
       const strings = stringsFile(config, platform);
       // rule 2's stale-capture carve-out compares each screen against the build the manifest names
       // (issue #12); a manifest that failed rule 1 leaves it undefined and the carve-out stays off
-      const input: CrossRefInput = { platform, ids, screens, recipes, build: manifest?.build.build_number, ...(manifest?.deep_link_scheme !== undefined ? { deepLinkScheme: manifest.deep_link_scheme } : {}) };
+      const input: CrossRefInput = { platform, ids, screens, recipes, build: manifest?.build.build_number };
       if (existsSync(strings)) input.staticStrings = new Set(readFileSync(strings, 'utf8').split('\n').filter((l) => l.length > 0));
       issues.push(...crossReferenceIssues(input));
     }
@@ -314,12 +316,6 @@ export interface CrossRefInput {
    * and that subject simply never fires, so callers that have no manifest lose nothing else.
    */
   build?: BuildNumber;
-  /**
-   * The scheme this platform's `manifest.yaml` declares (01 R5). Rule 1 warns when it is not the
-   * default, because that is a claim about the SHIPPED BINARY that no file in the repo can check
-   * (issue #25); omit it and the warning simply never fires.
-   */
-  deepLinkScheme?: string;
 }
 
 /**
@@ -360,16 +356,6 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
       registry.set(c.id, c);
       gateControlIds.set(c.id, g.id);
     }
-  }
-  // 01 R5 / issue #25: the manifest is the only place the app's scheme is written down, and
-  // nothing in the repo can prove the binary registers it — a mismatch surfaces as an inspector
-  // timeout on the correct bundle id, which reads like anything but a routing problem. A WARNING,
-  // because a non-default scheme is the RIGHT answer for a repo with two instrumented apps; it
-  // just has to be matched in the app.
-  if (input.deepLinkScheme !== undefined && input.deepLinkScheme !== CANONICAL_DEEP_LINK_SCHEME) {
-    issues.push(issue(1, `${input.platform}/manifest.yaml`,
-      `deep_link_scheme is ${input.deepLinkScheme}, not the default ${CANONICAL_DEEP_LINK_SCHEME} — the app must register exactly that scheme (${input.platform === 'ios' ? "the Debug target's CFBundleURLTypes" : 'the debug intent-filter'}), or every deep link times out with no indication why (01 R5, issue #25)`,
-      '/deep_link_scheme', 'warning'));
   }
   const idsScreenById = new Map(ids.screens.map((s) => [s.id, s]));
   // rule 8 over the registry itself (screen titles); validateMap dedupes it across platforms
@@ -671,7 +657,13 @@ function unobservedParamIssues(file: string, doc: RecipeFile): ValidationIssue[]
   const declared = doc.params ?? [];
   if (declared.length === 0) return [];
   const observed = observedParams(doc);
-  const severity = doc.status === 'verified' || doc.status === 'ci_gate' ? 'error' : 'warning';
+  // ERROR only at `ci_gate`, the one status that is a claim CI is gated on this recipe — and the
+  // one a human reaches deliberately, with a reviewer (07 §7). `verified` is reached AUTOMATICALLY
+  // by the lifecycle after three green replays, so erroring there would take an existing map from
+  // loading to not-loading with no human edit in between (`crossReferenceIssues` errors abort
+  // `loadMap`), which is the deadlock 02 §10.2's carve-outs exist to avoid. A warning still shows
+  // in `summary` and in every CI run; it just does not brick the server on the way.
+  const severity = doc.status === 'ci_gate' ? 'error' : 'warning';
   return declared
     .filter((p) => !observed.has(p.name))
     .map((p, i) => issue(9, file,

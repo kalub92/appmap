@@ -48,7 +48,7 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import type { AppMapConfig } from './config.ts';
 import { driverToolPattern } from './config.ts';
 import type { AppMapContext } from './context.ts';
-import type { DriverInput, ElementDef, ElementId, Fingerprint, GateId, HookPayload, IdentifyResult, IdentifySignalKind, Locator, NameScreenInput, NameScreenResult, Observation, ObservedSignature, RecordObservationInput, RecordResult, ScreenFile, ScreenStatus, ScrubPolicy, ScrubbedTree, SessionId, SessionMode, Tree, TreeNode } from './types.ts';
+import type { DriverInput, ElementDef, ElementId, Fingerprint, GateId, HookPayload, IdentifyResult, IdentifySignalKind, Locator, NameScreenInput, NameScreenResult, Observation, ObservedSignature, RecordObservationInput, RecordResult, ScreenFile, ScreenId, ScreenStatus, ScrubPolicy, ScrubbedTree, SessionId, SessionMode, Tree, TreeNode } from './types.ts';
 import {
   DEEP_LINK_REGEX, DEFAULT_LOCATOR_WEIGHTS, UNKNOWN_SCREEN, assertScrubbed, canonicalDeepLink, isMarker, markerOfScreen, now,
   probeConditions, roleHintsFor, routeKey,
@@ -192,7 +192,7 @@ function resolveActedElement(ctx: AppMapContext, input: DriverInput, screenBefor
  * produce no entry, and `checkExpect` treats a missing entry as a failed assertion (the safe
  * direction — an assertion that could not be decided has not been satisfied).
  */
-function evaluateValueChecks(ctx: AppMapContext, session: SessionId, tree: Tree): Record<string, boolean> | undefined {
+function evaluateValueChecks(ctx: AppMapContext, session: SessionId, tree: Tree, screen: ScreenId | undefined): Record<string, boolean> | undefined {
   const runs = ctx.db.listRunsForSession(session, { states: ['active'] });
   if (runs.length === 0) return undefined;
   const cached = ctx.db.listScreens();
@@ -206,7 +206,7 @@ function evaluateValueChecks(ctx: AppMapContext, session: SessionId, tree: Tree)
       const expected = substituteParams(check.slot, run.params);
       // an unbound slot substitutes to itself: there is nothing to compare against, so say nothing
       if (expected === check.slot) continue;
-      const def = elementDefAnywhere(ctx, screens, check.element);
+      const def = elementDefAnywhere(ctx, screens, check.element, screen);
       if (def === undefined) continue;
       const hit = resolveElement(ctx.map, def, tree);
       if (hit.status !== 'hit') { out[check.key] = false; continue; }
@@ -227,7 +227,14 @@ function evaluateValueChecks(ctx: AppMapContext, session: SessionId, tree: Tree)
  * here). `screens` is passed in rather than re-read: this runs once per declared assertion, on the
  * ingest path 03 §11 budgets at 50 ms, and `db.listScreens()` is a full table read.
  */
-function elementDefAnywhere(ctx: AppMapContext, screens: readonly ScreenFile[], id: ElementId): ElementDef | undefined {
+function elementDefAnywhere(ctx: AppMapContext, screens: readonly ScreenFile[], id: ElementId, on: ScreenId | undefined): ElementDef | undefined {
+  // the declaration on the screen we are actually looking at wins: an id repeats across screens
+  // (02 §4.1) with different locators, and picking another screen's copy would compare the right
+  // assertion against the wrong node. Same preference `guided.elementDefOn` applies at replay.
+  if (on !== undefined) {
+    const here = screens.find((s) => s.id === on)?.elements?.find((e) => e.id === id);
+    if (here !== undefined) return here;
+  }
   for (const screen of screens) {
     const def = screen.elements?.find((e) => e.id === id);
     if (def !== undefined) return def;
@@ -255,6 +262,8 @@ export function hookPayloadToObservation(ctx: AppMapContext, payload: HookPayloa
   // 2. raw tree → normalize → scrub. The raw tree exists only inside this function (03 §7).
   let snapshot: ScrubbedTree | null = null;
   let value_checks: Record<string, boolean> | undefined;
+  /** the raw tree, alive only inside this function (03 §7) — see the value-check note below */
+  let raw_tree: Tree | undefined;
   const raw = extractSnapshot(payload.tool_response);
   if (raw !== undefined) {
     try {
@@ -263,11 +272,12 @@ export function hookPayloadToObservation(ctx: AppMapContext, payload: HookPayloa
       const tree = normalizeTree(raw, { platform: ctx.map.platform, roleHints: roleHintsFor(ctx.map) });
       // 03 §3: `APP_MAP_BUILD=auto` takes the build the driver reported
       if (ctx.config.build === 'auto' && typeof tree.build === 'string' && tree.build !== '' && tree.build !== ctx.build) ctx.setBuild(tree.build);
-      // issue #23: `expect.value` is decided HERE, against the raw tree, because this is the only
-      // place the typed value still exists — scrub drops `value`/`text` outright and drops `label`
-      // under every `dynamic` id, which is exactly what such an assertion targets. Only the
-      // resulting booleans are kept; the string itself dies with this stack frame (07 §2.3).
-      value_checks = evaluateValueChecks(ctx, session, tree);
+      // issue #23: `expect.value` is decided against THIS tree, because this is the only place the
+      // typed value still exists — scrub drops `value`/`text` outright and drops `label` under
+      // every `dynamic` id, which is exactly what such an assertion targets. Held until after
+      // identification below so the element is resolved on the screen it was actually seen on;
+      // it never leaves this function, and only the resulting booleans are kept (07 §2.3).
+      raw_tree = tree;
       snapshot = scrub(tree, policyFor(ctx));
     } catch (e) {
       // a driver that returns something tree-shaped but broken must not break the session (03 §11)
@@ -291,6 +301,9 @@ export function hookPayloadToObservation(ctx: AppMapContext, payload: HookPayloa
     });
   }
   const screen_after: string = identified?.screen_id ?? UNKNOWN_SCREEN;
+  if (raw_tree !== undefined) {
+    value_checks = evaluateValueChecks(ctx, session, raw_tree, screen_after === UNKNOWN_SCREEN ? undefined : screen_after);
+  }
   // the cache, not the map: heals and `name_screen` land there first, so it holds the current
   // `required_ids`/`dynamic_regions` the lazy re-verify (step 8) will compare against
   const signature_after = snapshot === null

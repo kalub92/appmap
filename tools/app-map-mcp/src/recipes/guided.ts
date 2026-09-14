@@ -1186,7 +1186,7 @@ export async function reportStep(ctx: AppMapContext, input: ReportStepInput): Pr
   run.step_index = nextIndex - entryCount;
   run.current_step = next.step.id;
 
-  const handed = prepareNextStep(ctx, map, run, recipe, next, obs, { announce, steps, stepsDone: nextIndex, isLast: nextIndex === expanded.length - 1 });
+  const handed = prepareNextStep(ctx, map, run, recipe, next, obs, { announce, steps, stepsDone: nextIndex, isLast: nextIndex === expanded.length - 1, seen: { screen: screenSeen, seq: seenAt, by: identifiedBy } });
   if (handed.fallback !== undefined) return handed.fallback;
   ctx.db.updateRun(run);
   return { run_id: run.run_id, status: 'ok', step: handed.step!, ...(healed !== undefined ? { healed } : {}) };
@@ -1243,7 +1243,10 @@ function finish(ctx: AppMapContext, map: LoadedMap, run: RunRecord, recipe: Reci
 function prepareNextStep(
   ctx: AppMapContext, map: LoadedMap, run: RunRecord, recipe: RecipeFile,
   next: { step: RecipeStep; screen: ScreenId | undefined }, obs: Observation,
-  opts: { announce: boolean; steps: number; stepsDone: number; isLast?: boolean },
+  // `seen` is the answer `reportStep` already computed against the SESSION map, with its seq and
+  // winning signal — every fallback raised here must report that one, not the ingest-time
+  // `obs.screen_after` derived against `ctx.map` (issue #24)
+  opts: { announce: boolean; steps: number; stepsDone: number; isLast?: boolean; seen: { screen: ScreenId | typeof UNKNOWN_SCREEN; seq: number; by: IdentifySignalKind } },
 ): { step?: RunStep; fallback?: ReportStepResult } {
   const tree = obs.snapshot!;
   const elementId = stepElement(map, next.step);
@@ -1268,7 +1271,7 @@ function prepareNextStep(
   if (counts.heals >= GUIDED_LIMITS.heals_per_step) {
     return {
       fallback: toFallback(ctx, run, {
-        step: next.step.id, reason: 'heal_limit', screen_seen: obs.screen_after, steps: opts.steps, steps_done: opts.stepsDone,
+        step: next.step.id, reason: 'heal_limit', screen_seen: opts.seen.screen, screen_seen_seq: opts.seen.seq, identified_by: opts.seen.by, steps: opts.steps, steps_done: opts.stepsDone,
         ...(next.step.expect !== undefined ? { expected: next.step.expect } : {}),
         message: `already healed ${next.step.id} once in this run`,
       }),
@@ -1281,7 +1284,7 @@ function prepareNextStep(
   if (bounds === undefined) {
     return {
       fallback: toFallback(ctx, run, {
-        step: next.step.id, reason: 'heal_rejected', screen_seen: obs.screen_after, steps: opts.steps, steps_done: opts.stepsDone,
+        step: next.step.id, reason: 'heal_rejected', screen_seen: opts.seen.screen, screen_seen_seq: opts.seen.seq, identified_by: opts.seen.by, steps: opts.steps, steps_done: opts.stepsDone,
         ...(next.step.expect !== undefined ? { expected: next.step.expect } : {}),
         message: `${def.id} is a gate control and its dialog could not be located in the capture, so healing it is refused — a replacement chosen outside the dialog could be the opposite button (04 §7.3, issue #24)`,
       }),
@@ -1306,7 +1309,7 @@ function prepareNextStep(
   const reason: FallbackReason = proposal.reason === 'intent_critical_label_changed' ? 'intent_critical_label_changed' : 'heal_rejected';
   return {
     fallback: toFallback(ctx, run, {
-      step: next.step.id, reason, screen_seen: obs.screen_after, steps: opts.steps, steps_done: opts.stepsDone,
+      step: next.step.id, reason, screen_seen: opts.seen.screen, screen_seen_seq: opts.seen.seq, identified_by: opts.seen.by, steps: opts.steps, steps_done: opts.stepsDone,
       ...(next.step.expect !== undefined ? { expected: next.step.expect } : {}),
       candidates: candidateLines(result.candidates),
       message: `could not resolve ${def.id} and the heal was rejected (${proposal.reason})`,

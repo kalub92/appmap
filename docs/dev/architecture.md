@@ -462,10 +462,12 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     file instead of one manifest line; and `map.routes`, keyed on `routeKey(deep_link)`, would have
     to be rebuilt whenever the manifest changed. Files the MAP owns are canonical; files the APP
     produces (`router-export.json`) are scheme-bearing and canonicalised on import.
-    Two things enforce what a schema cannot: `validate` rule 1 warns when the scheme is not the
-    default (nothing in the repo can prove the binary registers it), and `run_recipe` /
-    `run --headless` refuse with `deep_link_scheme_collision` when a probe positively names another
-    bundle claiming it. An unanswerable probe is never evidence.
+    What a schema cannot check is checked at RUN time, not by a static warning: a warning on every
+    validate run would punish exactly the repo that did what the issue asked, while proving
+    nothing. `run_recipe` / `run --headless` refuse with `deep_link_scheme_collision` when a probe
+    positively names another bundle claiming the scheme, and give the opposite diagnosis — fix the
+    plist, not the manifest — when the probe says this app does not register it. An unanswerable
+    probe is never evidence. `import-router` refuses an export carrying a third scheme.
 43. **Maestro version check runs once in `startServer`** after `openContext`, non-fatal (`warn`),
     off the first-tool critical path (03 §11, 03 §13, 07 §5.3); headless runs re-check.
 44. **`get_screen` `conf`** = the session's last observation `confidence` when its `screen_after`

@@ -217,7 +217,10 @@ export function toolIdentifyScreen(ctx: AppMapContext, args: { snapshot?: unknow
     // exactly the way a recorded one does (03 §5, issue #10)
     const tree = normalizeTree(args.snapshot, { platform: map.platform, roleHints: roleHintsFor(map) });
     const scrubbed = scrub(tree, buildScrubPolicy(map.ids, map.staticLabels));
-    const result = identify(map, scrubbed, { build: ctx.build, ...probeConditions(ctx.probe) });
+    // 03 §5.1b / issue #24: hand identify what the session was on. This is the call the issue's
+    // symptom is literally about — `identify-screen --snapshot cap.json` answering the tab root
+    // two screens out, because a modal had occluded the real screen's marker.
+    const result = identify(map, scrubbed, { build: ctx.build, ...coveredOf(ctx, session), ...probeConditions(ctx.probe) });
     return toolJson({ ...result, source: 'snapshot' }, cap(ctx));
   }
   const obs = lastObservation(ctx, session);
@@ -239,9 +242,21 @@ export function toolIdentifyScreen(ctx: AppMapContext, args: { snapshot?: unknow
   const result = identify(map, obs.snapshot, {
     ...(route !== undefined ? { route } : {}),
     build: ctx.build,
+    // the screen the session was on BEFORE this observation — re-identifying the newest capture
+    // must reach the same answer ingest did, or `identify_screen` and `screen_seen` disagree
+    ...(obs.screen_before !== UNKNOWN_SCREEN ? { covered_screen: obs.screen_before } : {}),
     ...probeConditions(ctx.probe),
   });
   return toolJson({ ...result, source: 'observation', session: obs.session, seq: obs.seq }, cap(ctx));
+}
+
+/**
+ * 03 §5.1b: the screen the session was on, for a caller-supplied snapshot. The newest observation's
+ * `screen_after` IS "where we were" relative to a capture the caller took afterwards.
+ */
+function coveredOf(ctx: AppMapContext, session: SessionId | undefined): { covered_screen?: ScreenId } {
+  const previous = ctx.db.lastObservation(session)?.screen_after;
+  return previous !== undefined && previous !== UNKNOWN_SCREEN ? { covered_screen: previous } : {};
 }
 
 /** architecture §7 decision 44 */

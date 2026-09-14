@@ -38,7 +38,7 @@
  */
 import type { AppMapContext } from './context.ts';
 import type { BuildInfo, Edge, IdsRegistry, ImportRouterResult, Manifest, RecipeFile, RecipeId, RouterExport, RouterExportScreen, ScreenFile, ScreenId, ScreenSource } from './types.ts';
-import { canonicalDeepLink, isNewerBuild } from './types.ts';
+import { CANONICAL_DEEP_LINK_SCHEME, canonicalDeepLink, isNewerBuild } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { schemaDir, screenFile } from './paths.ts';
 import { PLATFORMS } from './config.ts';
@@ -117,6 +117,24 @@ function withSource(sources: readonly ScreenSource[] | undefined, source: Screen
  * with a different scheme, would rewrite every screen file.
  */
 function canonicalizeRoutes(screens: readonly RouterExportScreen[], scheme: string | undefined): RouterExportScreen[] {
+  const expected = new Set([CANONICAL_DEEP_LINK_SCHEME, scheme ?? CANONICAL_DEEP_LINK_SCHEME]);
+  const check = (url: string | undefined, where: string): void => {
+    if (typeof url !== 'string' || url === '' || url === 'none') return;
+    const got = /^([a-z][a-z0-9+.-]*):\/\//.exec(url)?.[1];
+    if (got === undefined || expected.has(got)) return;
+    // the misconfiguration issue #25 is ABOUT: the app answers a scheme the manifest does not
+    // name. Rewriting it silently would put a non-canonical URL in the map; ignoring it would let
+    // the map claim a route the app does not serve. Say which two disagree.
+    throw new AppMapError(
+      ERROR_CODES.BAD_INPUT,
+      `router export ${where} is ${got}://…, but the manifest declares deep_link_scheme: ${scheme ?? CANONICAL_DEEP_LINK_SCHEME}`,
+      'the app and app-map/<platform>/manifest.yaml must name the same scheme (01 R5); fix whichever is wrong before importing',
+    );
+  };
+  for (const rs of screens) {
+    check(rs.route, `route of ${rs.id}`);
+    for (const e of rs.edges ?? []) if (e.action.type === 'open_link') check(e.action.url, `an open_link edge of ${rs.id}`);
+  }
   return screens.map((rs) => {
     const route = typeof rs.route === 'string' ? canonicalDeepLink(rs.route, scheme) : rs.route;
     const edges = (rs.edges ?? []).map((e) => (

@@ -299,9 +299,12 @@ on the loaded map (`summary` names them), but never block either.
    addressed by that text at replay, so the step genuinely fails when nothing matches. A `type`
    step's slot does **not** count: typing is not observing, and a recipe that types `{name}` into a
    field that never took it, saves whatever was already there and reports PASS is the whole of
-   issue #23. **Warning** while `status: candidate` — a draft under review, and 04 §3.8 is where
-   the assertions get added — and an **error** at `verified` / `ci_gate`, which are claims that CI
-   is gated on something real. Without this rule §6's `value` is merely available, and §8's
+   issue #23. **Warning** at `candidate` and `verified`, an **error** at `ci_gate`.
+   `ci_gate` is the one status that claims CI is gated on this recipe, and the one a human reaches
+   deliberately with a reviewer (07 §7). `verified` is reached automatically after three green
+   replays, so erroring there would take an existing map from loading to not-loading with no human
+   edit in between — the deadlock §10.2's carve-outs exist to avoid. The warning still shows in
+   `summary` and in every CI run. Without this rule §6's `value` is merely available, and §8's
    `lifecycle.recompile` keeps promoting recipes that never exercise their own parameters.
 
 ## 11. Acceptance criteria
