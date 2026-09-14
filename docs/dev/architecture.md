@@ -821,6 +821,18 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     from a capture with a gate up, and `identified_by` is STORED on the observation — `covered`
     leaves no trace in `signature_after`, so every attempt to re-derive it is shadowed by another
     rule.
+    The hard part is not the score, it is that occlusion and a NAVIGATION to a screen that raises a
+    gate on entry produce **byte-identical trees** — so the memory has to stand down on evidence
+    outside the capture. Three conditions do it, in increasing strength: the remembered screen's own
+    marker still being present (nothing is occluded); the marker-named screen declaring one of the
+    present gates (it raised it, so it is where we are) — cheap, but `gates` is LEARNED and silent
+    about a screen that has not met the gate yet; and `previous_markers`, which settles it outright
+    by 01 R3 (a pushed screen leaves the covered screen's marker behind, so the ancestor under a
+    modal was already on screen a moment ago, while a marker appearing WITH the gate is a
+    navigation). Ingest supplies it, which is where it matters: that answer is persisted, and the
+    next observation's `screen_before` — what the compiler reads to place a step on a screen — is
+    read back off it. A live `identify_screen` falls back to the two cheap conditions and carries
+    the alternative at 1.0 in `candidates`.
 69. **The server tells the driver what to wait for** (04 §5 `settle`, issue #26). Every consumer of
     `run_recipe` invented its own settle policy and the obvious one, `sleep(n)`, was ~85% of a real
     suite's wall clock AND the flake mode. The hint is the step's own postcondition — the same

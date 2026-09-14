@@ -295,8 +295,13 @@ export function hookPayloadToObservation(ctx: AppMapContext, payload: HookPayloa
       ...(typeof input.url === 'string' ? { route: input.url } : {}),
       build: ctx.build,
       // 03 §5.1b / issue #24: while a gate is up the presenting screen's marker is occluded, so
-      // hand identify what the session was on rather than let it walk out to an ancestor
+      // hand identify what the session was on rather than let it walk out to an ancestor — and the
+      // markers the previous capture carried, which is what separates that from a NAVIGATION to a
+      // screen that raises a gate on entry. This is the caller that matters most for the
+      // distinction: its answer is PERSISTED, and the next observation's `screen_before` (which the
+      // compiler reads to decide which screen a step was taken on) is read straight back off it.
       ...(screen_before !== UNKNOWN_SCREEN ? { covered_screen: screen_before } : {}),
+      ...(previous?.snapshot != null ? { previous_markers: markersOf(previous.snapshot) } : {}),
       ...probeConditions(ctx.probe),
     });
   }
@@ -345,6 +350,13 @@ export function hookPayloadToObservation(ctx: AppMapContext, payload: HookPayloa
     ...(value_checks !== undefined ? { value_checks } : {}),
   };
   return obs;
+}
+
+/** Every `screen.*` marker a capture carries (03 §5.1b: what was already on screen a moment ago). */
+function markersOf(tree: ScrubbedTree): ReadonlySet<string> {
+  const out = new Set<string>();
+  walk(tree, (n) => { if (isMarker(n.a11y_id)) out.add(n.a11y_id); });
+  return out;
 }
 
 /** the screen as the session knows it: the cache first (heals and name_screen land there), then the map */

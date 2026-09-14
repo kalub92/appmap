@@ -252,6 +252,13 @@ function coveredScreen(
   // gate-raising screen — reporting the screen we came from for as long as the gate is up.
   const markerFile = markerScreen !== undefined ? map.screens.get(markerScreen) : undefined;
   if (markerFile !== undefined && (markerFile.gates ?? []).some((g) => gates_present.includes(g))) return undefined;
+  // The stronger form of the same question, when the caller can answer it. A screen's `gates` list
+  // is LEARNED (02 §4.2), so it is silent about a screen that has not met this gate yet — and the
+  // two situations produce byte-identical trees, so nothing in this capture alone can separate
+  // them. What can: 01 R3 leaves a covered screen's marker behind, so under a modal the surviving
+  // ancestor was already on screen a moment ago, while a marker appearing for the first time
+  // TOGETHER with the gate is a navigation and the tree is the better witness.
+  if (opts.previous_markers !== undefined && marker !== undefined && !opts.previous_markers.has(marker)) return undefined;
   return markerScreen !== undefined && map.screens.has(markerScreen) ? { ...screen, ancestor: markerScreen } : screen;
 }
 

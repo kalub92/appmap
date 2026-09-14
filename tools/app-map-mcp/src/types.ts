@@ -825,6 +825,17 @@ export interface IdentifyOptions {
    * is the one state in which the tree is a known-unreliable witness of what is underneath it.
    */
   covered_screen?: ScreenId;
+  /**
+   * 03 §5.1b / issue #24: the `screen.*` markers the PREVIOUS capture carried, when the caller has
+   * it. It is the discriminator `covered_screen` alone cannot supply — occlusion and navigation
+   * produce byte-identical trees, and a screen's `gates` list only helps once that gate has been
+   * OBSERVED there (02 §4.2), which for a freshly-learned screen it has not.
+   *
+   * 01 R3: a pushed screen leaves the covered screen's marker behind, so under a modal the
+   * ancestor whose marker survives was already on screen a moment ago. A marker that appears for
+   * the first time TOGETHER with the gate is a navigation, and the tree is the better witness.
+   */
+  previous_markers?: ReadonlySet<string>;
 }
 
 export interface ResolveHit {

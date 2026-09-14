@@ -41,8 +41,10 @@ Input: a normalized accessibility tree. The driver shapes `tree.ts` normalizes a
 ```
 1. gates: for each kind:gate screen, test its signature; collect matches → gates_present
 1b. covered: gates_present non-empty AND the caller passed covered_screen (the session's previous
-    screen) AND the deepest marker names a DIFFERENT screen → that screen, 0.75, done; the
-    marker-named ancestor travels in candidates
+    screen) AND the remembered screen's own marker is GONE from the tree AND the deepest marker
+    names a DIFFERENT screen that does not itself declare one of the present gates AND (when the
+    caller supplies previous_markers) that marker was already in the previous capture
+    → the remembered screen, 0.75, done; the marker-named ancestor travels in candidates
 2. marker: the DEEPEST node with id matching ^screen\. → screen_id = suffix, confidence 1.0, done
    (a pushed screen leaves the covered screen's marker behind, 01 R3; deepest in the tree,
     ties by greatest y, then document order)
@@ -64,6 +66,22 @@ full-confidence answer built on the absence of the evidence that mattered, which
 so no consumer can mistake "I remember being here" for "I saw the marker". It is gated on a gate
 being present, that being the one state in which the tree is a known-unreliable witness of what is
 underneath it; without the guard an ordinary push/pop would report the previous screen for ever.
+
+The three stand-down conditions exist because occlusion and a NAVIGATION to a screen that raises a
+gate on entry produce **byte-identical trees**, so nothing in the capture alone separates them:
+
+- the remembered screen's own marker still being present means nothing is occluded, and rule 2 has
+  the evidence;
+- the marker-named screen declaring one of the present gates means that screen raised it, so the
+  marker is where we actually are. Cheap, but `gates` is LEARNED (02 §4.2) and says nothing about a
+  screen that has not met this gate yet;
+- `previous_markers` is the complete answer, and the ingest path supplies it: 01 R3 leaves a covered
+  screen's marker behind, so under a modal the surviving ancestor was already on screen a moment
+  ago, while a marker appearing for the first time TOGETHER with the gate is a navigation. It
+  matters most at ingest because that answer is PERSISTED, and the next observation's
+  `screen_before` — which the compiler reads to decide which screen a step was taken on — is read
+  straight back off it. A live `identify_screen` query without it falls back to the two cheap
+  conditions and carries the alternative at 1.0 in `candidates`.
 Nothing is verified from a capture with a gate up (02 §8 wants one CLEAN observation), and the
 winning signal is stored on the observation as `identified_by` — `covered` leaves no trace in
 `signature_after`, so it cannot be re-derived afterwards.

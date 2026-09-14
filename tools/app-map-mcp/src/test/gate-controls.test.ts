@@ -226,6 +226,28 @@ describe('the covered-screen rule never masks a real navigation (03 §5.1b, issu
     assert.equal(r.confidence, 1);
   });
 
+  it('the learned `gates` list is not the only discriminator: the PREVIOUS capture settles it', () => {
+    // `gates` is learned (02 §4.2), so it says nothing about a screen that has not met this gate
+    // yet — and occlusion and navigation produce byte-identical trees. 01 R3 leaves a covered
+    // screen's marker behind, so the ancestor under a modal was already on screen a moment ago.
+    const tree = dialogTree('invoice_new');
+    assert.deepEqual(ctx.map.screens.get('invoice_new')?.gates, undefined, 'precondition: invoice_new has not learned any gate');
+
+    // OCCLUSION: `screen.invoice_new` was already there before the dialog appeared
+    const occluded = identify(ctx.map, tree, {
+      covered_screen: 'client_picker', previous_markers: new Set(['screen.invoice_new', 'screen.client_picker']),
+    });
+    assert.equal(occluded.screen_id, 'client_picker');
+    assert.equal(occluded.confidence, 0.75);
+
+    // NAVIGATION: the marker appears for the first time WITH the gate — the tree is the witness
+    const navigated = identify(ctx.map, tree, {
+      covered_screen: 'client_picker', previous_markers: new Set(['screen.client_picker']),
+    });
+    assert.equal(navigated.screen_id, 'invoice_new');
+    assert.equal(navigated.confidence, 1, 'a marker that just appeared is evidence, not occlusion');
+  });
+
   it('ignores the memory entirely when no gate is present', () => {
     const base = dialogTree('invoice_new');
     const noGate = { ...base, root: { ...base.root, children: [base.root.children[0]!] } } as Tree;
