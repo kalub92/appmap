@@ -144,7 +144,7 @@ describe('healing can never cross from one gate control to another (04 §7.3, is
     const candidates = scoreCandidates({
       recipe: 'r', step: { id: 's1', action: 'tap_gate', gate: GATE, control: CONFIRM, expect: { screen: 'invoice_list' } },
       screen: GATE, element: confirmDef, intent_critical: true, tree,
-      trigger: { status: 'miss', element: CONFIRM, tried: [] }, build: '4412', ...bounds,
+      trigger: { status: 'miss', element: CONFIRM, tried: [], candidates: [] }, build: '4412', ...bounds,
     });
     assert.ok(!candidates.some((c) => c.label === "Don't Allow"), `the safe escape was proposed as a replacement for the committing control: ${JSON.stringify(candidates)}`);
   });
@@ -157,7 +157,7 @@ describe('healing can never cross from one gate control to another (04 §7.3, is
     const candidates = scoreCandidates({
       recipe: 'r', step: { id: 's1', action: 'dismiss_gate', gate: GATE }, screen: GATE,
       element: dismissDef, intent_critical: false, tree,
-      trigger: { status: 'miss', element: DISMISS, tried: [] }, build: '4412', ...bounds,
+      trigger: { status: 'miss', element: DISMISS, tried: [], candidates: [] }, build: '4412', ...bounds,
     });
     assert.ok(!candidates.some((c) => c.label === 'Allow'), 'guided synthesizes this dismissal unattended — it must never press Allow');
   });

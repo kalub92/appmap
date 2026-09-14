@@ -530,6 +530,12 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
         issues.push(issue(3, file, e.to === PREVIOUS_SCREEN ? `edge to _previous is only allowed on gates (02 §4.2)` : `edge to ${e.to}: no such screen file`, `${loc}/to`));
       }
       const a = e.action;
+      // issue #24: same rule as a recipe step — a plain `tap` edge naming a gate control would be
+      // expanded into a step the runner dismisses the gate before executing. A gate's OWN file is
+      // the exception: `{tap <dismiss>} → _previous` is how a gate has always modelled its escape.
+      if (!isGate && a.type === 'tap' && gateControlIds.has(a.element)) {
+        issues.push(issue(2, file, `edge element ${a.element} is a control of ${gateControlIds.get(a.element)} — a gate is dismissed, never navigated through; model the interrupter on ${gateControlIds.get(a.element)} and let the runner handle it (01 R7, issue #24)`, `${loc}/action/element`));
+      }
       if ('element' in a && a.element !== undefined) {
         if (!registry.has(a.element)) issues.push(issue(2, file, `edge element ${a.element} is not registered in ids.yaml`, `${loc}/action/element`));
         else if (!declared.has(a.element)) {
