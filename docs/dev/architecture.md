@@ -13,8 +13,8 @@ signature without updating this file and every caller. Read `docs/dev/toolchain.
 | A1 | `src/yaml/load.ts`, `src/yaml/canonical.ts`, `src/yaml/schemas.ts`, `src/validate.ts`, `src/migrate-id.ts`, `src/merge-driver.ts` | stub | contract, `scrub.ts` (rule 8 patterns) |
 | A2 | `src/log.ts`, `src/store/db.ts`, `src/store/export.ts`, `src/events.ts`, `src/context.ts` | stub | contract, A1 |
 | B1 | `src/tree.ts`, `src/scrub.ts`, `src/signature.ts` | stub | contract |
-| B2 | `src/identify.ts`, `src/resolve.ts`, `src/plan.ts`, `src/format.ts` | stub | contract, B1 |
-| C1 | `src/observe.ts`, `src/recipes/match.ts`, `src/recipes/compile.ts`, `src/recipes/verbs.ts`, `src/recipes/lifecycle.ts` | stub | A2, B1, B2 |
+| B2 | `src/identify.ts`, `src/resolve.ts`, `src/plan.ts`, `src/format.ts`, `src/settle.ts` | stub | contract, B1 |
+| C1 | `src/observe.ts`, `src/recipes/match.ts`, `src/recipes/compile.ts`, `src/recipes/verbs.ts`, `src/recipes/values.ts`, `src/recipes/lifecycle.ts` | stub | A2, B1, B2 |
 | C2 | `src/heal.ts`, `src/recipes/guided.ts` | stub | A2, B1, B2, C1 (lifecycle, observe) |
 | C3 | `src/recipes/maestro.ts`, `src/recipes/headless.ts`, `src/drift.ts`, `src/router-import.ts` | stub | A2, B1, B2, C1, C2 |
 | D1 | `src/tools.ts`, `src/server.ts`, `src/ingest-socket.ts`, `src/index.ts` | stub | everything |
@@ -771,6 +771,66 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     rebuilt list; carrying reviewed `wait_for` steps into a rebuild is the filed follow-up. Both
     exemptions delete themselves: add the action to `COMPILABLE_STEP_ACTIONS` the day 04 §3.3
     emits it. Follow-up to issue #13.
+66. **A data assertion names the SLOT and is decided at ingest** (02 §6 `expect.value`, issue #23).
+    A recipe could say *a* thing was on screen, never that it was *the right* thing, so a `type`
+    step that no-opped saved whatever was already in the field and reported PASS — and 04 §8 kept
+    promoting it, parameterized recipes being exactly the ones that carry business logic.
+    Two constraints fixed the design. The map may hold no values (07 §2.3.5), so the assertion
+    references `{param}` and validate rule 8 rejects a literal — strictly stronger than the PII
+    sweep, which `equals: "Acme Corp"` passes. And the comparison CANNOT run where the other four
+    `expect` keys run: `checkExpect` sees the scrubbed snapshot, which has no `value`/`text` on any
+    node and no `label` under any `dynamic` id — precisely what such an assertion targets — and the
+    raw tree never gets there (hook ingest is a different process, and `insertObservation` asserts
+    the snapshot is scrubbed). So it is evaluated once, at ingest, and only a BOOLEAN per assertion
+    is persisted (`Observation.value_checks`); the observed string never leaves that call, and a
+    failure reports `value:<element>` naming neither side. `compareValue` is deliberately
+    `compile.parameterize`'s comparison, or a recipe could not verify the run it was compiled
+    from — the trajectory typed `50` and the screen renders `$50.00`.
+    Rule 9 makes it bite: a declared param must be observed by SOME assertion. A `select
+    match.text` slot counts (the row is addressed by that text at replay); a `type` slot does not,
+    typing not being observing. Warning while `candidate`, error at `verified`/`ci_gate`.
+67. **A gate may declare more than one control, and only `tap_gate` presses the others**
+    (01 R7, 02 §6, issue #24). `dismiss` has to keep meaning "the safe escape" because two pieces
+    of machinery press it unattended — guided synthesizes a dismissal twice per step, the Maestro
+    export guards every step with one — so a `via:` on `dismiss_gate` would put a destructive
+    commit one enum value away from an autonomous press. Hence a separate action, and hence the
+    controls live under `gates[]` (decision 2) rather than relaxing the reserved prefix.
+    `tap_gate` had to be COMPILABLE, not merely expressible: decision 65(b) exempts reviewed steps
+    of kinds the compiler cannot emit, so a `tap_gate` outside `COMPILABLE_STEP_ACTIONS` would be
+    silently DROPPED by every automatic recompile — leaving a recipe named "delete the team"
+    passing while deleting nothing, which is decision 57's erosion aimed at the one step where it
+    matters most. Ingest therefore learned to attribute a tap to a present gate's controls.
+    Healing is bounded STRUCTURALLY, not statistically: scoring alone already put Cancel→Delete
+    within noise of the 0.75 line (two buttons in one alert agree on role, role path and parent
+    role), so the candidate search is scoped to the gate's own dialog, sibling controls are
+    excluded at any score, and a dialog or sibling that cannot be located refuses the heal
+    outright rather than widening it.
+68. **While a gate is up, memory beats an ancestor marker** (03 §5.1b, issue #24). A modal hides
+    the presenting screen's subtree including its `screen.<id>`, so the deepest surviving marker is
+    an ancestor and rule 2 answered it at confidence 1.0 — full confidence built on the ABSENCE of
+    the evidence that mattered. With `gates_present` non-empty, `covered_screen` (the session's
+    previous screen) wins at `IDENTIFY_SCORES.covered = 0.75`: above `IDENTIFY_UNKNOWN_THRESHOLD`
+    so it is an answer, below `required_ids` so any live evidence outranks a memory, below `marker`
+    so no consumer can mistake it for having seen one. Gated on a gate being present, because
+    otherwise an ordinary push/pop would report the previous screen for ever. Nothing is verified
+    from a capture with a gate up, and `identified_by` is STORED on the observation — `covered`
+    leaves no trace in `signature_after`, so every attempt to re-derive it is shadowed by another
+    rule.
+69. **The server tells the driver what to wait for** (04 §5 `settle`, issue #26). Every consumer of
+    `run_recipe` invented its own settle policy and the obvious one, `sleep(n)`, was ~85% of a real
+    suite's wall clock AND the flake mode. The hint is the step's own postcondition — the same
+    assertion `report_step` is about to check, so the two cannot drift apart — carried as a
+    `DriverTarget` rather than the reported issue's flat `identifier`, because three of the pilot's
+    own cases are not ids (static copy, a gate control with only a `label_regex`, a `select` row
+    addressed by text) and reusing the vocabulary means the driver translates it with the code it
+    already has.
+    It belongs on the server because only the server knows which elements are `dynamic` (so it
+    prefers the stable `screen.<id>` marker), what budget the recipe declared, and what `verify`
+    asserts on the last step. Two deliberate limits: the budget is NEVER shortened for a possible
+    gate — `gates_possible` discloses the risk instead, and a settle timeout is not a failure, the
+    driver reports anyway and the server answers `status: gate`; and a synthesized dismissal
+    settles on its own control disappearing, not on the interrupted step's postcondition, that step
+    having been handed back with `retry` and not re-run.
 
 ## 8. How to implement your module
 
@@ -846,7 +906,7 @@ each pilot tree equals the committed `signature.structural_hash`; variant hash f
 false otherwise; `labelNorm` cases.
 
 ### B2 — identification and resolution
-Fill: `identify.ts`, `resolve.ts`, `plan.ts`, `format.ts`.
+Fill: `identify.ts`, `resolve.ts`, `plan.ts`, `format.ts`, `settle.ts`.
 Tests: `identify.test.ts` — every pilot tree → its screen with confidence 1.0 (03 §12);
 `invoice_list.with_gate` → `invoice_list` + `gates_present: [gate.push_permission]`;
 `invoice_list.no_ids` → `unknown` with `invoice_list` among the top-3; marker removed but ids kept
@@ -858,7 +918,11 @@ resolves by `role_label`, `degraded: true`, confidence 0.6; two cells share `inv
 disambiguated by fingerprint (confidence 0.9); `plan.test.ts` — `plan_path(login, invoice_new)` →
 deep link; `plan_path(invoice_new, client_picker)` → one edge; `format.test.ts` — exact
 `get_screen` block for `invoice_list` (03 §8), summary ≤600 tokens and ≥ the recipe list,
-`formatRunStep` ≤120 tokens.
+`formatRunStep` ≤120 tokens; `settle.test.ts` — the pilot's `expect.screen` steps settle on
+`screen.<id>`, a step with no `expect` gets NO hint, a `visible` list prefers the non-`dynamic`
+id, a `wait_for` carries its own budget, the last step falls through to `verify`, a synthesized
+dismissal settles on its gate control going `not_visible`, and every hint still fits the 120-token
+step budget.
 
 ### C1 — observations, matching, compile, lifecycle
 Fill: `observe.ts` (incl. `nameScreen`, `finishTask`/`inferTaskOutcome`, Stop handling, the

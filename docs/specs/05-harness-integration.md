@@ -132,3 +132,18 @@ Optional (phase 2): a PreToolUse hook on `mcp__argent__gesture-tap` that consult
 
 - Whether Claude Code's PostToolUse can rewrite the driver's tool output (to strip a full tree down to a diff). If it can, add it; if not, rely on the driver's own snapshot options.
 - Session correlation across subagents: confirm the subagent's driver calls carry a `session_id` the hook can map to the parent run.
+- **`gate.open_in_app` is deliberately not modelled yet** (01 R5, issue #25). iOS may interpose an
+  "Open in <App>?" confirmation on a custom-scheme open, and it is a real interrupter: the app
+  receives the URL — and applies `?fixture=` — only after the sheet is confirmed, so a driver that
+  settles before dismissing it captures the pre-fixture screen and teaches the map the wrong thing.
+  It is left out of the committed pilot for two reasons. It cannot be verified without a simulator
+  showing the sheet, so its signature would be guesswork in a file whose whole job is to be
+  observed truth. And it inverts `dismiss`: the safe escape on that sheet is *Cancel*, which is
+  also the one that makes the deep link never arrive — so registering **Open** as the `dismiss`
+  would break the invariant 01 R7 just established, while registering Cancel would have guided
+  replay cancel every entry it was meant to confirm. When a real capture exists, model it with a
+  `controls[]` entry for **Open** and reach it with `tap_gate`, not as a dismissal.
+- `settle` (04 §5) assumes `argent await-ui-element` answers a boolean about one selector without
+  returning a tree. Confirm against a live `argent await-ui-element --help`; if it returns a tree,
+  the grant costs tokens and §6 rule 1 applies, so it should be withdrawn and the hint left for
+  other drivers to honour.

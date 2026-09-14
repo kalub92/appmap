@@ -40,6 +40,9 @@ Input: a normalized accessibility tree. The driver shapes `tree.ts` normalizes a
 
 ```
 1. gates: for each kind:gate screen, test its signature; collect matches → gates_present
+1b. covered: gates_present non-empty AND the caller passed covered_screen (the session's previous
+    screen) AND the deepest marker names a DIFFERENT screen → that screen, 0.75, done; the
+    marker-named ancestor travels in candidates
 2. marker: the DEEPEST node with id matching ^screen\. → screen_id = suffix, confidence 1.0, done
    (a pushed screen leaves the covered screen's marker behind, 01 R3; deepest in the tree,
     ties by greatest y, then document order)
@@ -51,6 +54,19 @@ score(screen) = max(signals) + 0.05 × (count of agreeing signals − 1), capped
 variants are scored the same way and the best (screen, variant) wins
 if best score < 0.6 → screen_id = unknown, plus top-3 candidates
 ```
+
+Rule **1b** exists because a modal hides the presenting screen's subtree *including its own
+`screen.<id>`*: rule 2 then finds an ancestor's marker and answers it at confidence 1.0 — a
+full-confidence answer built on the absence of the evidence that mattered, which is what made
+`expect: visible: [<a control of the dialog>]` unsatisfiable however correct it was (issue #24).
+0.75 is placed deliberately: above the 0.6 `unknown` threshold so it is an answer, below
+`required_ids` (0.8) so any live evidence in the tree outranks a memory, and below `marker` (1.0)
+so no consumer can mistake "I remember being here" for "I saw the marker". It is gated on a gate
+being present, that being the one state in which the tree is a known-unreliable witness of what is
+underneath it; without the guard an ordinary push/pop would report the previous screen for ever.
+Nothing is verified from a capture with a gate up (02 §8 wants one CLEAN observation), and the
+winning signal is stored on the observation as `identified_by` — `covered` leaves no trace in
+`signature_after`, so it cannot be re-derived afterwards.
 
 `unknown` is not an error. It is the signal that puts the session into `explore` mode and creates a `candidate` screen once the LLM names it (tool `name_screen`).
 
@@ -90,12 +106,19 @@ Tool names appear to the harness as `mcp__app-map__<name>`. All outputs are comp
 | `plan_path` | `{from?, to}` | `{deep_link}` or ordered edge list | prefers deep link (invariant 7); an omitted `from` is the last observation's screen, else `unknown` (§2) |
 | `match_recipe` | `{instruction, platform?}` | `{recipe_id, confidence, params_needed[]}` or `{no_match, candidates[]}` | regex cascade; candidates ≤ 8 lines |
 | `run_recipe` | `{recipe_id, params, mode: guided \| headless}` | guided: `{run_id, step}`; headless: run report | 04 §5–6 |
-| `report_step` | `{run_id, step_id, ok, note?}` | next step, `done`, or `fallback: {step, reason}` | verifies against last observation |
+
+| `report_step` | `{run_id, step_id, ok, note?}` | next step, `done`, or `fallback: {step, reason, screen_seen, screen_seen_seq, identified_by}` | verifies against last observation |
 | `record_observation` | `{tool, input, snapshot, ok}` | `{screen_before, screen_after}` | fallback when hooks are unavailable; costs tokens |
 | `name_screen` | `{screen_id, title?, deep_link?, force?}` | candidate screen created from last observation | explore mode only; `force` re-learns a screen that is no longer `candidate` and records `meta.relearned_from` (02 §8) |
 | `compile_recipe` | `{session, task, recipe_id, params[]}` | draft recipe YAML for review | 04 §3 |
 | `mark` | `{recipe_id \| screen_id, status}` | | human-in-the-loop promote/demote; exactly one id key says which kind. A screen demote is the only way back out of `verified` (02 §8) |
 | `export` | `{}` | list of files written | same as CLI `export` |
+
+Every step `run_recipe`/`report_step` hands out may also carry `settle` — the postcondition the
+driver should poll for before reporting, absent when the step declares nothing pollable (04 §5).
+A fallback carries `screen_seen_seq` and `identified_by` beside `screen_seen`, so a reader can tell
+which capture the screen came from and whether it was *seen* (a marker) or *remembered*
+(`covered`, while a gate occluded it — §5.1b).
 
 `get_screen` output format (fixed, parse-stable):
 
