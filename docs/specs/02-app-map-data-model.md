@@ -21,7 +21,7 @@ Define exactly what is stored, where, in what shape, and how it survives a share
 schema_version: 1
 app_id: com.example.app
 platform: ios                      # ios | android
-deep_link_scheme: appmap
+deep_link_scheme: appmap          # the scheme THIS app registers (01 R5); default `appmap`
 build:                             # last build the map was exported against
   version: "2026.9.1"              # quote all three: unquoted, 1.0 is a float and 0000000 is the integer 0
   build_number: "4412"
@@ -164,7 +164,10 @@ steps:
   # … or, where the list container is not an accessibility element (SwiftUI, 01 R4), name the row:
   # - {id: s4, action: select, cell: client.picker.cell, match: {text: "{client}"}, expect: {screen: invoice_new}}
   - {id: s5, action: tap,   element: invoice.save.button,   expect: {screen: invoice_detail}, intent_critical: true}
-verify: {screen: invoice_detail, visible: [invoice.detail.amount.text]}
+verify:
+  screen: invoice_detail
+  visible: [invoice.detail.amount.text]
+  value: [{element: invoice.detail.amount.text, equals: "{amount}"}]   # the SLOT, never a value
 status: verified                     # candidate | verified | ci_gate | retired
 provenance:
   compiled_from: traj_2026-09-01_0007
@@ -174,7 +177,11 @@ provenance:
 last_verified_build: "4412"
 ```
 
-Step actions: `tap`, `type`, `select`, `swipe`, `open_link`, `wait_for`, `dismiss_gate`. `select` picks one row out of repeated content and has two forms carrying the same `match.text`: `{list, match}` names a container that is itself an accessibility element, and `{cell, match}` names the repeated row id every row shares — the only form a SwiftUI list can express, since its container never reaches the driver (01 R4). Exactly one of `list`/`cell` is present; a step carrying both matches no branch of the schema. `expect` conditions: `screen`, `focused`, `visible`, `not_visible`, `text_present` (static copy only). Every step with an `expect` is a verification point; steps without one inherit "screen unchanged". `focused` is **Android/Maestro-only**: the Maestro hierarchy carries a `focused` attribute, while Argent's iOS accessibility snapshot carries no focus flag at all, so an `expect.focused` on `platform: ios` can never be satisfied however well the tap worked — `validate` warns (rule 2 below, 04 §10) and the compiler writes `visible` there instead.
+Step actions: `tap`, `type`, `select`, `swipe`, `open_link`, `wait_for`, `dismiss_gate`, `tap_gate`. `select` picks one row out of repeated content and has two forms carrying the same `match.text`: `{list, match}` names a container that is itself an accessibility element, and `{cell, match}` names the repeated row id every row shares — the only form a SwiftUI list can express, since its container never reaches the driver (01 R4). Exactly one of `list`/`cell` is present; a step carrying both matches no branch of the schema. `tap_gate` presses a NAMED control of a gate — `{action: tap_gate, gate: gate.team_removal, control: gate.team_removal.confirm, expect: {...}}` — and is the only way to reach the committing half of a destructive dialog. `dismiss_gate` cannot: `dismiss` means *the safe escape*, and guided replay synthesizes a dismissal twice per step while the Maestro export guards every step with one, both unattended, so it must never mean anything but Cancel. The control must be declared in `ids.yaml` `gates[].controls[]` (01 R7) and `expect` is required — a committing step with no postcondition can be neither verified nor healed (04 §7.2 rule 3). A plain `tap` naming a gate control is a validate error: the runner would dismiss the gate before the step ran (rule 2 below).
+
+`expect` conditions: `screen`, `focused`, `visible`, `not_visible`, `text_present` (static copy only), `value`. Every step with an `expect` is a verification point; steps without one inherit "screen unchanged".
+
+`value` is the data assertion: `value: [{element: <id>, equals|contains: "{param}"}]` — "this element now holds the value the run was given". `visible` can only say *a* thing is on screen; without `value` a recipe handed `{amount}` could type nothing, save whatever was already in the field, and report PASS. It names the **slot**, never a literal (rule 8 rejects one), so the map stores the reference and the value lives only in the run (07 §2.3.5). Comparison is the compiler's own: `money`/`number` numerically, everything else trimmed and case-insensitive — otherwise a recipe could not verify the run it was compiled from, where the trajectory typed `50` and the screen renders `$50.00`. It is evaluated **at ingest**, against the raw tree, and only a boolean per assertion is kept (§7): by the time replay sees the snapshot the scrubber has dropped `value`/`text` from every node and dropped `label` under every `dynamic` id, which is exactly what such an assertion targets. `focused` is **Android/Maestro-only**: the Maestro hierarchy carries a `focused` attribute, while Argent's iOS accessibility snapshot carries no focus flag at all, so an `expect.focused` on `platform: ios` can never be satisfied however well the tap worked — `validate` warns (rule 2 below, 04 §10) and the compiler writes `visible` there instead.
 
 `provenance.machine_recompile: true` means this version's *steps* were rebuilt by the automatic recompile (04 §8), not authored or approved by a human. It sits directly above `reviewed_by` because that is what it qualifies: the signature is historical, carried over from the version the reviewer actually read. `mark(ci_gate, reviewer)` deletes the key (07 §7).
 
@@ -281,6 +288,21 @@ on the loaded map (`summary` names them), but never block either.
 6. `intent_critical` elements in `ids.yaml` and screen files agree.
 7. Serialization is canonical (re-export produces no diff).
 8. No forbidden content: regex sweep for emails, phone numbers, 16-digit numbers, currency values inside `elements[].label` or any `text` field; any hit fails validation.
+
+   Also an **error** for a LITERAL in an `expect.value` comparison (§6, issue #23). A value
+   assertion may only compare against a `{param}` slot, so the map holds the reference and the value
+   lives in the run (07 §2.3.5). This is strictly stronger than the sweep above, which only rejects
+   strings that *look* like data — `equals: "Acme Corp"` passes every pattern while being exactly
+   what the rule exists to keep out of a committed file.
+9. **Every declared recipe parameter is asserted on.** A parameter counts as observed when an
+   `expect.value` / `verify.value` slot names it, or a `select` step matches on it — the row is
+   addressed by that text at replay, so the step genuinely fails when nothing matches. A `type`
+   step's slot does **not** count: typing is not observing, and a recipe that types `{name}` into a
+   field that never took it, saves whatever was already there and reports PASS is the whole of
+   issue #23. **Warning** while `status: candidate` — a draft under review, and 04 §3.8 is where
+   the assertions get added — and an **error** at `verified` / `ci_gate`, which are claims that CI
+   is gated on something real. Without this rule §6's `value` is merely available, and §8's
+   `lifecycle.recompile` keeps promoting recipes that never exercise their own parameters.
 
 ## 11. Acceptance criteria
 

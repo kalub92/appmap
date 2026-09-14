@@ -35,6 +35,7 @@ import type { AppMapContext } from '../context.ts';
 import type { ElementDef, ElementId, Expect, GateId, Locator, LocatorStrategy, LoadedMap, MaestroExportResult, RecipeFile, RecipeParams, RecipeStatus, RecipeStep, ScreenFile, ScreenId, StepId } from '../types.ts';
 import { DEEP_LINK_REGEX, HEADLESS_STRATEGIES, emitDeepLink } from '../types.ts';
 import { assertionOp } from './values.ts';
+import { DEFAULT_SETTLE_MS } from '../settle.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { ciParamsFile, maestroFlowFile, maestroOutDir } from '../paths.ts';
 
@@ -75,7 +76,10 @@ export interface FlowOptions {
 type Command = Record<string, unknown>;
 
 /** 10 000 ms — the `expect screen` / `wait_for` default from the 04 §6.2 mapping table. */
-const DEFAULT_WAIT_MS = 10_000;
+// one budget for both rungs: the guided settle hint (issue #26) and this export wait the same
+// amount for the same assertion, so a recipe cannot behave differently depending on which rung
+// replayed it
+const DEFAULT_WAIT_MS = DEFAULT_SETTLE_MS;
 
 /**
  * `{amount}` → `params.amount` (String()); unknown slots are left as-is. Mirrors

@@ -49,6 +49,7 @@
  */
 import type { DriverTarget, Expect, FallbackPayload, FindElementResult, LoadedMap, RecipeFile, RunStep, ScreenFile, ScreenId, SummaryResult } from './types.ts';
 import { edgeElement, emitDeepLink, isUnlearnedEdgeElement, routeKey, screenIdOfDeepLink, stepElement } from './types.ts';
+import { formatSettle } from './settle.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { capTokens } from './token.ts';
 
@@ -258,6 +259,8 @@ export function formatRunStep(step: RunStep): string {
   if (step.action === 'select' && step.match_text !== undefined) parts.push(`match ${q(step.match_text)}`);
   const expect = formatExpect(step.expect);
   if (expect !== undefined) parts.push(expect);
+  const settle = formatSettle(step.settle);
+  if (settle !== undefined) parts.push(settle);
   if (step.intent_critical === true) parts.push('[intent_critical]');
   if (step.announce === true) parts.push('[announce]');
   if (step.healing === true) parts.push('[healing]');

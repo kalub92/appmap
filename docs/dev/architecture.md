@@ -157,7 +157,8 @@ tests compare). The rules:
 |---|---|
 | ids | schema_version, screens, gates, elements |
 | ids.screen | id, title, deep_link |
-| ids.gate | id, dismiss |
+| ids.gate | id, dismiss, dismiss_intent_critical, controls |
+| ids.gate.control | id, intent_critical |
 | ids.element | id, kind, intent_critical, dynamic, label_regex |
 | manifest | schema_version, app_id, platform, deep_link_scheme, build, generated_at, generator |
 | build | version, build_number, git_sha |
@@ -174,9 +175,10 @@ tests compare). The rules:
 | recipe | id, version, platform, description, matches, params, preconditions, entry, steps, verify, status, provenance, last_verified_build |
 | param | name, type, required, values |
 | entry | deep_link, fallback_path |
-| step | id, action, element, list, match, text, direction, duration_ms, url, gate, timeout_ms, expect, intent_critical |
+| step | id, action, element, list, cell, match, text, direction, duration_ms, url, gate, control, timeout_ms, expect, intent_critical |
 | match | text |
-| expect | screen, focused, visible, not_visible, text_present |
+| expect | screen, focused, visible, not_visible, text_present, value |
+| value_assertion | element, equals, contains |
 | provenance | compiled_from, compiled_by, reviewed_by, revision_of |
 | mcp-allowlist | schema_version, servers |
 | server | name, source, transport, command, args, package, version, reviewer, reviewed_at, notes |
@@ -184,10 +186,14 @@ tests compare). The rules:
 2. **Omission**: `undefined`/`null` keys omitted; optional empty arrays omitted; required arrays
    (`elements`, `edges`, `steps`, `params`, `screens`, `gates`, `elements` in ids, `servers`)
    kept even when empty.
-3. **Sorting**: object lists `screens`, `gates`, `elements`, `variants` by `id`; `edges` by
+3. **Sorting**: object lists `screens`, `gates`, `elements`, `variants`, `controls` by `id`;
+   `edges` by
    `(action.type, action.element ?? action.url ?? action.gate ?? '', action.direction ?? '', to)`;
-   `servers` by `name`; string sets `required_ids`, `dynamic_regions`, `gates`, `sources`,
-   `visible`, `not_visible` sorted; all comparisons by code point (`<`). **Never reordered**:
+   `servers` by `name`; `expect.value` by `(element, equals-before-contains)` — keyed on
+   `<parent>.<key>`, not on the bare key, because `condition` also has a `value` key and a bare-key
+   rule would be one schema change away from reordering it; string sets `required_ids`,
+   `dynamic_regions`, `gates`, `sources`, `visible`, `not_visible` sorted; all comparisons by code
+   point (`<`). **Never reordered**:
    `steps`, `locators`, `matches`, `params`, `fallback_path`, `preconditions`, `postconditions`,
    `required_labels`, `args`, `values`.
 4. **Text**: `yaml@2.9.0 stringify(ordered, { indent: 2, lineWidth: 0, minContentWidth: 0,
@@ -271,9 +277,18 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 
 1. **Block vs flow style** — 02 §2.3 mandates block style while 02 §4/§6 examples use flow
    mappings; canonical form is block everywhere (§3 above).
-2. **Gate dismiss controls live only in `ids.gates[].dismiss`** (01 R1 example; the sibling
+2. **Gate controls live only under `ids.gates[]`** (01 R1 example; the sibling
    `scripts/app-map/gen-ids` rejects `gate.*` under `elements`). Validation rule 02 §10.2 treats
-   them as registered; `LoadedMap.elementRegistry` synthesizes `{kind:'button'}` entries.
+   them as registered; `LoadedMap.elementRegistry` synthesizes `{kind:'button'}` entries, from the
+   one shared `types.gateControlEntries`.
+   **Widened from one control to N** (issue #24): `dismiss` plus any number of `controls[]`. The
+   single-home rule is unchanged and is exactly why the widening goes here rather than relaxing
+   `ELEMENT_ID_REGEX`'s `(?!gate\.)` — a destructive dialog's confirm button was previously
+   inexpressible, being neither a gate control (only `dismiss` existed) nor an element (the prefix
+   is reserved). Making it a plain element would also have been strictly worse: `resolve`'s
+   `isGateElement` keys on the `gate.` prefix to search the whole tree with gate exclusion off, so
+   a non-prefixed id declared on a gate would be scoped to the screen root and then subtracted by
+   `gateDialogNodes` — declared and permanently unresolvable.
 3. **Structural-hash encoding** (02 §4.4 gives the idea, not the bytes): §4 above. Region node
    included, descendants excluded, duplicates kept.
 4. **Path index vs sibling_index** — the 02 §4.1 example has `navigationBar/button[1]` and
@@ -356,7 +371,11 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     scrubber.
 25. **`summary` text format is fixed** (03 §8 lists content, not layout) — see format.ts.
 26. **`intent_critical` absent means false** for the agreement rule (02 §10.6), in ids, screen
-    elements and recipe steps alike.
+    elements and recipe steps alike. **One exception**: `ids.yaml` `gates[].controls[]` REQUIRES it
+    (01 R7, issue #24). A gate control is by construction the non-escape half of an interrupter, so
+    the author states whether pressing it commits something rather than defaulting into "no"; and
+    the answer is what makes 04 §7.2's exact-label rule protect the control. `dismiss` keeps the
+    default, declarable as `dismiss_intent_critical`.
 27. **`route` identification signal** comes from the `url` input of the observation — the driver's
     deep-link call, `open-url` on Argent (`observe.ts` reads `input.url`; Argent does not report
     routes); `tree.route` is honored when a driver provides it.
@@ -422,7 +441,28 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 41. **heal-report / drift-report carry closed codes only** (07 §2.4): `HeadlessReport.error_code`
     (`HEADLESS_ERROR_CODES`) + `failed_command_index` replace free-text `error` and `flow_path`;
     drift `reason` is `DRIFT_REASONS`. Maestro output goes to `.local/server.log` at `debug`.
-42. **`deep_link_scheme` is the constant `appmap`** (01 R5 fixes it; every pattern hard-codes it).
+42. **`deep_link_scheme` is per app; the committed MAP is scheme-relative** (01 R5, issue #25).
+    It was the constant `appmap`, which meant every instrumented app registered the same custom URL
+    scheme and the OS routed `appmap://<screen>` — and its `?fixture=` — to whichever of them it
+    liked. The failure surfaced as an inspector timeout on the *correct* bundle id, which reads like
+    anything but a routing problem.
+    The manifest now declares the scheme the app actually registers (default `appmap`), but every
+    `deep_link`, `signature.route` and `open_link.url` in the YAML keeps the canonical `appmap://`
+    form. `types.emitDeepLink` rewrites on the way OUT (guided `open_link`, Maestro `openLink`,
+    `plan_path`, `get_screen`, the drift tour) and `types.canonicalDeepLink` on the way IN
+    (`identify`'s route signal, `import-router`, `name_screen`).
+    The alternative — widening the six committed patterns to accept any scheme and cross-checking
+    the manifest in `validate` — was rejected on four counts: a JSON Schema cannot see the manifest
+    (`loadSchemas` caches one validator per kind per directory, with no per-document context), so
+    rule 1 would get strictly weaker; the map stops being portable across two differently-schemed
+    builds; renaming the scheme becomes a whole-map diff and a merge-driver event on every screen
+    file instead of one manifest line; and `map.routes`, keyed on `routeKey(deep_link)`, would have
+    to be rebuilt whenever the manifest changed. Files the MAP owns are canonical; files the APP
+    produces (`router-export.json`) are scheme-bearing and canonicalised on import.
+    Two things enforce what a schema cannot: `validate` rule 1 warns when the scheme is not the
+    default (nothing in the repo can prove the binary registers it), and `run_recipe` /
+    `run --headless` refuse with `deep_link_scheme_collision` when a probe positively names another
+    bundle claiming it. An unanswerable probe is never evidence.
 43. **Maestro version check runs once in `startServer`** after `openContext`, non-fatal (`warn`),
     off the first-tool critical path (03 §11, 03 §13, 07 §5.3); headless runs re-check.
 44. **`get_screen` `conf`** = the session's last observation `confidence` when its `screen_after`

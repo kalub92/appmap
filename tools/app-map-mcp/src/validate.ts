@@ -1,5 +1,5 @@
 /**
- * [A1] `app-map validate` — 02 §10 rules 1–8 (06 R1 blocks the PR on any error).
+ * [A1] `app-map validate` — 02 §10 rules 1–9 (06 R1 blocks the PR on any error).
  *
  *  1. every file validates against its JSON Schema (yaml/schemas.ts); plus a safe-regex check
  *     on every user-authored regex source (`matches[]`, `label_regex`): ≤200 chars, no nested
@@ -44,7 +44,14 @@
  *     SSN-like (`scrub.ts` PII_PATTERNS); `{param}` slots are exempt. Also a WARNING when a
  *     `title` or element `label` is not in `.local/strings.<platform>.txt` while that file
  *     exists (07 §2.1: static copy must exist in the app's string tables); gates carry no
- *     `title` (architecture §7 decision 33)
+ *     `title` (architecture §7 decision 33). Also an ERROR for a literal in an `expect.value`
+ *     comparison (issue #23): only a `{param}` slot may appear there, which is strictly stronger
+ *     than the PII sweep — `equals: "Acme Corp"` matches no pattern while being exactly the
+ *     committed data value 07 §2.3.5 forbids
+ *  9. every declared recipe param is ASSERTED on — an `expect.value`/`verify.value` slot, or a
+ *     `select match.text` slot (the row is addressed by that text at replay, so the step really
+ *     fails when nothing matches). A `type` step's slot does NOT count: typing is not observing,
+ *     which is issue #23 entire. WARNING while `candidate`, ERROR at `verified`/`ci_gate`
  *
  * Also enforced: file name equals `id` (02 §2.1); recipe `platform` equals its directory;
  * dynamic elements carry no `label` (07 §2.3).
@@ -56,7 +63,7 @@ import { basename, join, relative, sep } from 'node:path';
 import type { AppMapConfig, Platform } from './config.ts';
 import { PLATFORMS } from './config.ts';
 import type { BuildNumber, Condition, ElementId, Expect, IdsElement, IdsRegistry, Manifest, RecipeFile, RecipeParam, ScreenFile, UnlearnedEdgeElementReason, ValidateResult, ValidationIssue } from './types.ts';
-import { ID_REGEX, PREVIOUS_SCREEN, focusObservable, gateControlEntries, isNewerBuild, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
+import { CANONICAL_DEEP_LINK_SCHEME, ID_REGEX, PREVIOUS_SCREEN, focusObservable, gateControlEntries, isNewerBuild, markerOfScreen, routeKey, stepElement, unlearnedEdgeElementMessage } from './types.ts';
 import { AppMapError } from './errors.ts';
 import { allowlistFile, idsFile, kindForPath, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from './paths.ts';
 import type { YamlKind } from './paths.ts';
@@ -206,7 +213,7 @@ export function validateMap(config: AppMapConfig, opts: ValidateOptions = {}): V
       const strings = stringsFile(config, platform);
       // rule 2's stale-capture carve-out compares each screen against the build the manifest names
       // (issue #12); a manifest that failed rule 1 leaves it undefined and the carve-out stays off
-      const input: CrossRefInput = { platform, ids, screens, recipes, build: manifest?.build.build_number };
+      const input: CrossRefInput = { platform, ids, screens, recipes, build: manifest?.build.build_number, ...(manifest?.deep_link_scheme !== undefined ? { deepLinkScheme: manifest.deep_link_scheme } : {}) };
       if (existsSync(strings)) input.staticStrings = new Set(readFileSync(strings, 'utf8').split('\n').filter((l) => l.length > 0));
       issues.push(...crossReferenceIssues(input));
     }
@@ -307,6 +314,12 @@ export interface CrossRefInput {
    * and that subject simply never fires, so callers that have no manifest lose nothing else.
    */
   build?: BuildNumber;
+  /**
+   * The scheme this platform's `manifest.yaml` declares (01 R5). Rule 1 warns when it is not the
+   * default, because that is a claim about the SHIPPED BINARY that no file in the repo can check
+   * (issue #25); omit it and the warning simply never fires.
+   */
+  deepLinkScheme?: string;
 }
 
 /**
@@ -347,6 +360,16 @@ export function crossReferenceIssues(input: CrossRefInput): ValidationIssue[] {
       registry.set(c.id, c);
       gateControlIds.set(c.id, g.id);
     }
+  }
+  // 01 R5 / issue #25: the manifest is the only place the app's scheme is written down, and
+  // nothing in the repo can prove the binary registers it — a mismatch surfaces as an inspector
+  // timeout on the correct bundle id, which reads like anything but a routing problem. A WARNING,
+  // because a non-default scheme is the RIGHT answer for a repo with two instrumented apps; it
+  // just has to be matched in the app.
+  if (input.deepLinkScheme !== undefined && input.deepLinkScheme !== CANONICAL_DEEP_LINK_SCHEME) {
+    issues.push(issue(1, `${input.platform}/manifest.yaml`,
+      `deep_link_scheme is ${input.deepLinkScheme}, not the default ${CANONICAL_DEEP_LINK_SCHEME} — the app must register exactly that scheme (${input.platform === 'ios' ? "the Debug target's CFBundleURLTypes" : 'the debug intent-filter'}), or every deep link times out with no indication why (01 R5, issue #25)`,
+      '/deep_link_scheme', 'warning'));
   }
   const idsScreenById = new Map(ids.screens.map((s) => [s.id, s]));
   // rule 8 over the registry itself (screen titles); validateMap dedupes it across platforms

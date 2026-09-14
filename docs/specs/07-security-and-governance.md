@@ -21,13 +21,25 @@ Screenshots or image paths; text field values; list/cell/table content; names, e
 4. Regex deny list applied to every surviving string: email, E.164/US phone, 13–19 digit runs, currency patterns (`[$€£]\s?\d`), IBAN-like, SSN-like. Any hit → string replaced by `[redacted]` and the observation flagged `scrub_hit` for review of the rule set.
 5. Fixture parameter values (e.g. the test client name) are treated as data, not copy: they are never stored as literals in recipes — the compiler parameterizes or fails (04 §3.4).
 6. `app-map validate` rule 8 re-sweeps committed YAML as a backstop.
+7. **An `expect.value` assertion is decided here, at ingest, and only its VERDICT is kept** (02 §6,
+   issue #23). It has to be: by the time replay sees the observation, rule 1 has dropped every
+   `value`/`text` and rule 2 has dropped the `label` of exactly the `dynamic` elements such an
+   assertion targets — and rule 4 would redact `$50.00` even if it survived. So the comparison runs
+   against the raw tree inside the one function that holds it, and what is written to
+   `Observation.value_checks` is one **boolean** per declared assertion, keyed by the declaration
+   (`<element>|<equals|contains>|<{param}>`). The observed string never leaves that call: not to
+   SQLite, not to `.local/trajectories`, not to the events feed, and not into a fallback message —
+   a failed assertion reports `value:<element>`, naming neither the expected value nor the seen one.
+   The map itself holds only the `{param}` slot, which rule 5 above already requires and validate
+   rule 8 now enforces for this key specifically.
 
 ### 2.4 Retention
 `.local/trajectories` and `.local/events.jsonl` older than 14 days are deleted on server start. `.local/` is in `.gitignore`. Nothing under `.local/` is uploaded as a CI artifact except `drift-report.json` and `heal-report.json`, which contain ids and scores only.
 
 ## 3. Execution policy
 
-- Recipes run only against Debug builds on simulators/emulators using **fixture accounts** in a sandbox environment. The `appmap://` handler and fixtures do not exist in Release builds (01 §2).
+- Recipes run only against Debug builds on simulators/emulators using **fixture accounts** in a sandbox environment. The deep-link handler and fixtures do not exist in Release builds (01 §2).
+- A run that opens a deep link also refuses when another installed bundle registers the app's `deep_link_scheme` (`deep_link_scheme_collision`, 01 R5 / issue #25): the OS would route the link — and the `?fixture=` that seeds state — to an app the run never meant to touch. Only a positive answer naming a foreign bundle refuses; a probe that cannot answer (no device, no `simctl`/`adb`) is not evidence and changes nothing.
 - The server refuses to run a recipe if the connected app's bundle is a Release build or the environment is not the sandbox (checked via a debug endpoint the app exposes under `APP_MAP_DEBUG`).
 - `intent_critical` steps in guided mode are announced to the user by the LLM before execution when the recipe status is `candidate`; `verified`/`ci_gate` recipes run them without prompting, which is why promotion requires review (§7).
 

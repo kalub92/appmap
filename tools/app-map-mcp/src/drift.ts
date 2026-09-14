@@ -30,7 +30,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { AppMapContext } from './context.ts';
 import type { AnyTree, BuildNumber, DriftReason, DriftReport, DriftScreenResult, DriftStatus, ElementId, LoadedMap, RouterExport, ScreenFile, ScreenId } from './types.ts';
-import { DEEP_LINK_REGEX, stepElement } from './types.ts';
+import { DEEP_LINK_REGEX, emitDeepLink, stepElement } from './types.ts';
 import type { ExecFn, HierarchyProvider } from './recipes/headless.ts';
 import { defaultExec, defaultHierarchy } from './recipes/headless.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
@@ -179,7 +179,9 @@ export async function driftTour(ctx: AppMapContext, opts: DriftOptions): Promise
       continue;
     }
     try {
-      await open(link, { exec, ...(udid ? { udid } : {}) });
+      // the map writes every link `appmap://`; the device only answers the scheme the app
+      // registered (`manifest.deep_link_scheme`, issue #25)
+      await open(emitDeepLink(link, ctx.map.manifest?.deep_link_scheme), { exec, ...(udid ? { udid } : {}) });
     } catch (e) {
       ctx.log.warn('drift: could not open the deep link', { screen: screen.id, error: (e as Error).message });
       results.push(unreachable(screen, 'broken', 'open_failed', ciGate));

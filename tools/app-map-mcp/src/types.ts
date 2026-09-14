@@ -977,6 +977,37 @@ export interface RunStep {
   announce?: boolean;
   /** the target is a heal candidate awaiting its postcondition (04 §7.2.3); the `healed` summary follows on the next report_step */
   healing?: boolean;
+  /**
+   * 04 §5 / issue #26: how the driver knows this step has landed, before it calls `report_step`.
+   * Poll for it, then report; ABSENT means the step declares nothing pollable — report immediately,
+   * never sleep. Derived server-side (`settle.ts`) because only the server knows which elements are
+   * `dynamic` and what budget the recipe declared.
+   */
+  settle?: SettleHint;
+}
+
+/** 04 §5 / issue #26: the two conditions a settle target can be polled for. */
+export const SETTLE_CONDITIONS = ['visible', 'not_visible'] as const;
+export type SettleCondition = (typeof SETTLE_CONDITIONS)[number];
+
+/**
+ * Which declaration produced a settle target. Reported so the choice is reviewable, and so a driver
+ * that cannot express one form can skip it rather than time out on it.
+ */
+export type SettleSource =
+  | 'expect.screen' | 'expect.visible' | 'expect.text_present' | 'expect.focused' | 'expect.value' | 'expect.not_visible'
+  | 'verify.screen' | 'verify.visible' | 'verify.text_present' | 'verify.focused' | 'verify.value' | 'verify.not_visible'
+  | 'gate.retry';
+
+export interface SettleHint {
+  /** the SAME addressing vocabulary `RunStep.target` uses, so a driver translates it with one code path */
+  target: DriverTarget;
+  condition: SettleCondition;
+  /** an upper bound, not a sleep: poll until satisfied, then report at once */
+  timeout_ms: number;
+  source: SettleSource;
+  /** gates the destination screen declares on entry — while one is up the marker is occluded (04 §5) */
+  gates_possible?: GateId[];
 }
 
 export const FALLBACK_REASONS = [
@@ -1121,7 +1152,7 @@ export function probeConditions(probe: BuildProbeResult | null | undefined): Pic
  * must contain ids and scores only (07 §2.4): Maestro's stdout/stderr (which can echo on-screen
  * text) stays in the server log, never in the report.
  */
-export const HEADLESS_ERROR_CODES = ['maestro_failed', 'maestro_unavailable', 'not_headless_eligible', 'release_build_refused', 'timeout', 'hierarchy_unavailable'] as const;
+export const HEADLESS_ERROR_CODES = ['maestro_failed', 'maestro_unavailable', 'not_headless_eligible', 'release_build_refused', 'deep_link_scheme_collision', 'timeout', 'hierarchy_unavailable'] as const;
 export type HeadlessErrorCode = (typeof HEADLESS_ERROR_CODES)[number];
 
 export interface HeadlessReport {

@@ -331,7 +331,7 @@ $ app-map run create_invoice --headless --json
 
 The flow's command list is parsed back to the recipe step that broke, and no on-screen text reaches the
 report. With the stubs below taken off `PATH` — nothing faked at all — the run stops before it starts:
-`"error_code": "release_build_refused"`, `steps_done: 0`, no debug probe, no execution.
+`"error_code": "release_build_refused"`, `steps_done: 0`, no debug probe, no execution. A run that opens a deep link is also refused with `deep_link_scheme_collision` when another installed bundle registers the app's `deep_link_scheme` (01 R5): the OS would deliver the link, and the `?fixture=` seeding state with it, to an app the run never meant to touch.
 
 *Fake device; no simulator, no real Maestro, no app. Three shell stubs stand in for `maestro`, `xcrun` and
 `plutil`, mirroring `makeFakeDevice()` in `src/test/cli.test.ts`, and the params came from
@@ -507,7 +507,8 @@ the table are elided. The two JSON rows are separate runs of that same stub with
   `fixtures/hooks/post-tool-use.tap.json`: of the 29 human-readable strings in its normalized tree, 15
   survive `scrub()` and 14 do not — among them the date picker's rendered `Oct 10, 2026`.
 - **Debug and sandbox only.** `run_recipe` reads the app's `APP_MAP_DEBUG` probe and refuses with
-  `release_build_refused` against a Release build.
+  `release_build_refused` against a Release build; `deep_link_scheme_collision` when another
+  installed app claims the same deep-link scheme (01 R5).
 - **Pinned supply chain.** Every MCP server must be in `app-map/policy/mcp-allowlist.yaml` at an exact version;
   `policy-check` fails on an unlisted server or an unpinned `npx`.
 - **Human-reviewed heals.** An accepted heal is `healed_pending_review`, never `verified`. Nightly heals open

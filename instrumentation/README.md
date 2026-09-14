@@ -166,7 +166,49 @@ let appMapLinks = AppMapDeepLinkHandler(fixtures: DebugFixtures()) { route in
 if appMapLinks.handle(url) { return }
 #endif
 ```
-Register the `appmap` URL scheme in the Debug target's Info.plist only (`CFBundleURLTypes`).
+Register the URL scheme in the Debug target's Info.plist only (`CFBundleURLTypes`).
+
+**One app per scheme (01 R5, issue #25).** A custom URL scheme is first-come-first-served across
+the device. If two app-map-instrumented apps are ever installed together — a CI machine, a shared
+simulator, a team adopting this across two apps — and both register `appmap`, the OS routes
+`appmap://<screen>` to whichever it likes. The other app comes to the foreground, applies the
+`?fixture=` that was meant to seed *your* state, and your app-scoped capture describes an app with
+nothing on it and times out. It reads as a hung inspector on the correct bundle id; only a
+screenshot shows what actually happened.
+
+So give each app its own, and change all three together:
+
+```swift
+// iOS, once at launch in the debug wiring
+AppMapDeepLink.scheme = "appmap-pokedexteams"
+```
+```kotlin
+// Android, Application.onCreate under BuildConfig.APP_MAP_DEBUG
+AppMapDeepLink.scheme = "appmap-pokedexteams"
+```
+```kotlin
+// android/app/build.gradle.kts — the intent filter reads this placeholder
+android { buildTypes { debug { manifestPlaceholders["appMapScheme"] = "appmap-pokedexteams" } } }
+```
+```yaml
+# app-map/<platform>/manifest.yaml
+deep_link_scheme: appmap-pokedexteams
+```
+
+The parser and the URL registration MUST move together: a configurable parser behind a hard-coded
+`CFBundleURLTypes` / `android:scheme` means the app never receives the link at all, which is worse
+than the collision. The map itself does not change — every `deep_link` in the YAML stays
+`appmap://` and the server rewrites it on the way to the device, so renaming the scheme is a
+one-line manifest diff. `app-map validate` warns whenever the scheme is not the default, and
+`run_recipe` refuses with `deep_link_scheme_collision` if it can see another bundle claiming it.
+
+**A gated scheme delays the fixture.** iOS may interpose an "Open in …?" confirmation on a
+custom-scheme open; the app receives the URL — and therefore applies `?fixture=` and routes — only
+*after* it is confirmed. Anything that settles before the dismissal captures the screen in its
+pre-fixture state, which teaches the map the wrong thing rather than failing visibly. With a gated
+scheme the settle belongs after the dismissal. Register the sheet as a gate (01 R7), and note that
+it inverts the usual sense of `dismiss`: the safe escape is Cancel, which is also the one that makes
+the link never arrive — so it wants a `controls[]` entry and `tap_gate`, not a dismissal.
 
 ```kotlin
 // Application.onCreate, debug builds

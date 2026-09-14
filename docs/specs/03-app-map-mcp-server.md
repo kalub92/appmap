@@ -109,6 +109,10 @@ elements
 gates  gate.push_permission
 recipes  create_invoice, filter_invoices
 ```
+`deep_link` is rendered in the scheme the APP registers (`manifest.deep_link_scheme`, 01 R5), not
+the canonical `appmap://` the map stores — the caller is going to open it. `plan_path` does the
+same; `name_screen` accepts either and stores the canonical form.
+
 
 ## 9. MCP resources
 

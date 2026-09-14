@@ -392,6 +392,7 @@
               "maestro_unavailable",
               "not_headless_eligible",
               "release_build_refused",
+              "deep_link_scheme_collision",
               "timeout",
               "hierarchy_unavailable"
             ],

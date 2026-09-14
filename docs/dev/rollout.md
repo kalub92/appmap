@@ -44,7 +44,7 @@ Scope: 01 for the pilot screens; 02 hand-written pilot files; 03 with `summary`,
 `get_screen`, `find_element`, `match_recipe`; 05 hooks. No headless.
 - [ ] `ids.yaml` covers login, invoice_list, invoice_new, invoice_detail, client_picker; constants generated and committed
 - [ ] markers and element ids visible in `argent` / `maestro hierarchy` on every pilot screen
-- [ ] `appmap://invoice_new?fixture=logged_in` lands on the real screen with real state
+- [ ] the app's deep link for `invoice_new` (`appmap://…` unless the app declares its own scheme, 01 R5) lands on the real screen with real state
 - [ ] fresh clone → `claude` → approve servers → summary visible in the first turn (05 §7)
 - [ ] baseline table: no-map and guided columns filled
 - **Exit:** guided ≥ 50% fewer driver calls; one recipe compiled from a real session; two developers can pull the branch and replay it.

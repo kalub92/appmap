@@ -82,6 +82,8 @@ import { finishTask, recordObservation } from '../observe.ts';
 import { applyHeal, proposeHeal, rejectHeal, toPendingHeal } from '../heal.ts';
 import { markVerified, recordRunOutcome } from './lifecycle.ts';
 import { substituteParams, valueChecksOfExpect } from './values.ts';
+import type { SettleOptions } from '../settle.ts';
+import { settleFor } from '../settle.ts';
 
 /** Injectable build/environment probe (07 §3). `null` = endpoint absent (treated as Release). */
 export type BuildInfoProbe = (config: AppMapConfig, appId: string) => Promise<BuildProbeResult | null>;
@@ -510,7 +512,7 @@ export function parseSchemeOwnersPlist(xml: string, scheme: string): string[] {
     const claims = types.some((t) => {
       if (t === null || typeof t !== 'object' || Array.isArray(t)) return false;
       const schemes = (t as Record<string, unknown>).CFBundleURLSchemes;
-      return Array.isArray(schemes) && schemes.some((x) => typeof x === 'string' && x.toLowerCase() === scheme);
+      return Array.isArray(schemes) && schemes.some((x) => typeof x === 'string' && x.toLowerCase() === scheme.toLowerCase());
     });
     if (claims) owners.push(bundleId);
   }
@@ -555,17 +557,26 @@ export const defaultSchemeOwnerProbe: SchemeOwnerProbe = async (config, scheme) 
  */
 export function assertSchemeUnique(appId: string, scheme: string, owners: readonly string[] | null): void {
   if (owners === null || owners.length === 0) return;
+  const suggestion = `appmap-${(appId.split('.').pop() ?? 'app').toLowerCase()}`;
   const foreign = owners.filter((id) => id !== appId);
   if (foreign.length === 0) return;
+  // Two different faults, and they have OPPOSITE remedies, so they must not share a message.
+  if (!owners.includes(appId)) {
+    throw new AppMapError(
+      ERROR_CODES.DEEP_LINK_SCHEME_COLLISION,
+      `the manifest says this app registers ${scheme}://, but the installed ${appId} does not — ${foreign.join(', ')} does`,
+      `fix the APP, not the manifest: add ${scheme} to the Debug target's CFBundleURLTypes (iOS) or the debug intent-filter (Android), 01 R5 / instrumentation README §5`,
+    );
+  }
   throw new AppMapError(
     ERROR_CODES.DEEP_LINK_SCHEME_COLLISION,
     `${foreign.join(', ')} also registers ${scheme}://, so the OS may deliver ${appId}'s deep links (and their ?fixture=) to another app`,
-    `give this app its own scheme in app-map/<platform>/manifest.yaml (deep_link_scheme: appmap-${appId.split('.').pop() ?? 'app'}) and the matching CFBundleURLTypes / intent-filter, or uninstall ${foreign[0]} (01 R5, issue #25)`,
+    `give this app its own scheme in app-map/<platform>/manifest.yaml (deep_link_scheme: ${suggestion}) and the matching CFBundleURLTypes / intent-filter, or uninstall ${foreign[0]} (01 R5, issue #25)`,
   );
 }
 
 /** Does replaying this recipe open a custom-scheme URL at all? (entry deep link or an `open_link` step) */
-function opensADeepLink(recipe: RecipeFile): boolean {
+export function opensADeepLink(recipe: RecipeFile): boolean {
   const entry = recipe.entry?.deep_link;
   if (typeof entry === 'string' && entry !== '' && entry !== 'none') return true;
   return (recipe.steps ?? []).some((step) => step.action === 'open_link');
@@ -699,7 +710,7 @@ export function expandSteps(map: LoadedMap, recipe: RecipeFile): Array<{ step: R
 }
 
 /** Pure: a `RecipeStep` → `RunStep` with params substituted and, when `tree` is given, the resolved target. */
-export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams, opts: { tree?: AnyTree; announce?: boolean; pending?: RunRecord['pending_heal'] } = {}): RunStep {
+export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams, opts: { tree?: AnyTree; announce?: boolean; pending?: RunRecord['pending_heal']; settle?: SettleOptions } = {}): RunStep {
   const out: RunStep = { id: step.id, action: step.action };
   const element = stepElement(map, step);
   if (element !== undefined) out.element = element;
@@ -740,6 +751,10 @@ export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams
     if (target !== undefined) out.target = target;
     out.resolved = { strategy: pending.candidate.proposed_locator.strategy, confidence: pending.candidate.score, degraded: true };
     out.healing = true;
+    // a healed step needs the settle MOST: its postcondition is what decides whether the heal is
+    // accepted at all on the next report (04 §7.2 rule 3)
+    const healingSettle = settleFor(map, step, opts.settle ?? {});
+    if (healingSettle !== undefined) out.settle = healingSettle;
     return out;
   }
   if (opts.tree !== undefined && element !== undefined) {
@@ -760,6 +775,10 @@ export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams
   if (step.action === 'select' && 'cell' in step && out.match_text !== undefined && out.match_text !== '') {
     out.target = { by: 'text', text: out.match_text };
   }
+  // 04 §5 / issue #26: how the driver knows this step has landed. Absent when the step declares
+  // nothing pollable — which tells the driver to report at once rather than sleep "to be safe".
+  const settle = settleFor(map, step, opts.settle ?? {});
+  if (settle !== undefined) out.settle = settle;
   return out;
 }
 
@@ -926,7 +945,12 @@ export async function startGuidedRun(ctx: AppMapContext, input: StartGuidedRunIn
   ctx.db.insertRun(run);
   ctx.log.info('guided run started', { run_id: run.run_id, recipe: run.recipe, session, steps: expanded.length });
   const announce = recipe.status === 'candidate';
-  return { mode: 'guided', run_id: run.run_id, recipe: recipe.id, version: recipe.version, step: toRunStep(map, first.step, params, { announce }) };
+  const firstSettle: SettleOptions = {
+    ...(first.screen !== undefined ? { screen: first.screen } : {}),
+    ...(recipe.verify !== undefined ? { verify: recipe.verify } : {}),
+    ...(expanded.length === 1 ? { isLast: true } : {}),
+  };
+  return { mode: 'guided', run_id: run.run_id, recipe: recipe.id, version: recipe.version, step: toRunStep(map, first.step, params, { announce, settle: firstSettle }) };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1087,7 +1111,12 @@ export async function reportStep(ctx: AppMapContext, input: ReportStepInput): Pr
       });
     }
     const dismissal: RecipeStep = { id: input.step_id, action: 'dismiss_gate', gate };
-    const step = toRunStep(map, dismissal, run.params, { tree, announce });
+    // issue #26: the dismissal settles on its own gate's dismiss control disappearing — the step
+    // it interrupted is handed back with `retry` and has not been re-run, so that step's
+    // postcondition is not yet what "done" means here (settle.ts priority 0)
+    const step = toRunStep(map, dismissal, run.params, {
+      tree, announce, settle: { ...(current.screen !== undefined ? { screen: current.screen } : {}) },
+    });
     const next = { ...counts, gate_dismissals: counts.gate_dismissals + 1 };
     const result: ReportStepResult = { run_id: run.run_id, status: 'gate', step, retry: input.step_id };
     ctx.db.updateRun(run);
@@ -1144,7 +1173,7 @@ export async function reportStep(ctx: AppMapContext, input: ReportStepInput): Pr
   run.step_index = nextIndex - entryCount;
   run.current_step = next.step.id;
 
-  const handed = prepareNextStep(ctx, map, run, recipe, next, obs, { announce, steps, stepsDone: nextIndex });
+  const handed = prepareNextStep(ctx, map, run, recipe, next, obs, { announce, steps, stepsDone: nextIndex, isLast: nextIndex === expanded.length - 1 });
   if (handed.fallback !== undefined) return handed.fallback;
   ctx.db.updateRun(run);
   return { run_id: run.run_id, status: 'ok', step: handed.step!, ...(healed !== undefined ? { healed } : {}) };
@@ -1246,18 +1275,25 @@ function finish(ctx: AppMapContext, map: LoadedMap, run: RunRecord, recipe: Reci
 function prepareNextStep(
   ctx: AppMapContext, map: LoadedMap, run: RunRecord, recipe: RecipeFile,
   next: { step: RecipeStep; screen: ScreenId | undefined }, obs: Observation,
-  opts: { announce: boolean; steps: number; stepsDone: number },
+  opts: { announce: boolean; steps: number; stepsDone: number; isLast?: boolean },
 ): { step?: RunStep; fallback?: ReportStepResult } {
   const tree = obs.snapshot!;
   const elementId = stepElement(map, next.step);
   const screen = obs.screen_after !== UNKNOWN_SCREEN ? obs.screen_after : next.screen;
+  // issue #26: on the LAST step the recipe's own `verify` is what `finish` checks, so it is that
+  // step's real postcondition when the step declares none of its own
+  const settle: SettleOptions = {
+    ...(next.screen !== undefined ? { screen: next.screen } : {}),
+    ...(recipe.verify !== undefined ? { verify: recipe.verify } : {}),
+    ...(opts.isLast === true ? { isLast: true } : {}),
+  };
   const def = elementId === undefined ? undefined : elementDefOn(map, screen, elementId);
   if (elementId === undefined || def === undefined) {
-    return { step: toRunStep(map, next.step, run.params, { tree, announce: opts.announce }) };
+    return { step: toRunStep(map, next.step, run.params, { tree, announce: opts.announce, settle }) };
   }
   const trigger = resolveElement(map, def, tree);
   if (trigger.status === 'hit' && !trigger.degraded) {
-    return { step: toRunStep(map, next.step, run.params, { tree, announce: opts.announce }) };
+    return { step: toRunStep(map, next.step, run.params, { tree, announce: opts.announce, settle }) };
   }
   // 04 §5: max 1 heal per step
   const counts = runStepCounts(ctx, run, next.step.id);
@@ -1293,7 +1329,7 @@ function prepareNextStep(
     run.pending_heal = toPendingHeal(healInput, { ...proposal, candidate: proposal.candidate }, obs.seq);
     // the heal counter belongs to the step being handed out, not to the one just reported (04 §5)
     writeRunStep(ctx, run, next.step.id, { ...counts, heals: counts.heals + 1 }, {});
-    return { step: toRunStep(map, next.step, run.params, { tree, announce: opts.announce, pending: run.pending_heal }) };
+    return { step: toRunStep(map, next.step, run.params, { tree, announce: opts.announce, pending: run.pending_heal, settle }) };
   }
   const result = rejectHeal(ctx, { input: healInput }, proposal.reason as Exclude<typeof proposal.reason, 'accepted'>, proposal.candidates, {
     run_id: run.run_id, ...(proposal.runner_up !== undefined ? { runner_up_score: proposal.runner_up.score } : {}),

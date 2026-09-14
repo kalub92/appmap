@@ -35,9 +35,9 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { AppMapContext } from '../context.ts';
 import type { AnyTree, ElementDef, ElementId, HealCandidate, HealInput, HealRecord, HealResult, HeadlessErrorCode, HeadlessReport, HealReport, LoadedMap, RecipeFile, RecipeParams, RecipeStatus, RecipeStep, RunRecord, ScreenId, SessionId, StepId, Tree } from '../types.ts';
-import { DEEP_LINK_REGEX, UNKNOWN_SCREEN, now, probeConditions, selectTarget } from '../types.ts';
-import type { BuildInfoProbe } from './guided.ts';
-import { defaultBuildProbe } from './guided.ts';
+import { CANONICAL_DEEP_LINK_SCHEME, DEEP_LINK_REGEX, UNKNOWN_SCREEN, now, probeConditions, selectTarget } from '../types.ts';
+import type { BuildInfoProbe, SchemeOwnerProbe } from './guided.ts';
+import { assertSchemeUnique, defaultBuildProbe, defaultSchemeOwnerProbe, opensADeepLink } from './guided.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { PACKAGE_ROOT, maestroFlowFile, maestroOutDir } from '../paths.ts';
 import { fromMaestroHierarchy, normalizeTree } from '../tree.ts';
@@ -69,6 +69,8 @@ export interface HeadlessOptions {
   exec?: ExecFn;
   hierarchy?: HierarchyProvider;
   probe?: BuildInfoProbe;
+  /** issue #25 deep-link scheme collision probe (default: `defaultSchemeOwnerProbe`) */
+  schemeOwners?: SchemeOwnerProbe;
   skipBuildCheck?: boolean;
   /** re-runs after a heal (default 2, 04 §6.1) */
   maxRetries?: number;
@@ -189,6 +191,25 @@ export async function runHeadless(ctx: AppMapContext, input: HeadlessInput, opts
       return report({ error_code: 'release_build_refused' });
     }
     ctx.setProbe(probe);
+    // 01 R5 / issue #25: CI is where two instrumented apps most reliably end up on one machine, and
+    // a collision there looks like a flaky inspector rather than a routing bug. Same rule as
+    // guided: only a positive answer naming a foreign bundle refuses; an unanswerable probe is not
+    // evidence. A report, not a throw — headless answers in reports (07 §2.4).
+    if (opensADeepLink(recipe)) {
+      const scheme = map.manifest.deep_link_scheme || CANONICAL_DEEP_LINK_SCHEME;
+      let owners: string[] | null = null;
+      try {
+        owners = await (opts.schemeOwners ?? defaultSchemeOwnerProbe)(ctx.config, scheme);
+      } catch (e) {
+        ctx.log.warn('headless: deep-link scheme probe failed', { error: (e as Error).message });
+      }
+      try {
+        assertSchemeUnique(map.manifest.app_id, scheme, owners);
+      } catch (e) {
+        ctx.log.warn('headless: refusing to run against a colliding deep-link scheme', { recipe: recipe.id, error: (e as Error).message });
+        return report({ error_code: 'deep_link_scheme_collision' });
+      }
+    }
   }
 
   // ---- 0b. 03 §13 Maestro version -----------------------------------------------------------

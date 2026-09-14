@@ -50,7 +50,7 @@ import { driverToolPattern } from './config.ts';
 import type { AppMapContext } from './context.ts';
 import type { DriverInput, ElementDef, ElementId, Fingerprint, GateId, HookPayload, IdentifyResult, IdentifySignalKind, Locator, NameScreenInput, NameScreenResult, Observation, ObservedSignature, RecordObservationInput, RecordResult, ScreenFile, ScreenStatus, ScrubPolicy, ScrubbedTree, SessionId, SessionMode, Tree, TreeNode } from './types.ts';
 import {
-  DEEP_LINK_REGEX, DEFAULT_LOCATOR_WEIGHTS, UNKNOWN_SCREEN, assertScrubbed, isMarker, markerOfScreen, now,
+  DEEP_LINK_REGEX, DEFAULT_LOCATOR_WEIGHTS, UNKNOWN_SCREEN, assertScrubbed, canonicalDeepLink, isMarker, markerOfScreen, now,
   probeConditions, roleHintsFor, routeKey,
 } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
@@ -597,12 +597,16 @@ export function nameScreen(ctx: AppMapContext, input: NameScreenInput): NameScre
     throw new AppMapError(ERROR_CODES.NO_OBSERVATION, 'name_screen: the last observation carries no snapshot', 'the driver returned no accessibility tree — drive it again');
   }
 
-  // deep link: the registry is authoritative (validate rule 2 / decision 34)
+  // deep link: the registry is authoritative (validate rule 2 / decision 34). The caller was shown
+  // the link in the APP's scheme (`get_screen`, `plan_path`), so canonicalize before comparing or
+  // storing — the map is written `appmap://` whatever the app registers (issue #25).
+  const scheme = ctx.map.manifest?.deep_link_scheme;
+  const given = input.deep_link !== undefined ? canonicalDeepLink(input.deep_link, scheme) : undefined;
   const registryLink = registry.deep_link !== undefined && registry.deep_link !== 'none' ? registry.deep_link : undefined;
-  if (input.deep_link !== undefined && input.deep_link !== 'none' && registryLink !== undefined && routeKey(input.deep_link) !== routeKey(registryLink)) {
-    throw new AppMapError(ERROR_CODES.BAD_INPUT, `name_screen: deep_link ${input.deep_link} disagrees with ids.yaml (${registryLink})`, 'migrate the route in ids.yaml first (02 §10 rule 2)');
+  if (given !== undefined && given !== 'none' && registryLink !== undefined && routeKey(given) !== routeKey(registryLink)) {
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, `name_screen: deep_link ${given} disagrees with ids.yaml (${registryLink})`, 'migrate the route in ids.yaml first (02 §10 rule 2)');
   }
-  const deep_link = registryLink ?? (input.deep_link !== undefined && input.deep_link !== 'none' ? input.deep_link : 'none');
+  const deep_link = registryLink ?? (given !== undefined && given !== 'none' ? given : 'none');
 
   const present = idsPresent(snapshot);
   const marker = markerOfScreen(input.screen_id);
@@ -644,7 +648,9 @@ export function nameScreen(ctx: AppMapContext, input: NameScreenInput): NameScre
     deep_link,
     signature: {
       marker: present.has(marker) ? marker : 'none',
-      ...(typeof obs.input.url === 'string' && DEEP_LINK_REGEX.test(obs.input.url) ? { route: routeKey(obs.input.url) } : {}),
+      // the driver reported the URL it opened, in the app's scheme; the map stores the canonical one
+      ...(typeof obs.input.url === 'string' && DEEP_LINK_REGEX.test(canonicalDeepLink(obs.input.url, scheme))
+        ? { route: routeKey(canonicalDeepLink(obs.input.url, scheme)) } : {}),
       ...(requiredIds.length > 0 ? { required_ids: requiredIds } : {}),
       structural_hash: structuralHash(snapshot, dynamicRegions),
     },

@@ -48,6 +48,10 @@ export type { AppMapContext, OpenContextOptions } from './context.ts';
 export { DECAY_FACTOR, DECAY_FLOOR, buildsSince, combineSignals, decayConfidence, evaluateCondition, identify, scoreScreen } from './identify.ts';
 export { disambiguate, findElement, findElementDef, queryLocator, resolve, targetFor } from './resolve.ts';
 export type { ResolveOptions } from './resolve.ts';
+export { DEFAULT_SETTLE_MS, SETTLE_SOURCE_VALUES, addressableTarget, formatSettle, settleFor } from './settle.ts';
+export type { SettleOptions } from './settle.ts';
+export { assertionKey, assertionOp, compareValue, keyOf, observedParams, paramOfSlot, valueChecksOfExpect, valueChecksOfRecipe } from './recipes/values.ts';
+export type { PendingValueCheck, ValueOp } from './recipes/values.ts';
 export { planPath, shortestEdgePath } from './plan.ts';
 export * as format from './format.ts';
 
