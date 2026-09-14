@@ -43,7 +43,7 @@ import { PACKAGE_ROOT, maestroFlowFile, maestroOutDir } from '../paths.ts';
 import { fromMaestroHierarchy, normalizeTree } from '../tree.ts';
 import { buildScrubPolicy, scrub } from '../scrub.ts';
 import { identify } from '../identify.ts';
-import { resolve as resolveElement } from '../resolve.ts';
+import { gateHealScope, resolve as resolveElement } from '../resolve.ts';
 import { heal as healOnce } from '../heal.ts';
 import { markVerified as lifecycleMarkVerified, recordRunOutcome as lifecycleRecordRunOutcome } from './lifecycle.ts';
 import type { VerifiedEntities } from './lifecycle.ts';
@@ -297,6 +297,14 @@ export async function runHeadless(ctx: AppMapContext, input: HeadlessInput, opts
       ctx.log.debug('headless: nothing to heal at the failing step', { recipe: recipe.id, step: fallbackStep });
       break;
     }
+    // issue #24: the SAME structural bounds guided applies — a gate control is healed only inside
+    // its own dialog and never into a sibling control, and not at all when the dialog cannot be
+    // located. A safety property only one replay rung applies is not a safety property.
+    const bounds = gateHealScope(map, def, tree, step.action === 'dismiss_gate' || step.action === 'tap_gate' ? step.gate : undefined);
+    if (bounds === undefined) {
+      ctx.log.warn('headless: refusing to heal a gate control whose dialog could not be located', { recipe: recipe.id, element: def.id });
+      break;
+    }
     const healInput: HealInput = {
       recipe: recipe.id,
       step,
@@ -310,6 +318,7 @@ export async function runHeadless(ctx: AppMapContext, input: HeadlessInput, opts
       trigger: resolveElement(map, def, tree),
       build,
       run_id: runId,
+      ...bounds,
     };
     const result = await healer(ctx, healInput, async (candidate) => {
       const retry = recipeToMaestroFlow(map, recipe, params, { fromStep: step.id, overrides: { [def.id]: candidate.proposed_locator } });

@@ -74,7 +74,7 @@ import type {
 import { CANONICAL_DEEP_LINK_SCHEME, DEEP_LINK_SCHEME_REGEX, GUIDED_LIMITS, UNKNOWN_SCREEN, emitDeepLink, now, probeConditions, routeKey, selectTarget } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { identify } from '../identify.ts';
-import { gateDialogRoot, resolve as resolveElement } from '../resolve.ts';
+import { gateHealScope, resolve as resolveElement } from '../resolve.ts';
 import { labelOf, walk } from '../tree.ts';
 import { shortestEdgePath } from '../plan.ts';
 import { indexMap } from '../yaml/load.ts';
@@ -1205,51 +1205,6 @@ function verifyObserved(
   markVerified(ctx, { screens, elements, edges }, run.build ?? ctx.build);
 }
 
-/**
- * issue #24: the two structural bounds a heal of a GATE control gets — the dialog it may look in,
- * and the sibling controls it may never propose. Empty for an ordinary screen element, which heals
- * exactly as before.
- *
- * The sibling exclusion is the load-bearing half. The alternative — trusting 04 §7.2's score
- * threshold to keep Cancel and Delete apart — does not hold: two buttons in one alert agree on
- * role, role path and parent role and sit close together, so the arithmetic already lands within
- * noise of the acceptance line. Nothing about "confirm a destructive action" should depend on that.
- */
-function gateHealBounds(map: LoadedMap, step: RecipeStep, def: ElementDef, tree: AnyTree): Pick<HealInput, 'candidateRoot' | 'forbiddenNodes'> | undefined {
-  const gateId = gateOfStep(map, step, def);
-  if (gateId === undefined) return {}; // an ordinary screen element: heals exactly as before
-  // FAIL CLOSED. Both bounds are best-effort by nature — the dialog has to be locatable and the
-  // siblings have to resolve — and the situation where they are not is precisely a redesign of the
-  // dialog, which is also precisely when a heal is attempted. An unbounded walk would then be free
-  // to propose the button next to the one we lost, so refuse instead: no dialog located, no heal.
-  const root = gateDialogRoot(map, tree, gateId);
-  if (root === undefined) return undefined;
-  const siblings = new Set<TreeNode>();
-  const registered = map.ids.gates.find((g) => g.id === gateId);
-  const others = [registered?.dismiss, ...(registered?.controls ?? []).map((c) => c.id)]
-    .filter((id): id is ElementId => typeof id === 'string' && id !== '' && id !== def.id);
-  for (const id of others) {
-    const otherDef = map.gates.get(gateId)?.elements?.find((e) => e.id === id);
-    if (otherDef === undefined) continue;
-    const hit = resolveElement(map, otherDef, tree);
-    if (hit.status === 'hit') siblings.add(hit.node);
-    // a sibling that does NOT resolve is the dangerous case, not a benign one: its node is still
-    // in the dialog and is now the best-scoring lookalike for the control we are healing. The
-    // dialog scope keeps the search inside one alert; refusing here keeps it off the other button.
-    else return undefined;
-  }
-  return { candidateRoot: root, ...(siblings.size > 0 ? { forbiddenNodes: siblings } : {}) };
-}
-
-/** The gate a step's element belongs to, if any (the step names it, or the element is declared on a gate file). */
-function gateOfStep(map: LoadedMap, step: RecipeStep, def: ElementDef): GateId | undefined {
-  if (step.action === 'dismiss_gate' || step.action === 'tap_gate') return step.gate;
-  for (const [id, gate] of map.gates) {
-    if ((gate.elements ?? []).some((e) => e.id === def.id)) return id;
-  }
-  return undefined;
-}
-
 /** 04 §5: the last step is done — the recipe's own `verify` decides `verified`. *//** 04 §5: the last step is done — the recipe's own `verify` decides `verified`. */
 function finish(ctx: AppMapContext, map: LoadedMap, run: RunRecord, recipe: RecipeFile, obs: Observation, steps: number, screenSeen: ScreenId | typeof UNKNOWN_SCREEN): ReportStepResult {
   // `screenSeen`, not `obs.screen_after`: the caller re-identified against the SESSION map, and
@@ -1309,7 +1264,7 @@ function prepareNextStep(
   // issue #24: a gate control whose dialog (or whose sibling controls) cannot be located is not
   // healed at all — see `gateHealBounds`. Falling back is the safe answer: the LLM takes over and
   // a human decides which button to press.
-  const bounds = gateHealBounds(map, next.step, def, tree);
+  const bounds = gateHealScope(map, def, tree, next.step.action === 'dismiss_gate' || next.step.action === 'tap_gate' ? next.step.gate : undefined);
   if (bounds === undefined) {
     return {
       fallback: toFallback(ctx, run, {
