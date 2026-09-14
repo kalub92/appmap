@@ -99,16 +99,21 @@ Each full-screen state marks itself exactly once; sheets and modals carry their 
 
 ### R5 — Test-only deep links
 
-- Scheme `appmap://<screen_id>[?k=v…]`, handled only under `APP_MAP_DEBUG`.
+- Scheme `<scheme>://<screen_id>[?k=v…]`, handled only under `APP_MAP_DEBUG`. **`appmap` by default, and per app when it has to be.** A custom URL scheme is first-come-first-served across the device: install two app-map-instrumented apps and the OS routes `appmap://<screen>` — and the `?fixture=` it carries — to whichever it likes, while the app-scoped capture keeps describing the right app and times out. From the driver that reads as a hung inspector on the *correct* bundle id, with nothing to suggest another app exists, and it is the normal case for a CI machine or a team adopting this across two apps.
+  - the app declares it once: `AppMapDeepLink.scheme = "appmap-pokedexteams"` (iOS) / `AppMapDeepLink.scheme` plus the `appMapScheme` manifest placeholder (Android). **The parser and the URL registration must move together** — a configurable parser behind a hard-coded `CFBundleURLTypes`/intent-filter means the app never receives the link at all, which is worse than the collision.
+  - the map declares the same value once, as `deep_link_scheme` in `app-map/<platform>/manifest.yaml` (02 §3).
+  - **the committed map stays scheme-relative**: every `deep_link`, `signature.route` and `open_link.url` in the YAML is written `appmap://`, and the server rewrites to the app's scheme at the moment a URL is handed to a driver, Maestro or the LLM — and back on the way in from anything the app produced (a router export, a recorded `open-url`). So renaming the scheme is a one-line manifest diff rather than a rewrite of every screen file, the same map serves two differently-schemed builds, and `map.routes` stays a stable index. Nothing in the repo can prove the binary registers the declared scheme, so the check is at run time rather than in `validate`: `run_recipe` and `run --headless` refuse with `deep_link_scheme_collision` when a probe positively names another bundle claiming it — and give the opposite diagnosis, with the opposite remedy, when the probe says this app does *not* register it. `import-router` refuses an export whose routes carry a third scheme, naming both sides.
 - The handler MUST route through the app's real router so the resulting state is genuine, not a bare view.
 - Optional `fixture=<name>` seeds state (e.g. a logged-in test account, one draft invoice). Fixtures are defined in code, not in the map.
 - Every screen in `ids.yaml` SHOULD have a working deep link. Screens without one are marked `deep_link: none` in the map and cost navigation steps.
 
-Invocation:
+Invocation (substitute the app's own scheme where it is not the default):
 ```
 xcrun simctl openurl booted "appmap://invoice_new?fixture=logged_in"
 adb shell am start -a android.intent.action.VIEW -d "appmap://invoice_new?fixture=logged_in"
 ```
+
+A gated scheme is worth one more note. iOS may interpose an **"Open in …?"** confirmation on a custom-scheme open; the app receives the URL — and therefore applies `?fixture=` and routes — only **after** that dialog is confirmed. Anything that settles before the dismissal photographs the screen in its *pre-fixture* state, which teaches the map the wrong thing rather than failing. With a gated scheme the settle belongs after the dismissal, and the gate should be registered under R7 like any other interrupter. Note that it inverts the usual sense of `dismiss`: the safe escape there is Cancel, which is also the one that makes the link never arrive, so such a gate wants a `controls[]` entry and `tap_gate` rather than a dismissal (02 §6).
 
 ### R6 — Router export
 
@@ -135,6 +140,18 @@ A debug-only runtime registry dumps the navigation graph as JSON. Static analysi
 ### R7 — Gates
 
 Register every interrupter the agent may meet: OS permission prompts, paywalls, biometric prompts, rating prompts, "what's new" sheets, toasts that block taps. Each has a marker (or, for OS dialogs, a recognizable label pattern recorded in the map) and a dismiss action. OS-level dialogs cannot carry your ids; record their signature in the map instead (02 §4.2).
+
+A gate may declare **more than one control**. `dismiss` is the safe escape and nothing else — guided replay and the Maestro export both press it unattended — so any other button gets a `controls[]` entry:
+
+```yaml
+gates:
+  - id: gate.team_removal
+    dismiss: gate.team_removal.cancel
+    controls:
+      - {id: gate.team_removal.confirm, intent_critical: true}
+```
+
+`intent_critical` is **required** on a control, unlike everywhere else where absence means false: a gate control is by construction the non-escape half of an interrupter, so the author has to say whether pressing it commits something. Without `controls[]` a destructive confirmation is unautomatable — the Delete button is neither a gate control (only `dismiss` existed) nor an element (the `gate.` prefix is reserved for exactly this), and `dismiss_gate` resolves to Cancel. A recipe reaches one with `action: tap_gate` (02 §6). Healing is bounded structurally for these: a replacement is searched for only inside the gate's own dialog, never proposes a sibling control at any score, and is refused outright when the dialog cannot be located — so a heal can never turn a Cancel into a Delete.
 
 ### R8 — Lint
 

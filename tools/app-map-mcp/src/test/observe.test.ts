@@ -109,8 +109,11 @@ describe('recordHookPayload — fixtures/hooks/post-tool-use.tap.json (architect
     recordHookPayload(ctx, tapPayload());
     const line = JSON.parse(readFileSync(trajectoryFile(t.config, SESSION), 'utf8').trim()) as Record<string, unknown>;
     assert.deepEqual(Object.keys(line).sort(), [
-      'confidence', 'element', 'gates_present', 'input', 'latency_ms', 'ok', 'screen_after', 'screen_before',
-      'scrub_hits', 'seq', 'session', 'signature_after', 'snapshot', 'task', 'tool', 'ts',
+      // `identified_by` records WHICH 03 §5 signal produced `screen_after` — `covered` (the
+      // remembered screen behind a gate, issue #24) leaves no trace in `signature_after`, so it
+      // cannot be re-derived from the line
+      'confidence', 'element', 'gates_present', 'identified_by', 'input', 'latency_ms', 'ok', 'screen_after',
+      'screen_before', 'scrub_hits', 'seq', 'session', 'signature_after', 'snapshot', 'task', 'tool', 'ts',
     ]);
     assert.match(String(line['ts']), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
     assert.deepEqual(Object.keys(line['signature_after'] as object).sort(), ['marker', 'required_present', 'structural_hash']);

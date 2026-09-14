@@ -48,9 +48,9 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import type { AppMapConfig } from './config.ts';
 import { driverToolPattern } from './config.ts';
 import type { AppMapContext } from './context.ts';
-import type { DriverInput, ElementDef, ElementId, Fingerprint, HookPayload, IdentifyResult, IdentifySignalKind, Locator, NameScreenInput, NameScreenResult, Observation, ObservedSignature, RecordObservationInput, RecordResult, ScreenFile, ScreenStatus, ScrubPolicy, ScrubbedTree, SessionId, SessionMode, TreeNode } from './types.ts';
+import type { DriverInput, ElementDef, ElementId, Fingerprint, GateId, HookPayload, IdentifyResult, IdentifySignalKind, Locator, NameScreenInput, NameScreenResult, Observation, ObservedSignature, RecordObservationInput, RecordResult, ScreenFile, ScreenId, ScreenStatus, ScrubPolicy, ScrubbedTree, SessionId, SessionMode, Tree, TreeNode } from './types.ts';
 import {
-  DEEP_LINK_REGEX, DEFAULT_LOCATOR_WEIGHTS, UNKNOWN_SCREEN, assertScrubbed, isMarker, markerOfScreen, now,
+  DEEP_LINK_REGEX, DEFAULT_LOCATOR_WEIGHTS, UNKNOWN_SCREEN, assertScrubbed, canonicalDeepLink, isMarker, markerOfScreen, now,
   probeConditions, roleHintsFor, routeKey,
 } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
@@ -61,6 +61,7 @@ import { PII_PATTERNS, buildScrubPolicy, perceptionBytes, redactString, scrub } 
 import { labelNorm, observedSignature, structuralHash } from './signature.ts';
 import { centerOf, extractSnapshot, normalizeTree, parentOf, pathOf, siblingIndex, walk } from './tree.ts';
 import { markVerified } from './recipes/lifecycle.ts';
+import { compareValue, paramOfSlot, substituteParams, valueChecksOfRecipe } from './values.ts';
 
 /** tool names that cost a screenshot (08 §2 `screenshots` counter) */
 const SCREENSHOT_RE = /screenshot|screen_shot|capture_image/i;
@@ -127,13 +128,15 @@ function idsPresent(tree: ScrubbedTree | null): Map<string, TreeNode> {
 
 /**
  * Step 4: the element the driver acted on. `input.id` wins when it is registered; otherwise a
- * tap by text/point is mapped back to an element of `screenBefore` using the PREVIOUS snapshot
- * (the state the tap was aimed at) — best effort, may be absent (04 §2).
+ * tap by text/point is mapped back to an element using the PREVIOUS snapshot (the state the tap
+ * was aimed at) — the controls of any gate that was up FIRST (issue #24: a dialog owns its own
+ * buttons and they live in `map.gates`, not in a screen file), then `screenBefore`'s elements.
+ * Best effort, may be absent (04 §2).
  */
-function resolveActedElement(ctx: AppMapContext, input: DriverInput, screenBefore: string, previous: ScrubbedTree | null): ElementId | undefined {
+function resolveActedElement(ctx: AppMapContext, input: DriverInput, screenBefore: string, previous: ScrubbedTree | null, gatesBefore: readonly GateId[] = []): ElementId | undefined {
   if (typeof input.id === 'string' && ctx.map.elementRegistry.has(input.id)) return input.id;
   const screen = ctx.map.screens.get(screenBefore);
-  if (screen === undefined || previous === null) return undefined;
+  if (previous === null) return undefined;
 
   // the node the driver was told to hit
   let target: TreeNode | undefined;
@@ -149,11 +152,24 @@ function resolveActedElement(ctx: AppMapContext, input: DriverInput, screenBefor
     });
   }
   if (target !== undefined) {
-    for (const def of screen.elements) {
+    // issue #24: a gate that was UP when the tap was aimed owns its own controls, and they live in
+    // `map.gates`, not in any screen file. Without this a tap on a confirmation dialog's button
+    // resolved to nothing, the compiler dropped the call as "hit no registered element", and a
+    // destructive-confirm flow could never be recorded — the common case being an OS dialog whose
+    // buttons carry no a11y_id at all, so `input.id` cannot have matched either.
+    for (const gateId of gatesBefore) {
+      const gate = ctx.map.gates.get(gateId);
+      for (const def of gate?.elements ?? []) {
+        const hit = resolveElement(ctx.map, def, previous);
+        if (hit.status === 'hit' && hit.node === target) return def.id;
+      }
+    }
+    for (const def of screen?.elements ?? []) {
       const hit = resolveElement(ctx.map, def, previous);
       if (hit.status === 'hit' && hit.node === target) return def.id;
     }
   }
+  if (screen === undefined) return undefined;
   // 04 §3.3: a tap by TEXT on a screen whose data text the scrubber dropped (07 §2.3) is a data
   // row — attributable only when the screen declares exactly one dynamic cell
   if (typeof input.text === 'string' && input.text !== '') {
@@ -161,6 +177,73 @@ function resolveActedElement(ctx: AppMapContext, input: DriverInput, screenBefor
     if (cells.length === 1) return cells[0]!.id;
   }
   return undefined;
+}
+
+/**
+ * issue #23: decide every `expect.value` assertion the session's active runs declare, against the
+ * RAW tree, and return one boolean each (keyed by `values.assertionKey`).
+ *
+ * The whole set a recipe declares is evaluated, not just the pending step's: it costs one resolve
+ * per assertion on a tree already in memory, and it decouples the hook's timing from whichever
+ * step `report_step` happens to be waiting for — including the recipe-level `verify`, which the
+ * guided state machine checks on a separate pass at the end of the run.
+ *
+ * Best-effort by construction: no active run, no recipe, or an element that does not resolve all
+ * produce no entry, and `checkExpect` treats a missing entry as a failed assertion (the safe
+ * direction — an assertion that could not be decided has not been satisfied).
+ */
+function evaluateValueChecks(ctx: AppMapContext, session: SessionId, tree: Tree, screen: ScreenId | undefined): Record<string, boolean> | undefined {
+  const runs = ctx.db.listRunsForSession(session, { states: ['active'] });
+  if (runs.length === 0) return undefined;
+  const cached = ctx.db.listScreens();
+  const screens: readonly ScreenFile[] = cached.length > 0 ? cached : Array.from(ctx.map.screens.values());
+  const out: Record<string, boolean> = {};
+  for (const run of runs) {
+    const recipe = ctx.db.getRecipe(run.recipe) ?? ctx.map.recipes.get(run.recipe);
+    if (recipe === undefined) continue;
+    const paramTypes = new Map((recipe.params ?? []).map((p) => [p.name, p.type]));
+    for (const check of valueChecksOfRecipe(recipe)) {
+      const expected = substituteParams(check.slot, run.params);
+      // an unbound slot substitutes to itself: there is nothing to compare against, so say nothing
+      if (expected === check.slot) continue;
+      const def = elementDefAnywhere(ctx, screens, check.element, screen);
+      if (def === undefined) continue;
+      const hit = resolveElement(ctx.map, def, tree);
+      if (hit.status !== 'hit') { out[check.key] = false; continue; }
+      // `value` FIRST: on a text field the accessibility `label` is the PLACEHOLDER and the typed
+      // content is `value`, so reading the label would compare `{amount}` against "Amount" — on
+      // exactly the element class issue #23 is about. A static text carries no `value`, so it
+      // falls through to `label` and reads the same as before.
+      const observed = hit.node.value ?? hit.node.label ?? hit.node.text;
+      if (typeof observed !== 'string') { out[check.key] = false; continue; }
+      out[check.key] = compareValue(observed, expected, check.op, paramTypes.get(paramOfSlot(check.slot) ?? ''));
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * The first declaration of `id` on any screen the session knows (cache first, like everything else
+ * here). `screens` is passed in rather than re-read: this runs once per declared assertion, on the
+ * ingest path 03 §11 budgets at 50 ms, and `db.listScreens()` is a full table read.
+ */
+function elementDefAnywhere(ctx: AppMapContext, screens: readonly ScreenFile[], id: ElementId, on: ScreenId | undefined): ElementDef | undefined {
+  // the declaration on the screen we are actually looking at wins: an id repeats across screens
+  // (02 §4.1) with different locators, and picking another screen's copy would compare the right
+  // assertion against the wrong node. Same preference `guided.elementDefOn` applies at replay.
+  if (on !== undefined) {
+    const here = screens.find((s) => s.id === on)?.elements?.find((e) => e.id === id);
+    if (here !== undefined) return here;
+  }
+  for (const screen of screens) {
+    const def = screen.elements?.find((e) => e.id === id);
+    if (def !== undefined) return def;
+  }
+  for (const gate of ctx.map.gates.values()) {
+    const def = gate.elements?.find((e) => e.id === id);
+    if (def !== undefined) return def;
+  }
+  return ctx.map.elements.get(id)?.[0]?.element;
 }
 
 /**
@@ -178,6 +261,9 @@ export function hookPayloadToObservation(ctx: AppMapContext, payload: HookPayloa
 
   // 2. raw tree → normalize → scrub. The raw tree exists only inside this function (03 §7).
   let snapshot: ScrubbedTree | null = null;
+  let value_checks: Record<string, boolean> | undefined;
+  /** the raw tree, alive only inside this function (03 §7) — see the value-check note below */
+  let raw_tree: Tree | undefined;
   const raw = extractSnapshot(payload.tool_response);
   if (raw !== undefined) {
     try {
@@ -186,6 +272,12 @@ export function hookPayloadToObservation(ctx: AppMapContext, payload: HookPayloa
       const tree = normalizeTree(raw, { platform: ctx.map.platform, roleHints: roleHintsFor(ctx.map) });
       // 03 §3: `APP_MAP_BUILD=auto` takes the build the driver reported
       if (ctx.config.build === 'auto' && typeof tree.build === 'string' && tree.build !== '' && tree.build !== ctx.build) ctx.setBuild(tree.build);
+      // issue #23: `expect.value` is decided against THIS tree, because this is the only place the
+      // typed value still exists — scrub drops `value`/`text` outright and drops `label` under
+      // every `dynamic` id, which is exactly what such an assertion targets. Held until after
+      // identification below so the element is resolved on the screen it was actually seen on;
+      // it never leaves this function, and only the resulting booleans are kept (07 §2.3).
+      raw_tree = tree;
       snapshot = scrub(tree, policyFor(ctx));
     } catch (e) {
       // a driver that returns something tree-shaped but broken must not break the session (03 §11)
@@ -202,10 +294,21 @@ export function hookPayloadToObservation(ctx: AppMapContext, payload: HookPayloa
     identified = identify(ctx.map, snapshot, {
       ...(typeof input.url === 'string' ? { route: input.url } : {}),
       build: ctx.build,
+      // 03 §5.1b / issue #24: while a gate is up the presenting screen's marker is occluded, so
+      // hand identify what the session was on rather than let it walk out to an ancestor — and the
+      // markers the previous capture carried, which is what separates that from a NAVIGATION to a
+      // screen that raises a gate on entry. This is the caller that matters most for the
+      // distinction: its answer is PERSISTED, and the next observation's `screen_before` (which the
+      // compiler reads to decide which screen a step was taken on) is read straight back off it.
+      ...(screen_before !== UNKNOWN_SCREEN ? { covered_screen: screen_before } : {}),
+      ...(previous?.snapshot != null ? { previous_markers: markersOf(previous.snapshot) } : {}),
       ...probeConditions(ctx.probe),
     });
   }
   const screen_after: string = identified?.screen_id ?? UNKNOWN_SCREEN;
+  if (raw_tree !== undefined) {
+    value_checks = evaluateValueChecks(ctx, session, raw_tree, screen_after === UNKNOWN_SCREEN ? undefined : screen_after);
+  }
   // the cache, not the map: heals and `name_screen` land there first, so it holds the current
   // `required_ids`/`dynamic_regions` the lazy re-verify (step 8) will compare against
   const signature_after = snapshot === null
@@ -213,7 +316,7 @@ export function hookPayloadToObservation(ctx: AppMapContext, payload: HookPayloa
     : observedSignature(snapshot, screenOf(ctx, screen_after));
 
   // 4. the element acted on
-  const element = resolveActedElement(ctx, input, screen_before, previous?.snapshot ?? null);
+  const element = resolveActedElement(ctx, input, screen_before, previous?.snapshot ?? null, previous?.gates_present ?? []);
 
   // 5. seq, task and the PII sweep over the two strings that survive (architecture §7 decision 13)
   const seq = opts.seq ?? ctx.db.nextSeq(session);
@@ -241,8 +344,19 @@ export function hookPayloadToObservation(ctx: AppMapContext, payload: HookPayloa
     latency_ms: latencyOf(payload.tool_response),
     ...(snapshot?.scrub_hits !== undefined ? { scrub_hits: snapshot.scrub_hits } : {}),
     ...(identified !== undefined ? { confidence: identified.confidence } : {}),
+    ...(identified !== undefined && identified.signals.length > 0
+      ? { identified_by: identified.signals.reduce((best, sig) => (sig.score > best.score ? sig : best)).kind }
+      : {}),
+    ...(value_checks !== undefined ? { value_checks } : {}),
   };
   return obs;
+}
+
+/** Every `screen.*` marker a capture carries (03 §5.1b: what was already on screen a moment ago). */
+function markersOf(tree: ScrubbedTree): ReadonlySet<string> {
+  const out = new Set<string>();
+  walk(tree, (n) => { if (isMarker(n.a11y_id)) out.add(n.a11y_id); });
+  return out;
 }
 
 /** the screen as the session knows it: the cache first (heals and name_screen land there), then the map */
@@ -257,6 +371,10 @@ function screenOf(ctx: AppMapContext, id: string): ScreenFile | undefined {
 function winningSignal(ctx: AppMapContext, obs: Observation): IdentifySignalKind {
   if (obs.screen_after === UNKNOWN_SCREEN) return 'none';
   const screen = screenOf(ctx, obs.screen_after);
+  // issue #24: identify's own answer when it recorded one. Re-derivation below is the fallback for
+  // observations written before the field existed — and it cannot recover `covered` at all, which
+  // is exactly why the field exists.
+  if (obs.identified_by !== undefined) return obs.identified_by;
   if (obs.signature_after.marker === markerOfScreen(obs.screen_after)) return 'marker';
   if (typeof obs.input.url === 'string' && ctx.map.routes.get(routeKey(obs.input.url)) === obs.screen_after) return 'route';
   if (obs.signature_after.required_present >= 0.5) return 'required_ids';
@@ -513,12 +631,16 @@ export function nameScreen(ctx: AppMapContext, input: NameScreenInput): NameScre
     throw new AppMapError(ERROR_CODES.NO_OBSERVATION, 'name_screen: the last observation carries no snapshot', 'the driver returned no accessibility tree — drive it again');
   }
 
-  // deep link: the registry is authoritative (validate rule 2 / decision 34)
+  // deep link: the registry is authoritative (validate rule 2 / decision 34). The caller was shown
+  // the link in the APP's scheme (`get_screen`, `plan_path`), so canonicalize before comparing or
+  // storing — the map is written `appmap://` whatever the app registers (issue #25).
+  const scheme = ctx.map.manifest?.deep_link_scheme;
+  const given = input.deep_link !== undefined ? canonicalDeepLink(input.deep_link, scheme) : undefined;
   const registryLink = registry.deep_link !== undefined && registry.deep_link !== 'none' ? registry.deep_link : undefined;
-  if (input.deep_link !== undefined && input.deep_link !== 'none' && registryLink !== undefined && routeKey(input.deep_link) !== routeKey(registryLink)) {
-    throw new AppMapError(ERROR_CODES.BAD_INPUT, `name_screen: deep_link ${input.deep_link} disagrees with ids.yaml (${registryLink})`, 'migrate the route in ids.yaml first (02 §10 rule 2)');
+  if (given !== undefined && given !== 'none' && registryLink !== undefined && routeKey(given) !== routeKey(registryLink)) {
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, `name_screen: deep_link ${given} disagrees with ids.yaml (${registryLink})`, 'migrate the route in ids.yaml first (02 §10 rule 2)');
   }
-  const deep_link = registryLink ?? (input.deep_link !== undefined && input.deep_link !== 'none' ? input.deep_link : 'none');
+  const deep_link = registryLink ?? (given !== undefined && given !== 'none' ? given : 'none');
 
   const present = idsPresent(snapshot);
   const marker = markerOfScreen(input.screen_id);
@@ -560,7 +682,9 @@ export function nameScreen(ctx: AppMapContext, input: NameScreenInput): NameScre
     deep_link,
     signature: {
       marker: present.has(marker) ? marker : 'none',
-      ...(typeof obs.input.url === 'string' && DEEP_LINK_REGEX.test(obs.input.url) ? { route: routeKey(obs.input.url) } : {}),
+      // the driver reported the URL it opened, in the app's scheme; the map stores the canonical one
+      ...(typeof obs.input.url === 'string' && DEEP_LINK_REGEX.test(canonicalDeepLink(obs.input.url, scheme))
+        ? { route: routeKey(canonicalDeepLink(obs.input.url, scheme)) } : {}),
       ...(requiredIds.length > 0 ? { required_ids: requiredIds } : {}),
       structural_hash: structuralHash(snapshot, dynamicRegions),
     },

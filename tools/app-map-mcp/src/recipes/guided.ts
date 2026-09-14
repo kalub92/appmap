@@ -68,19 +68,22 @@ import type { AppMapConfig } from '../config.ts';
 import type { AppMapContext } from '../context.ts';
 import type {
   AnyTree, BuildProbeResult, EdgeAction, ElementDef, ElementId, Expect, FallbackPayload, FallbackReason, GateId,
-  HealCandidate, HealInput, HealSummary, LoadedMap, Locator, Observation, RecipeFile, RecipeParams, RecipeStep,
-  ReportStepInput, ReportStepResult, RunRecipeResult, RunRecord, RunStep, ScreenId, SessionId, StepId,
+  HealCandidate, HealInput, HealSummary, IdentifySignalKind, LoadedMap, Locator, Observation, RecipeFile, RecipeParams, RecipeStep,
+  ReportStepInput, ReportStepResult, RunRecipeResult, RunRecord, RunStep, ScreenId, SessionId, StepId, TreeNode,
 } from '../types.ts';
-import { GUIDED_LIMITS, UNKNOWN_SCREEN, now, probeConditions, routeKey, selectTarget } from '../types.ts';
+import { CANONICAL_DEEP_LINK_SCHEME, DEEP_LINK_SCHEME_REGEX, GUIDED_LIMITS, UNKNOWN_SCREEN, emitDeepLink, now, probeConditions, routeKey, selectTarget } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { identify } from '../identify.ts';
-import { resolve as resolveElement } from '../resolve.ts';
+import { gateHealScope, gateOfElement, resolve as resolveElement } from '../resolve.ts';
 import { labelOf, walk } from '../tree.ts';
 import { shortestEdgePath } from '../plan.ts';
 import { indexMap } from '../yaml/load.ts';
 import { finishTask, recordObservation } from '../observe.ts';
 import { applyHeal, proposeHeal, rejectHeal, toPendingHeal } from '../heal.ts';
 import { markVerified, recordRunOutcome } from './lifecycle.ts';
+import { substituteParams, valueChecksOfExpect } from '../values.ts';
+import type { SettleOptions } from '../settle.ts';
+import { settleFor } from '../settle.ts';
 
 /** Injectable build/environment probe (07 §3). `null` = endpoint absent (treated as Release). */
 export type BuildInfoProbe = (config: AppMapConfig, appId: string) => Promise<BuildProbeResult | null>;
@@ -93,6 +96,8 @@ export interface StartGuidedRunInput {
 }
 export interface GuidedRunOptions {
   probe?: BuildInfoProbe;
+  /** issue #25 deep-link scheme collision probe (default: `defaultSchemeOwnerProbe`) */
+  schemeOwners?: SchemeOwnerProbe;
   /** skip the 07 §3 probe entirely (tests of the state machine only) */
   skipBuildCheck?: boolean;
   now?: () => Date;
@@ -139,6 +144,9 @@ function stepElement(map: LoadedMap, step: RecipeStep): ElementId | undefined {
       return step.element;
     case 'dismiss_gate':
       return map.ids.gates.find((g) => g.id === step.gate)?.dismiss;
+    // issue #24: the control the step NAMES, never the gate's dismiss — that is the whole point
+    case 'tap_gate':
+      return step.control;
     default:
       return undefined;
   }
@@ -465,6 +473,123 @@ export const defaultBuildProbe: BuildInfoProbe = async (config, appId) => {
   return readBuildProbe(buildProbeStrategies(config, appId, BUILD_PROBE_KEY), BUILD_PROBE_KEY, exec);
 };
 
+/**
+ * Which installed bundles register `scheme` (issue #25). `null` means "could not tell" — no
+ * device, an unknown platform, a tool that is not installed — which is never treated as evidence
+ * of anything; only a positive answer naming a foreign bundle refuses a run.
+ */
+export type SchemeOwnerProbe = (config: AppMapConfig, scheme: string) => Promise<string[] | null>;
+
+/**
+ * The shell command that lists the bundles registering a custom URL scheme.
+ *
+ * iOS: `simctl listapps` prints an OpenStep plist keyed by bundle id; `plutil -convert xml1` makes
+ * it readable by `parseXmlPlist` (the same reader the build probe already needs, 07 §5 — no new
+ * dependency). Each app's `CFBundleURLTypes[].CFBundleURLSchemes[]` is scanned for the scheme.
+ *
+ * Android: the platform answers the question directly — `pm query-activities` on a VIEW intent for
+ * the scheme lists the components that would receive it, which IS the collision.
+ */
+export function schemeOwnerCommand(config: AppMapConfig, scheme: string): string | undefined {
+  if (!DEEP_LINK_SCHEME_REGEX.test(scheme)) return undefined; // 07 §4: never interpolate an unvetted scheme
+  if (config.platform === 'ios') {
+    const udid = shQuote(config.simUdid ?? 'booted');
+    return `xcrun simctl listapps ${udid} | plutil -convert xml1 -o - -`;
+  }
+  const target = config.simUdid !== undefined ? `-s ${shQuote(config.simUdid)} ` : '';
+  return `adb ${target}shell cmd package query-activities --brief -a android.intent.action.VIEW -d ${shQuote(`${scheme}://probe`)}`;
+}
+
+/** iOS: bundle ids in a `simctl listapps` plist whose `CFBundleURLTypes` claim `scheme`. */
+export function parseSchemeOwnersPlist(xml: string, scheme: string): string[] {
+  const doc = parseXmlPlist(xml);
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) return [];
+  const owners: string[] = [];
+  for (const [bundleId, app] of Object.entries(doc as Record<string, unknown>)) {
+    if (app === null || typeof app !== 'object' || Array.isArray(app)) continue;
+    const types = (app as Record<string, unknown>).CFBundleURLTypes;
+    if (!Array.isArray(types)) continue;
+    const claims = types.some((t) => {
+      if (t === null || typeof t !== 'object' || Array.isArray(t)) return false;
+      const schemes = (t as Record<string, unknown>).CFBundleURLSchemes;
+      return Array.isArray(schemes) && schemes.some((x) => typeof x === 'string' && x.toLowerCase() === scheme.toLowerCase());
+    });
+    if (claims) owners.push(bundleId);
+  }
+  return owners.sort();
+}
+
+/**
+ * Android: `pm query-activities --brief` prints one `package/component` per matching activity
+ * (plus a header/summary line); the package is everything before the first `/`.
+ */
+export function parseSchemeOwnersPm(stdout: string): string[] {
+  const owners = new Set<string>();
+  for (const line of stdout.split('\n')) {
+    const m = /^\s*(?:priority=[^\s]*\s+)?([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)\/[^\s]+/.exec(line);
+    if (m?.[1] !== undefined) owners.add(m[1]);
+  }
+  return Array.from(owners).sort();
+}
+
+/** Default owner probe: shells out like the build probe, and answers `null` on any failure. */
+export const defaultSchemeOwnerProbe: SchemeOwnerProbe = async (config, scheme) => {
+  const command = schemeOwnerCommand(config, scheme);
+  if (command === undefined) return null;
+  let stdout: string;
+  try {
+    stdout = (await execFileAsync('/bin/sh', ['-c', command], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 })).stdout;
+  } catch {
+    return null;
+  }
+  return config.platform === 'ios' ? parseSchemeOwnersPlist(stdout, scheme) : parseSchemeOwnersPm(stdout);
+};
+
+/**
+ * Throws `deep_link_scheme_collision` when a bundle OTHER than `appId` registers `scheme`
+ * (issue #25). Two instrumented apps that both keep the default `appmap` are routed by the OS to
+ * whichever it likes: the deep link — and the `?fixture=` it carries — reaches the wrong app,
+ * while the app-scoped capture keeps describing the right one and times out. That reads like a
+ * hung inspector, so it is worth one clear refusal here.
+ *
+ * `owners` of `null` (no device, no `simctl`/`adb`, a driver we cannot ask) is NOT evidence:
+ * only a positive list naming a foreign bundle refuses. Pure.
+ */
+export function assertSchemeUnique(appId: string, scheme: string, owners: readonly string[] | null): void {
+  if (owners === null || owners.length === 0) return;
+  const suggestion = `appmap-${(appId.split('.').pop() ?? 'app').toLowerCase()}`;
+  const foreign = owners.filter((id) => id !== appId);
+  if (foreign.length === 0) return;
+  // Two different faults, and they have OPPOSITE remedies, so they must not share a message.
+  if (!owners.includes(appId)) {
+    throw new AppMapError(
+      ERROR_CODES.DEEP_LINK_SCHEME_COLLISION,
+      `the manifest says this app registers ${scheme}://, but the installed ${appId} does not — ${foreign.join(', ')} does`,
+      `fix the APP, not the manifest: add ${scheme} to the Debug target's CFBundleURLTypes (iOS) or the debug intent-filter (Android), 01 R5 / instrumentation README §5`,
+    );
+  }
+  throw new AppMapError(
+    ERROR_CODES.DEEP_LINK_SCHEME_COLLISION,
+    `${foreign.join(', ')} also registers ${scheme}://, so the OS may deliver ${appId}'s deep links (and their ?fixture=) to another app`,
+    `give this app its own scheme in app-map/<platform>/manifest.yaml (deep_link_scheme: ${suggestion}) and the matching CFBundleURLTypes / intent-filter, or uninstall ${foreign[0]} (01 R5, issue #25)`,
+  );
+}
+
+/**
+ * Does replaying this recipe open a custom-scheme URL at all? The entry deep link, an `open_link`
+ * step — or the FIRST screen of a `fallback_path`, whose own deep link `expandSteps` synthesizes
+ * into `s0` when the recipe has no entry link of its own. Missing that third case would skip the
+ * issue-#25 collision probe for exactly the recipes that enter the long way round.
+ */
+export function opensADeepLink(map: LoadedMap, recipe: RecipeFile): boolean {
+  const entry = recipe.entry?.deep_link;
+  if (typeof entry === 'string' && entry !== '' && entry !== 'none') return true;
+  if ((recipe.steps ?? []).some((step) => step.action === 'open_link')) return true;
+  const first = recipe.entry?.fallback_path?.[0];
+  const link = first === undefined ? undefined : map.screens.get(first)?.deep_link;
+  return typeof link === 'string' && link !== '' && link !== 'none';
+}
+
 /** Throws `release_build_refused` unless `probe` is a sandbox Debug build. Pure. */
 export function assertDebugSandbox(probe: BuildProbeResult | null): void {
   const refuse = (why: string): never => {
@@ -483,15 +608,12 @@ export function assertDebugSandbox(probe: BuildProbeResult | null): void {
 // step expansion (module doc, step 5)
 // ---------------------------------------------------------------------------------------------
 
-/** Pure: `{amount}` → params.amount (String()); unknown slots left as-is. */
-export function substituteParams(text: string, params: RecipeParams): string {
-  if (typeof text !== 'string') return '';
-  const values = params ?? {};
-  return text.replace(/\{([a-z][a-z0-9_]*)\}/g, (whole, name: string) => {
-    const v = (values as Record<string, unknown>)[name];
-    return v === undefined || v === null ? whole : String(v);
-  });
-}
+/**
+ * Pure: `{amount}` → params.amount (String()); unknown slots left as-is. Lives in the leaf module
+ * `values.ts` so `observe.ts` can substitute at ingest without importing the state machine
+ * (issue #23); re-exported here because that is where every caller already looks for it.
+ */
+export { substituteParams } from '../values.ts';
 
 /** the screen a deep link points at (query stripped, 01 R5) */
 function screenOfDeepLink(map: LoadedMap, url: string | undefined): ScreenId | undefined {
@@ -596,7 +718,7 @@ export function expandSteps(map: LoadedMap, recipe: RecipeFile): Array<{ step: R
 }
 
 /** Pure: a `RecipeStep` → `RunStep` with params substituted and, when `tree` is given, the resolved target. */
-export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams, opts: { tree?: AnyTree; announce?: boolean; pending?: RunRecord['pending_heal'] } = {}): RunStep {
+export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams, opts: { tree?: AnyTree; announce?: boolean; pending?: RunRecord['pending_heal']; settle?: SettleOptions } = {}): RunStep {
   const out: RunStep = { id: step.id, action: step.action };
   const element = stepElement(map, step);
   if (element !== undefined) out.element = element;
@@ -611,10 +733,16 @@ export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams
       out.direction = step.direction;
       break;
     case 'open_link':
-      out.url = substituteParams(step.url, params);
+      // the map writes every link `appmap://`; the driver must be handed the scheme the app
+      // actually registers (issue #25)
+      out.url = emitDeepLink(substituteParams(step.url, params), map.manifest?.deep_link_scheme);
       break;
     case 'dismiss_gate':
       out.gate = step.gate;
+      break;
+    case 'tap_gate':
+      out.gate = step.gate;
+      out.control = step.control;
       break;
     default:
       break;
@@ -631,6 +759,10 @@ export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams
     if (target !== undefined) out.target = target;
     out.resolved = { strategy: pending.candidate.proposed_locator.strategy, confidence: pending.candidate.score, degraded: true };
     out.healing = true;
+    // a healed step needs the settle MOST: its postcondition is what decides whether the heal is
+    // accepted at all on the next report (04 §7.2 rule 3)
+    const healingSettle = settleFor(map, step, opts.settle ?? {});
+    if (healingSettle !== undefined) out.settle = healingSettle;
     return out;
   }
   if (opts.tree !== undefined && element !== undefined) {
@@ -651,6 +783,10 @@ export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams
   if (step.action === 'select' && 'cell' in step && out.match_text !== undefined && out.match_text !== '') {
     out.target = { by: 'text', text: out.match_text };
   }
+  // 04 §5 / issue #26: how the driver knows this step has landed. Absent when the step declares
+  // nothing pollable — which tells the driver to report at once rather than sleep "to be safe".
+  const settle = settleFor(map, step, opts.settle ?? {});
+  if (settle !== undefined) out.settle = settle;
   return out;
 }
 
@@ -659,7 +795,7 @@ export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams
 // ---------------------------------------------------------------------------------------------
 
 /** Pure: does `expect` hold on `tree`? `screenId` is the identified screen (or `unknown`). */
-export function checkExpect(map: LoadedMap, expect: Expect | undefined, tree: AnyTree, screenId: ScreenId | 'unknown', opts: { previousScreen?: ScreenId | 'unknown' } = {}): { ok: boolean; failed: string[] } {
+export function checkExpect(map: LoadedMap, expect: Expect | undefined, tree: AnyTree, screenId: ScreenId | 'unknown', opts: { previousScreen?: ScreenId | 'unknown'; valueChecks?: Record<string, boolean>; params?: RecipeParams } = {}): { ok: boolean; failed: string[] } {
   const failed: string[] = [];
   if (expect === undefined) {
     // 02 §6: a step without `expect` inherits "screen unchanged"
@@ -692,6 +828,17 @@ export function checkExpect(map: LoadedMap, expect: Expect | undefined, tree: An
       return undefined;
     });
     if (!seen) failed.push(`text_present:${expect.text_present}`);
+  }
+  // issue #23: `value` was decided at ingest, against the raw tree — the only place the typed
+  // value existed (values.ts). All that reaches here is one boolean per assertion; an
+  // assertion with no verdict was never decided, which is not the same as satisfied.
+  for (const check of valueChecksOfExpect(expect)) {
+    // an OPTIONAL parameter the caller did not supply leaves its slot unsubstituted, so ingest had
+    // nothing to compare and recorded no verdict. There is nothing to assert about a value the run
+    // was never given — skipping is the honest reading, and treating it as failed would make every
+    // recipe with an optional parameter fall back the moment the parameter is omitted.
+    if (opts.params !== undefined && substituteParams(check.slot, opts.params) === check.slot) continue;
+    if (opts.valueChecks?.[check.key] !== true) failed.push(`value:${check.element}`);
   }
   return { ok: failed.length === 0, failed };
 }
@@ -765,6 +912,20 @@ export async function startGuidedRun(ctx: AppMapContext, input: StartGuidedRunIn
     assertDebugSandbox(probe);
     // the probe is also the only source of 02 §4.3 variant facts
     ctx.setProbe(probe);
+    // 3a. issue #25: a recipe that enters by deep link is routed by the OS, not by us. If another
+    // installed bundle registers the same scheme the link — and its `?fixture=` — can land in the
+    // wrong app, and all we would see is the app-scoped capture timing out. Best-effort: an
+    // unanswerable probe changes nothing.
+    if (opensADeepLink(ctx.map, recipe)) {
+      const scheme = ctx.map.manifest.deep_link_scheme || CANONICAL_DEEP_LINK_SCHEME;
+      let owners: string[] | null = null;
+      try {
+        owners = await (opts.schemeOwners ?? defaultSchemeOwnerProbe)(ctx.config, scheme);
+      } catch (e) {
+        ctx.log.warn('guided: deep-link scheme probe failed', { error: (e as Error).message });
+      }
+      assertSchemeUnique(ctx.map.manifest.app_id, scheme, owners);
+    }
   }
   // 4. the session whose observations verify this run
   const { session, last_seq } = resolveRunSession(ctx, input.session);
@@ -797,7 +958,12 @@ export async function startGuidedRun(ctx: AppMapContext, input: StartGuidedRunIn
   ctx.db.insertRun(run);
   ctx.log.info('guided run started', { run_id: run.run_id, recipe: run.recipe, session, steps: expanded.length });
   const announce = recipe.status === 'candidate';
-  return { mode: 'guided', run_id: run.run_id, recipe: recipe.id, version: recipe.version, step: toRunStep(map, first.step, params, { announce }) };
+  const firstSettle: SettleOptions = {
+    ...(first.screen !== undefined ? { screen: first.screen } : {}),
+    ...(recipe.verify !== undefined ? { verify: recipe.verify } : {}),
+    ...(expanded.length === 1 ? { isLast: true } : {}),
+  };
+  return { mode: 'guided', run_id: run.run_id, recipe: recipe.id, version: recipe.version, step: toRunStep(map, first.step, params, { announce, settle: firstSettle }) };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -836,6 +1002,9 @@ interface FallbackArgs {
   step: StepId;
   reason: FallbackReason;
   screen_seen: ScreenId | typeof UNKNOWN_SCREEN;
+  /** issue #24: which capture `screen_seen` came from, and what decided it */
+  screen_seen_seq?: number;
+  identified_by?: IdentifySignalKind;
   expected?: Expect;
   candidates?: string[];
   message: string;
@@ -856,6 +1025,8 @@ function toFallback(ctx: AppMapContext, run: RunRecord, args: FallbackArgs): Rep
   ctx.db.updateRun(run);
   const fallback: FallbackPayload = {
     step: args.step, reason: args.reason, screen_seen: args.screen_seen,
+    ...(args.screen_seen_seq !== undefined ? { screen_seen_seq: args.screen_seen_seq } : {}),
+    ...(args.identified_by !== undefined ? { identified_by: args.identified_by } : {}),
     ...(args.expected !== undefined ? { expected: args.expected } : {}),
     candidates: args.candidates ?? [], message: args.message,
   };
@@ -917,24 +1088,48 @@ export async function reportStep(ctx: AppMapContext, input: ReportStepInput): Pr
   }
   run.last_seq = Math.max(run.last_seq, obs.seq);
   const tree = obs.snapshot;
-  const screenSeen = obs.screen_after;
 
-  // 3. gates (04 §5: at most 2 dismissals per step, then fallback)
-  const gates: GateId[] = obs.gates_present ?? identify(map, tree, { build: ctx.build, ...probeConditions(ctx.probe) }).gates_present;
-  const expectedGate = current.step.action === 'dismiss_gate' ? current.step.gate : undefined;
+  // 3. identification, ONCE, against the session map (issue #24). `obs.screen_after` was decided
+  // at ingest against `ctx.map`, while everything below resolves elements against `sessionMap` —
+  // which holds elements healed earlier in this run and screens `name_screen` created. Reporting a
+  // screen from one map and resolving its elements against another is how `screen_seen` came to
+  // disagree with what `identify_screen` answers. One call, one map, one answer.
+  const identified = identify(map, tree, {
+    build: ctx.build,
+    ...(obs.screen_before !== UNKNOWN_SCREEN ? { covered_screen: obs.screen_before } : {}),
+    ...probeConditions(ctx.probe),
+  });
+  const screenSeen = identified.screen_id;
+  // the WINNING signal, taken by score rather than by position: `signals` happens to be pushed in
+  // descending order today, which is not a property anything guarantees
+  const identifiedBy: IdentifySignalKind = identified.signals.length === 0
+    ? 'none'
+    : identified.signals.reduce((best, sig) => (sig.score > best.score ? sig : best)).kind;
+  const seenAt = obs.seq;
+
+  // gates (04 §5: at most 2 dismissals per step, then fallback)
+  const gates: GateId[] = identified.gates_present;
+  // issue #24: a `tap_gate` step expects its gate to be up — the runner must not press Cancel
+  // immediately before the step meant to press Delete
+  const expectedGate = current.step.action === 'dismiss_gate' || current.step.action === 'tap_gate' ? current.step.gate : undefined;
   const blocking = gates.filter((g) => g !== expectedGate);
   if (blocking.length > 0) {
     const gate = blocking[0]!;
     if (counts.gate_dismissals >= GUIDED_LIMITS.gate_dismissals_per_step) {
       writeRunStep(ctx, run, input.step_id, counts, { ok: false });
       return toFallback(ctx, run, {
-        step: input.step_id, reason: 'gate_limit', screen_seen: screenSeen, steps, steps_done: index,
+        step: input.step_id, reason: 'gate_limit', screen_seen: screenSeen, screen_seen_seq: seenAt, identified_by: identifiedBy, steps, steps_done: index,
         ...(current.step.expect !== undefined ? { expected: current.step.expect } : {}),
         message: `${gate} is still present after ${GUIDED_LIMITS.gate_dismissals_per_step} dismissals`,
       });
     }
     const dismissal: RecipeStep = { id: input.step_id, action: 'dismiss_gate', gate };
-    const step = toRunStep(map, dismissal, run.params, { tree, announce });
+    // issue #26: the dismissal settles on its own gate's dismiss control disappearing — the step
+    // it interrupted is handed back with `retry` and has not been re-run, so that step's
+    // postcondition is not yet what "done" means here (settle.ts priority 0)
+    const step = toRunStep(map, dismissal, run.params, {
+      tree, announce, settle: { ...(current.screen !== undefined ? { screen: current.screen } : {}) },
+    });
     const next = { ...counts, gate_dismissals: counts.gate_dismissals + 1 };
     const result: ReportStepResult = { run_id: run.run_id, status: 'gate', step, retry: input.step_id };
     ctx.db.updateRun(run);
@@ -943,7 +1138,7 @@ export async function reportStep(ctx: AppMapContext, input: ReportStepInput): Pr
   }
 
   // 4. the postcondition
-  const verdict = checkExpect(map, current.step.expect, tree, screenSeen, { previousScreen: obs.screen_before });
+  const verdict = checkExpect(map, current.step.expect, tree, screenSeen, { previousScreen: obs.screen_before, params: run.params, ...(obs.value_checks !== undefined ? { valueChecks: obs.value_checks } : {}) });
 
   // 4a. settle a heal handed out on the previous call (04 §7.2 rule 3)
   let healed: HealSummary | undefined;
@@ -963,7 +1158,7 @@ export async function reportStep(ctx: AppMapContext, input: ReportStepInput): Pr
       delete run.pending_heal;
       writeRunStep(ctx, run, input.step_id, counts, { ok: false });
       return toFallback(ctx, run, {
-        step: input.step_id, reason: 'heal_rejected', screen_seen: screenSeen, steps, steps_done: index,
+        step: input.step_id, reason: 'heal_rejected', screen_seen: screenSeen, screen_seen_seq: seenAt, identified_by: identifiedBy, steps, steps_done: index,
         ...(current.step.expect !== undefined ? { expected: current.step.expect } : {}),
         message: `the healed locator for ${pending.element} did not satisfy the step's expectation (${verdict.failed.join(', ')})`,
       });
@@ -973,48 +1168,62 @@ export async function reportStep(ctx: AppMapContext, input: ReportStepInput): Pr
   if (!verdict.ok) {
     writeRunStep(ctx, run, input.step_id, counts, { ok: false });
     return toFallback(ctx, run, {
-      step: input.step_id, reason: 'expect_failed', screen_seen: screenSeen, steps, steps_done: index,
+      step: input.step_id, reason: 'expect_failed', screen_seen: screenSeen, screen_seen_seq: seenAt, identified_by: identifiedBy, steps, steps_done: index,
       ...(current.step.expect !== undefined ? { expected: current.step.expect } : {}),
       message: `expectation not met: ${verdict.failed.join(', ')}`,
     });
   }
 
   // 4b. 02 §8 lazy re-verify of what this observation actually confirmed
-  verifyObserved(ctx, map, run, current, obs);
+  verifyObserved(ctx, map, run, current, obs, screenSeen, gates);
   writeRunStep(ctx, run, input.step_id, counts, { ok: true });
 
   // 5. advance
   const nextIndex = index + 1;
-  if (nextIndex >= expanded.length) return finish(ctx, map, run, recipe, obs, steps);
+  if (nextIndex >= expanded.length) return finish(ctx, map, run, recipe, obs, steps, screenSeen);
 
   const next = expanded[nextIndex]!;
   run.step_index = nextIndex - entryCount;
   run.current_step = next.step.id;
 
-  const handed = prepareNextStep(ctx, map, run, recipe, next, obs, { announce, steps, stepsDone: nextIndex });
+  const handed = prepareNextStep(ctx, map, run, recipe, next, obs, { announce, steps, stepsDone: nextIndex, isLast: nextIndex === expanded.length - 1, seen: { screen: screenSeen, seq: seenAt, by: identifiedBy } });
   if (handed.fallback !== undefined) return handed.fallback;
   ctx.db.updateRun(run);
   return { run_id: run.run_id, status: 'ok', step: handed.step!, ...(healed !== undefined ? { healed } : {}) };
 }
 
 /** 02 §8 / 08 §5 row 5: stamp what the observation confirmed (screen, element, edge). */
-function verifyObserved(ctx: AppMapContext, map: LoadedMap, run: RunRecord, current: { step: RecipeStep; screen: ScreenId | undefined }, obs: Observation): void {
-  const screens = obs.screen_after === UNKNOWN_SCREEN ? [] : [obs.screen_after];
+function verifyObserved(
+  ctx: AppMapContext, map: LoadedMap, run: RunRecord, current: { step: RecipeStep; screen: ScreenId | undefined },
+  obs: Observation, screenSeen: ScreenId | typeof UNKNOWN_SCREEN, gates: readonly GateId[],
+): void {
+  // issue #24: a screen behind a modal was not CLEANLY observed. Its own marker is occluded, its
+  // elements are under a subtree the OS hid, and the identification may be the remembered
+  // `covered` answer rather than anything in the tree. 02 §8 verification is a claim about one
+  // clean observation, so a capture with a gate up promotes nothing.
+  if (gates.length > 0) return;
+  // the SAME screen `checkExpect` just used (step 3): stamping verification against a screen the
+  // postcondition was not checked against is how a run comes to verify one thing and assert another
+  const seen = screenSeen;
+  const screens = seen === UNKNOWN_SCREEN ? [] : [seen];
   const elementId = stepElement(map, current.step);
   const screen = current.screen;
   const elements = elementId !== undefined && screen !== undefined && elementDefOn(map, screen, elementId) !== undefined
     ? [{ screen, element: elementId }]
     : [];
   const edges: Array<{ screen: ScreenId; action: { type: 'tap'; element: ElementId }; to: ScreenId }> = [];
-  if (screen !== undefined && current.step.action === 'tap' && obs.screen_after !== UNKNOWN_SCREEN && obs.screen_after !== screen) {
-    edges.push({ screen, action: { type: 'tap', element: current.step.element }, to: obs.screen_after });
+  if (screen !== undefined && current.step.action === 'tap' && seen !== UNKNOWN_SCREEN && seen !== screen) {
+    edges.push({ screen, action: { type: 'tap', element: current.step.element }, to: seen });
   }
   markVerified(ctx, { screens, elements, edges }, run.build ?? ctx.build);
 }
 
 /** 04 §5: the last step is done — the recipe's own `verify` decides `verified`. */
-function finish(ctx: AppMapContext, map: LoadedMap, run: RunRecord, recipe: RecipeFile, obs: Observation, steps: number): ReportStepResult {
-  const verdict = checkExpect(map, recipe.verify, obs.snapshot!, obs.screen_after);
+function finish(ctx: AppMapContext, map: LoadedMap, run: RunRecord, recipe: RecipeFile, obs: Observation, steps: number, screenSeen: ScreenId | typeof UNKNOWN_SCREEN): ReportStepResult {
+  // `screenSeen`, not `obs.screen_after`: the caller re-identified against the SESSION map, and
+  // deciding `verified` against a different screen than the steps were checked against is the
+  // split-brain issue #24 found in `screen_seen` (guided fallbacks) in the first place
+  const verdict = checkExpect(map, recipe.verify, obs.snapshot!, screenSeen, { params: run.params, ...(obs.value_checks !== undefined ? { valueChecks: obs.value_checks } : {}) });
   const verified = verdict.ok;
   run.state = verified ? 'done' : 'failed';
   run.finished_at = now();
@@ -1034,40 +1243,68 @@ function finish(ctx: AppMapContext, map: LoadedMap, run: RunRecord, recipe: Reci
 function prepareNextStep(
   ctx: AppMapContext, map: LoadedMap, run: RunRecord, recipe: RecipeFile,
   next: { step: RecipeStep; screen: ScreenId | undefined }, obs: Observation,
-  opts: { announce: boolean; steps: number; stepsDone: number },
+  // `seen` is the answer `reportStep` already computed against the SESSION map, with its seq and
+  // winning signal — every fallback raised here must report that one, not the ingest-time
+  // `obs.screen_after` derived against `ctx.map` (issue #24)
+  opts: { announce: boolean; steps: number; stepsDone: number; isLast?: boolean; seen: { screen: ScreenId | typeof UNKNOWN_SCREEN; seq: number; by: IdentifySignalKind } },
 ): { step?: RunStep; fallback?: ReportStepResult } {
   const tree = obs.snapshot!;
   const elementId = stepElement(map, next.step);
   const screen = obs.screen_after !== UNKNOWN_SCREEN ? obs.screen_after : next.screen;
+  // issue #26: on the LAST step the recipe's own `verify` is what `finish` checks, so it is that
+  // step's real postcondition when the step declares none of its own
+  const settle: SettleOptions = {
+    ...(next.screen !== undefined ? { screen: next.screen } : {}),
+    ...(recipe.verify !== undefined ? { verify: recipe.verify } : {}),
+    ...(opts.isLast === true ? { isLast: true } : {}),
+  };
   const def = elementId === undefined ? undefined : elementDefOn(map, screen, elementId);
   if (elementId === undefined || def === undefined) {
-    return { step: toRunStep(map, next.step, run.params, { tree, announce: opts.announce }) };
+    return { step: toRunStep(map, next.step, run.params, { tree, announce: opts.announce, settle }) };
   }
   const trigger = resolveElement(map, def, tree);
   if (trigger.status === 'hit' && !trigger.degraded) {
-    return { step: toRunStep(map, next.step, run.params, { tree, announce: opts.announce }) };
+    return { step: toRunStep(map, next.step, run.params, { tree, announce: opts.announce, settle }) };
   }
   // 04 §5: max 1 heal per step
   const counts = runStepCounts(ctx, run, next.step.id);
   if (counts.heals >= GUIDED_LIMITS.heals_per_step) {
     return {
       fallback: toFallback(ctx, run, {
-        step: next.step.id, reason: 'heal_limit', screen_seen: obs.screen_after, steps: opts.steps, steps_done: opts.stepsDone,
+        step: next.step.id, reason: 'heal_limit', screen_seen: opts.seen.screen, screen_seen_seq: opts.seen.seq, identified_by: opts.seen.by, steps: opts.steps, steps_done: opts.stepsDone,
         ...(next.step.expect !== undefined ? { expected: next.step.expect } : {}),
         message: `already healed ${next.step.id} once in this run`,
       }),
     };
   }
+  // issue #24: a gate control whose dialog (or whose sibling controls) cannot be located is not
+  // healed at all — see `resolve.gateHealScope`. Falling back is the safe answer: the LLM takes over and
+  // a human decides which button to press.
+  const bounds = gateHealScope(map, def, tree, next.step.action === 'dismiss_gate' || next.step.action === 'tap_gate' ? next.step.gate : undefined);
+  if (bounds === undefined) {
+    return {
+      fallback: toFallback(ctx, run, {
+        step: next.step.id, reason: 'heal_rejected', screen_seen: opts.seen.screen, screen_seen_seq: opts.seen.seq, identified_by: opts.seen.by, steps: opts.steps, steps_done: opts.stepsDone,
+        ...(next.step.expect !== undefined ? { expected: next.step.expect } : {}),
+        message: `${def.id} is a gate control and its dialog could not be located in the capture, so healing it is refused — a replacement chosen outside the dialog could be the opposite button (04 §7.3, issue #24)`,
+      }),
+    };
+  }
+  // a gate control is DECLARED on its gate file, never on the screen the dialog happens to be over
+  // — heal writes the new locator back to `screen`, so pointing it at the identified screen would
+  // fail `element … is not declared on <screen>` on every gate heal (issue #24)
+  const healScreen = gateOfElement(map, def, next.step.action === 'dismiss_gate' || next.step.action === 'tap_gate' ? next.step.gate : undefined) ?? screen ?? UNKNOWN_SCREEN;
   const healInput: HealInput = {
-    recipe: recipe.id, step: next.step, screen: screen ?? UNKNOWN_SCREEN, element: def,
+    recipe: recipe.id, step: next.step, screen: healScreen, element: def,
     intent_critical: isIntentCritical(map, next.step, def), tree, trigger, build: run.build ?? ctx.build, run_id: run.run_id,
+    ...(bounds ?? {}),
   };
   const proposal = proposeHeal(healInput);
   if (proposal.candidate !== undefined) {
     run.pending_heal = toPendingHeal(healInput, { ...proposal, candidate: proposal.candidate }, obs.seq);
     // the heal counter belongs to the step being handed out, not to the one just reported (04 §5)
     writeRunStep(ctx, run, next.step.id, { ...counts, heals: counts.heals + 1 }, {});
-    return { step: toRunStep(map, next.step, run.params, { tree, announce: opts.announce, pending: run.pending_heal }) };
+    return { step: toRunStep(map, next.step, run.params, { tree, announce: opts.announce, pending: run.pending_heal, settle }) };
   }
   const result = rejectHeal(ctx, { input: healInput }, proposal.reason as Exclude<typeof proposal.reason, 'accepted'>, proposal.candidates, {
     run_id: run.run_id, ...(proposal.runner_up !== undefined ? { runner_up_score: proposal.runner_up.score } : {}),
@@ -1076,7 +1313,7 @@ function prepareNextStep(
   const reason: FallbackReason = proposal.reason === 'intent_critical_label_changed' ? 'intent_critical_label_changed' : 'heal_rejected';
   return {
     fallback: toFallback(ctx, run, {
-      step: next.step.id, reason, screen_seen: obs.screen_after, steps: opts.steps, steps_done: opts.stepsDone,
+      step: next.step.id, reason, screen_seen: opts.seen.screen, screen_seen_seq: opts.seen.seq, identified_by: opts.seen.by, steps: opts.steps, steps_done: opts.stepsDone,
       ...(next.step.expect !== undefined ? { expected: next.step.expect } : {}),
       candidates: candidateLines(result.candidates),
       message: `could not resolve ${def.id} and the heal was rejected (${proposal.reason})`,

@@ -9,11 +9,11 @@ signature without updating this file and every caller. Read `docs/dev/toolchain.
 
 | tag | files | status | depends on |
 |---|---|---|---|
-| contract | `src/types.ts`, `src/config.ts`, `src/errors.ts`, `src/paths.ts`, `src/token.ts`, `src/lib.ts`, `src/test/helpers.ts` | **implemented** | — |
-| A1 | `src/yaml/load.ts`, `src/yaml/canonical.ts`, `src/yaml/schemas.ts`, `src/validate.ts`, `src/migrate-id.ts`, `src/merge-driver.ts` | stub | contract, `scrub.ts` (rule 8 patterns) |
+| contract | `src/types.ts`, `src/config.ts`, `src/errors.ts`, `src/paths.ts`, `src/token.ts`, `src/values.ts`, `src/lib.ts`, `src/test/helpers.ts` | **implemented** | — |
+| A1 | `src/yaml/load.ts`, `src/yaml/canonical.ts`, `src/yaml/schemas.ts`, `src/validate.ts`, `src/migrate-id.ts`, `src/merge-driver.ts` | stub | contract, `scrub.ts` (rule 8 patterns), `values.ts` (rules 8 and 9 read `{param}` slots) |
 | A2 | `src/log.ts`, `src/store/db.ts`, `src/store/export.ts`, `src/events.ts`, `src/context.ts` | stub | contract, A1 |
 | B1 | `src/tree.ts`, `src/scrub.ts`, `src/signature.ts` | stub | contract |
-| B2 | `src/identify.ts`, `src/resolve.ts`, `src/plan.ts`, `src/format.ts` | stub | contract, B1 |
+| B2 | `src/identify.ts`, `src/resolve.ts`, `src/plan.ts`, `src/format.ts`, `src/settle.ts` | stub | contract, B1 |
 | C1 | `src/observe.ts`, `src/recipes/match.ts`, `src/recipes/compile.ts`, `src/recipes/verbs.ts`, `src/recipes/lifecycle.ts` | stub | A2, B1, B2 |
 | C2 | `src/heal.ts`, `src/recipes/guided.ts` | stub | A2, B1, B2, C1 (lifecycle, observe) |
 | C3 | `src/recipes/maestro.ts`, `src/recipes/headless.ts`, `src/drift.ts`, `src/router-import.ts` | stub | A2, B1, B2, C1, C2 |
@@ -157,7 +157,8 @@ tests compare). The rules:
 |---|---|
 | ids | schema_version, screens, gates, elements |
 | ids.screen | id, title, deep_link |
-| ids.gate | id, dismiss |
+| ids.gate | id, dismiss, dismiss_intent_critical, controls |
+| ids.gate.control | id, intent_critical |
 | ids.element | id, kind, intent_critical, dynamic, label_regex |
 | manifest | schema_version, app_id, platform, deep_link_scheme, build, generated_at, generator |
 | build | version, build_number, git_sha |
@@ -174,9 +175,10 @@ tests compare). The rules:
 | recipe | id, version, platform, description, matches, params, preconditions, entry, steps, verify, status, provenance, last_verified_build |
 | param | name, type, required, values |
 | entry | deep_link, fallback_path |
-| step | id, action, element, list, match, text, direction, duration_ms, url, gate, timeout_ms, expect, intent_critical |
+| step | id, action, element, list, cell, match, text, direction, duration_ms, url, gate, control, timeout_ms, expect, intent_critical |
 | match | text |
-| expect | screen, focused, visible, not_visible, text_present |
+| expect | screen, focused, visible, not_visible, text_present, value |
+| value_assertion | element, equals, contains |
 | provenance | compiled_from, compiled_by, reviewed_by, revision_of |
 | mcp-allowlist | schema_version, servers |
 | server | name, source, transport, command, args, package, version, reviewer, reviewed_at, notes |
@@ -184,10 +186,14 @@ tests compare). The rules:
 2. **Omission**: `undefined`/`null` keys omitted; optional empty arrays omitted; required arrays
    (`elements`, `edges`, `steps`, `params`, `screens`, `gates`, `elements` in ids, `servers`)
    kept even when empty.
-3. **Sorting**: object lists `screens`, `gates`, `elements`, `variants` by `id`; `edges` by
+3. **Sorting**: object lists `screens`, `gates`, `elements`, `variants`, `controls` by `id`;
+   `edges` by
    `(action.type, action.element ?? action.url ?? action.gate ?? '', action.direction ?? '', to)`;
-   `servers` by `name`; string sets `required_ids`, `dynamic_regions`, `gates`, `sources`,
-   `visible`, `not_visible` sorted; all comparisons by code point (`<`). **Never reordered**:
+   `servers` by `name`; `expect.value` by `(element, equals-before-contains)` — keyed on
+   `<parent>.<key>`, not on the bare key, because `condition` also has a `value` key and a bare-key
+   rule would be one schema change away from reordering it; string sets `required_ids`,
+   `dynamic_regions`, `gates`, `sources`, `visible`, `not_visible` sorted; all comparisons by code
+   point (`<`). **Never reordered**:
    `steps`, `locators`, `matches`, `params`, `fallback_path`, `preconditions`, `postconditions`,
    `required_labels`, `args`, `values`.
 4. **Text**: `yaml@2.9.0 stringify(ordered, { indent: 2, lineWidth: 0, minContentWidth: 0,
@@ -271,9 +277,18 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 
 1. **Block vs flow style** — 02 §2.3 mandates block style while 02 §4/§6 examples use flow
    mappings; canonical form is block everywhere (§3 above).
-2. **Gate dismiss controls live only in `ids.gates[].dismiss`** (01 R1 example; the sibling
+2. **Gate controls live only under `ids.gates[]`** (01 R1 example; the sibling
    `scripts/app-map/gen-ids` rejects `gate.*` under `elements`). Validation rule 02 §10.2 treats
-   them as registered; `LoadedMap.elementRegistry` synthesizes `{kind:'button'}` entries.
+   them as registered; `LoadedMap.elementRegistry` synthesizes `{kind:'button'}` entries, from the
+   one shared `types.gateControlEntries`.
+   **Widened from one control to N** (issue #24): `dismiss` plus any number of `controls[]`. The
+   single-home rule is unchanged and is exactly why the widening goes here rather than relaxing
+   `ELEMENT_ID_REGEX`'s `(?!gate\.)` — a destructive dialog's confirm button was previously
+   inexpressible, being neither a gate control (only `dismiss` existed) nor an element (the prefix
+   is reserved). Making it a plain element would also have been strictly worse: `resolve`'s
+   `isGateElement` keys on the `gate.` prefix to search the whole tree with gate exclusion off, so
+   a non-prefixed id declared on a gate would be scoped to the screen root and then subtracted by
+   `gateDialogNodes` — declared and permanently unresolvable.
 3. **Structural-hash encoding** (02 §4.4 gives the idea, not the bytes): §4 above. Region node
    included, descendants excluded, duplicates kept.
 4. **Path index vs sibling_index** — the 02 §4.1 example has `navigationBar/button[1]` and
@@ -337,7 +352,10 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     (`s[0-9]+[a-z]?`).
 18. **Decay** (02 §8) applies only when both build numbers parse as integers; otherwise no decay.
 19. **Gates never win identification**; a tree that is only a gate is `unknown` +
-    `gates_present`.
+    `gates_present`. Still true — a gate is never the answer. What changed with decision 68 is what
+    the answer is when a gate is present and has HIDDEN the answer: the screen the session
+    remembers, at 0.75, rather than an ancestor's surviving marker at 1.0. The gate itself is still
+    only ever reported in `gates_present`.
 20. **07 §3 Release-build probe** = the iOS `UserDefaults` record `app_map_debug_probe`
     (instrumentation/ios AppMapDebugEndpoint) read via `simctl spawn … defaults export`, falling back
     to the app's container plist via `plutil -convert xml1` (iOS 26's `defaults` no longer resolves a
@@ -356,7 +374,11 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     scrubber.
 25. **`summary` text format is fixed** (03 §8 lists content, not layout) — see format.ts.
 26. **`intent_critical` absent means false** for the agreement rule (02 §10.6), in ids, screen
-    elements and recipe steps alike.
+    elements and recipe steps alike. **One exception**: `ids.yaml` `gates[].controls[]` REQUIRES it
+    (01 R7, issue #24). A gate control is by construction the non-escape half of an interrupter, so
+    the author states whether pressing it commits something rather than defaulting into "no"; and
+    the answer is what makes 04 §7.2's exact-label rule protect the control. `dismiss` keeps the
+    default, declarable as `dismiss_intent_critical`.
 27. **`route` identification signal** comes from the `url` input of the observation — the driver's
     deep-link call, `open-url` on Argent (`observe.ts` reads `input.url`; Argent does not report
     routes); `tree.route` is honored when a driver provides it.
@@ -422,7 +444,30 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
 41. **heal-report / drift-report carry closed codes only** (07 §2.4): `HeadlessReport.error_code`
     (`HEADLESS_ERROR_CODES`) + `failed_command_index` replace free-text `error` and `flow_path`;
     drift `reason` is `DRIFT_REASONS`. Maestro output goes to `.local/server.log` at `debug`.
-42. **`deep_link_scheme` is the constant `appmap`** (01 R5 fixes it; every pattern hard-codes it).
+42. **`deep_link_scheme` is per app; the committed MAP is scheme-relative** (01 R5, issue #25).
+    It was the constant `appmap`, which meant every instrumented app registered the same custom URL
+    scheme and the OS routed `appmap://<screen>` — and its `?fixture=` — to whichever of them it
+    liked. The failure surfaced as an inspector timeout on the *correct* bundle id, which reads like
+    anything but a routing problem.
+    The manifest now declares the scheme the app actually registers (default `appmap`), but every
+    `deep_link`, `signature.route` and `open_link.url` in the YAML keeps the canonical `appmap://`
+    form. `types.emitDeepLink` rewrites on the way OUT (guided `open_link`, Maestro `openLink`,
+    `plan_path`, `get_screen`, the drift tour) and `types.canonicalDeepLink` on the way IN
+    (`identify`'s route signal, `import-router`, `name_screen`).
+    The alternative — widening the six committed patterns to accept any scheme and cross-checking
+    the manifest in `validate` — was rejected on four counts: a JSON Schema cannot see the manifest
+    (`loadSchemas` caches one validator per kind per directory, with no per-document context), so
+    rule 1 would get strictly weaker; the map stops being portable across two differently-schemed
+    builds; renaming the scheme becomes a whole-map diff and a merge-driver event on every screen
+    file instead of one manifest line; and `map.routes`, keyed on `routeKey(deep_link)`, would have
+    to be rebuilt whenever the manifest changed. Files the MAP owns are canonical; files the APP
+    produces (`router-export.json`) are scheme-bearing and canonicalised on import.
+    What a schema cannot check is checked at RUN time, not by a static warning: a warning on every
+    validate run would punish exactly the repo that did what the issue asked, while proving
+    nothing. `run_recipe` / `run --headless` refuse with `deep_link_scheme_collision` when a probe
+    positively names another bundle claiming the scheme, and give the opposite diagnosis — fix the
+    plist, not the manifest — when the probe says this app does not register it. An unanswerable
+    probe is never evidence. `import-router` refuses an export carrying a third scheme.
 43. **Maestro version check runs once in `startServer`** after `openContext`, non-fatal (`warn`),
     off the first-tool critical path (03 §11, 03 §13, 07 §5.3); headless runs re-check.
 44. **`get_screen` `conf`** = the session's last observation `confidence` when its `screen_after`
@@ -731,6 +776,78 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     rebuilt list; carrying reviewed `wait_for` steps into a rebuild is the filed follow-up. Both
     exemptions delete themselves: add the action to `COMPILABLE_STEP_ACTIONS` the day 04 §3.3
     emits it. Follow-up to issue #13.
+66. **A data assertion names the SLOT and is decided at ingest** (02 §6 `expect.value`, issue #23).
+    A recipe could say *a* thing was on screen, never that it was *the right* thing, so a `type`
+    step that no-opped saved whatever was already in the field and reported PASS — and 04 §8 kept
+    promoting it, parameterized recipes being exactly the ones that carry business logic.
+    Two constraints fixed the design. The map may hold no values (07 §2.3.5), so the assertion
+    references `{param}` and validate rule 8 rejects a literal — strictly stronger than the PII
+    sweep, which `equals: "Acme Corp"` passes. And the comparison CANNOT run where the other four
+    `expect` keys run: `checkExpect` sees the scrubbed snapshot, which has no `value`/`text` on any
+    node and no `label` under any `dynamic` id — precisely what such an assertion targets — and the
+    raw tree never gets there (hook ingest is a different process, and `insertObservation` asserts
+    the snapshot is scrubbed). So it is evaluated once, at ingest, and only a BOOLEAN per assertion
+    is persisted (`Observation.value_checks`); the observed string never leaves that call, and a
+    failure reports `value:<element>` naming neither side. `compareValue` is deliberately
+    `compile.parameterize`'s comparison, or a recipe could not verify the run it was compiled
+    from — the trajectory typed `50` and the screen renders `$50.00`.
+    Rule 9 makes it bite: a declared param must be observed by SOME assertion. A `select
+    match.text` slot counts (the row is addressed by that text at replay); a `type` slot does not,
+    typing not being observing. Warning while `candidate`, error at `verified`/`ci_gate`.
+67. **A gate may declare more than one control, and only `tap_gate` presses the others**
+    (01 R7, 02 §6, issue #24). `dismiss` has to keep meaning "the safe escape" because two pieces
+    of machinery press it unattended — guided synthesizes a dismissal twice per step, the Maestro
+    export guards every step with one — so a `via:` on `dismiss_gate` would put a destructive
+    commit one enum value away from an autonomous press. Hence a separate action, and hence the
+    controls live under `gates[]` (decision 2) rather than relaxing the reserved prefix.
+    `tap_gate` had to be COMPILABLE, not merely expressible: decision 65(b) exempts reviewed steps
+    of kinds the compiler cannot emit, so a `tap_gate` outside `COMPILABLE_STEP_ACTIONS` would be
+    silently DROPPED by every automatic recompile — leaving a recipe named "delete the team"
+    passing while deleting nothing, which is decision 57's erosion aimed at the one step where it
+    matters most. Ingest therefore learned to attribute a tap to a present gate's controls.
+    Healing is bounded STRUCTURALLY, not statistically: scoring alone already put Cancel→Delete
+    within noise of the 0.75 line (two buttons in one alert agree on role, role path and parent
+    role), so the candidate search is scoped to the gate's own dialog, sibling controls are
+    excluded at any score, and a dialog or sibling that cannot be located refuses the heal
+    outright rather than widening it.
+68. **While a gate is up, memory beats an ancestor marker** (03 §5.1b, issue #24). A modal hides
+    the presenting screen's subtree including its `screen.<id>`, so the deepest surviving marker is
+    an ancestor and rule 2 answered it at confidence 1.0 — full confidence built on the ABSENCE of
+    the evidence that mattered. With `gates_present` non-empty, `covered_screen` (the session's
+    previous screen) wins at `IDENTIFY_SCORES.covered = 0.75`: above `IDENTIFY_UNKNOWN_THRESHOLD`
+    so it is an answer, below `required_ids` so any live evidence outranks a memory, below `marker`
+    so no consumer can mistake it for having seen one. Gated on a gate being present, because
+    otherwise an ordinary push/pop would report the previous screen for ever. Nothing is verified
+    from a capture with a gate up, and `identified_by` is STORED on the observation — `covered`
+    leaves no trace in `signature_after`, so every attempt to re-derive it is shadowed by another
+    rule.
+    The hard part is not the score, it is that occlusion and a NAVIGATION to a screen that raises a
+    gate on entry produce **byte-identical trees** — so the memory has to stand down on evidence
+    outside the capture. Three conditions do it, in increasing strength: the remembered screen's own
+    marker still being present (nothing is occluded); the marker-named screen declaring one of the
+    present gates (it raised it, so it is where we are) — cheap, but `gates` is LEARNED and silent
+    about a screen that has not met the gate yet; and `previous_markers`, which settles it outright
+    by 01 R3 (a pushed screen leaves the covered screen's marker behind, so the ancestor under a
+    modal was already on screen a moment ago, while a marker appearing WITH the gate is a
+    navigation). Ingest supplies it, which is where it matters: that answer is persisted, and the
+    next observation's `screen_before` — what the compiler reads to place a step on a screen — is
+    read back off it. A live `identify_screen` falls back to the two cheap conditions and carries
+    the alternative at 1.0 in `candidates`.
+69. **The server tells the driver what to wait for** (04 §5 `settle`, issue #26). Every consumer of
+    `run_recipe` invented its own settle policy and the obvious one, `sleep(n)`, was ~85% of a real
+    suite's wall clock AND the flake mode. The hint is the step's own postcondition — the same
+    assertion `report_step` is about to check, so the two cannot drift apart — carried as a
+    `DriverTarget` rather than the reported issue's flat `identifier`, because three of the pilot's
+    own cases are not ids (static copy, a gate control with only a `label_regex`, a `select` row
+    addressed by text) and reusing the vocabulary means the driver translates it with the code it
+    already has.
+    It belongs on the server because only the server knows which elements are `dynamic` (so it
+    prefers the stable `screen.<id>` marker), what budget the recipe declared, and what `verify`
+    asserts on the last step. Two deliberate limits: the budget is NEVER shortened for a possible
+    gate — `gates_possible` discloses the risk instead, and a settle timeout is not a failure, the
+    driver reports anyway and the server answers `status: gate`; and a synthesized dismissal
+    settles on its own control disappearing, not on the interrupted step's postcondition, that step
+    having been handed back with `retry` and not re-run.
 
 ## 8. How to implement your module
 
@@ -806,7 +923,7 @@ each pilot tree equals the committed `signature.structural_hash`; variant hash f
 false otherwise; `labelNorm` cases.
 
 ### B2 — identification and resolution
-Fill: `identify.ts`, `resolve.ts`, `plan.ts`, `format.ts`.
+Fill: `identify.ts`, `resolve.ts`, `plan.ts`, `format.ts`, `settle.ts`.
 Tests: `identify.test.ts` — every pilot tree → its screen with confidence 1.0 (03 §12);
 `invoice_list.with_gate` → `invoice_list` + `gates_present: [gate.push_permission]`;
 `invoice_list.no_ids` → `unknown` with `invoice_list` among the top-3; marker removed but ids kept
@@ -818,7 +935,11 @@ resolves by `role_label`, `degraded: true`, confidence 0.6; two cells share `inv
 disambiguated by fingerprint (confidence 0.9); `plan.test.ts` — `plan_path(login, invoice_new)` →
 deep link; `plan_path(invoice_new, client_picker)` → one edge; `format.test.ts` — exact
 `get_screen` block for `invoice_list` (03 §8), summary ≤600 tokens and ≥ the recipe list,
-`formatRunStep` ≤120 tokens.
+`formatRunStep` ≤120 tokens; `settle.test.ts` — the pilot's `expect.screen` steps settle on
+`screen.<id>`, a step with no `expect` gets NO hint, a `visible` list prefers the non-`dynamic`
+id, a `wait_for` carries its own budget, the last step falls through to `verify`, a synthesized
+dismissal settles on its gate control going `not_visible`, and every hint still fits the 120-token
+step budget.
 
 ### C1 — observations, matching, compile, lifecycle
 Fill: `observe.ts` (incl. `nameScreen`, `finishTask`/`inferTaskOutcome`, Stop handling, the

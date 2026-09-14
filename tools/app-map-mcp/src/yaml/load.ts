@@ -20,7 +20,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, join, relative, sep } from 'node:path';
 import type { AppMapConfig, Platform } from '../config.ts';
 import type { BuildNumber, IdsElement, IdsGate, IdsRegistry, IdsScreen, LoadedFile, LoadedMap, Manifest, McpAllowlist, RecipeFile, ScreenFile, ElementRef, ValidationIssue } from '../types.ts';
-import { now, routeKey } from '../types.ts';
+import { gateControlEntries, now, routeKey } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import type { YamlKind } from '../paths.ts';
 import { allowlistFile, idsFile, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from '../paths.ts';
@@ -172,15 +172,13 @@ export interface IndexMapInput {
   validationWarnings?: ValidationIssue[];
 }
 
-/** The registry entry synthesized for a gate dismiss control (architecture §7 decision 2). */
-export function dismissRegistryEntry(gate: IdsGate): IdsElement {
-  return { id: gate.dismiss, kind: 'button', intent_critical: false, dynamic: false };
-}
+export { dismissRegistryEntry, gateControlEntries } from '../types.ts';
 
 /**
  * Pure: build `LoadedMap` indexes (screens/gates split by `kind`, elements by id with every
  * declaration, markers, routes keyed by `routeKey(deep_link)`, elementRegistry including gate
- * dismiss controls synthesized as `{id, kind:'button', intent_critical:false, dynamic:false}`).
+ * controls — `dismiss` and every `gates[].controls[]` entry, issue #24 — synthesized as
+ * `{id, kind:'button', intent_critical: <declared>, dynamic:false}`).
  * `staticLabels` = `staticStrings` ∪ element labels ∪ `kind: screen` titles (gate titles are
  * excluded, 07 §2.1). `routes` are keyed from the screen files; validate rule 2 guarantees they
  * agree with ids.yaml.
@@ -195,9 +193,10 @@ export function indexMap(input: IndexMapInput): LoadedMap {
   }
   for (const g of ids.gates) {
     idsIndex.set(g.id, g);
-    const dismiss = dismissRegistryEntry(g);
-    idsIndex.set(g.dismiss, dismiss);
-    elementRegistry.set(g.dismiss, dismiss);
+    for (const control of gateControlEntries(g)) {
+      idsIndex.set(control.id, control);
+      elementRegistry.set(control.id, control);
+    }
   }
   for (const e of ids.elements) {
     idsIndex.set(e.id, e);

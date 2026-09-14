@@ -35,7 +35,7 @@
  * Layer: session (imports context, types, tree, signature, resolve, events).
  */
 import type { AppMapContext } from './context.ts';
-import type { BBoxNorm, ElementDef, Fingerprint, HealCandidate, HealInput, HealReason, HealRecord, HealResult, Locator, LocatorStrategy, PendingHeal, Role, ScreenId, TreeNode } from './types.ts';
+import type { AnyTree, BBoxNorm, ElementDef, Fingerprint, HealCandidate, HealInput, HealReason, HealRecord, HealResult, Locator, LocatorStrategy, PendingHeal, Role, ScreenId, TreeNode } from './types.ts';
 import { DEFAULT_LOCATOR_WEIGHTS, HEAL_ACCEPT_SCORE, HEAL_RUNNER_UP_MARGIN, HEAL_WEIGHTS, REDACTED, now } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { centerOf, labelOf, parentOf, pathOf, rolePath, screenRoot, siblingIndex, walk } from './tree.ts';
@@ -146,8 +146,20 @@ export function scoreCandidates(input: HealInput): HealCandidate[] {
   const intentCritical = input.intent_critical === true;
   const scored: Array<{ order: number; candidate: HealCandidate }> = [];
   let order = 0;
-  walk(tree, (node) => {
+  // 04 §7.1 / issue #24. Two bounds on WHERE a replacement may be found, both structural:
+  //  - `candidateRoot` narrows the walk (default `tree.root`, so nothing else changes). For a gate
+  //    control the caller passes the dialog's own subtree, mirroring the scoping `resolve` already
+  //    does — a confirm button is never replaced by something outside its dialog.
+  //  - `forbiddenNodes` removes, at ANY score, the nodes that currently resolve to another control
+  //    of the same gate. Without it "heal Cancel into Delete" is merely improbable rather than
+  //    impossible: two buttons in one alert share role, role path and parent role and sit close
+  //    together, so the scoring alone lands near the 0.75 acceptance line. A destructive commit is
+  //    not a thing to leave to arithmetic.
+  const searchRoot = input.candidateRoot ?? tree.root;
+  const forbidden = input.forbiddenNodes;
+  walk({ ...tree, root: searchRoot } as AnyTree, (node) => {
     const position = order++;
+    if (forbidden?.has(node) === true) return undefined;
     if (!compatibleRole(targetRole, node.role)) return undefined;
     // 7.1 role equality (0.35) — a merely *compatible* role scores 0 on this feature
     const roleFeature = node.role === targetRole ? 1 : 0;

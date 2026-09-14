@@ -95,46 +95,6 @@
       "minProperties": 1,
       "description": "02 §4.1 pre/postcondition; 02 §4.3 variant `when`"
     },
-    "expect": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "screen": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9_]*$"
-        },
-        "focused": {
-          "type": "string",
-          "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
-        },
-        "visible": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
-          },
-          "uniqueItems": true,
-          "minItems": 1
-        },
-        "not_visible": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"
-          },
-          "uniqueItems": true,
-          "minItems": 1
-        },
-        "text_present": {
-          "type": "string",
-          "minLength": 1,
-          "description": "static copy only (02 §6)"
-        }
-      },
-      "required": [],
-      "minProperties": 1,
-      "description": "02 §6 expect conditions (closed)"
-    },
     "bboxNorm": {
       "type": "object",
       "additionalProperties": false,

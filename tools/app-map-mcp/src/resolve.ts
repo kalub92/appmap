@@ -30,7 +30,7 @@
  *
  * Layer: map (imports types + tree + signature).
  */
-import type { AnyTree, DriverTarget, ElementDef, ElementId, FindElementResult, Fingerprint, LoadedMap, Locator, ResolveHit, ResolveMiss, ResolveResult, ScreenId, TreeNode } from './types.ts';
+import type { AnyTree, DriverTarget, ElementDef, ElementId, GateId, FindElementResult, Fingerprint, LoadedMap, Locator, ResolveHit, ResolveMiss, ResolveResult, ScreenId, TreeNode } from './types.ts';
 import { DEGRADED_THRESHOLD, DEFAULT_LOCATOR_WEIGHTS, LOCATOR_STRATEGIES, REDACTED, isGateId } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { centerOf, labelOf, nodeAtPath, parentOf, pathOf, screenRoot, siblingIndex, walk } from './tree.ts';
@@ -64,6 +64,79 @@ function isGateElement(map: LoadedMap, element: ElementDef): boolean {
   if (isGateId(element.id) || /^gate\./.test(element.id)) return true;
   const refs = map.elements.get(element.id) ?? [];
   return refs.length > 0 && refs.every((r) => map.gates.has(r.screen));
+}
+
+/**
+ * The subtree node of the dialog `gateId` is showing, or `undefined` when it is not up. The
+ * one-gate variant of `gateDialogNodes`, exported so healing can scope its candidate search to the
+ * dialog a gate control lives in (issue #24) instead of walking the whole screen.
+ */
+export function gateDialogRoot(map: LoadedMap, tree: AnyTree, gateId: GateId): TreeNode | undefined {
+  const gate = map.gates.get(gateId);
+  if (gate === undefined || !tree?.root) return undefined;
+  let found: TreeNode | undefined;
+  walk(tree, (n) => {
+    if (found !== undefined) return false;
+    if (n.role !== 'alert' && n.role !== 'sheet') return undefined;
+    if (gateSignatureMatches({ ...tree, root: n } as AnyTree, gate)) { found = n; return false; }
+    return undefined;
+  });
+  return found;
+}
+
+/** The gate `def` belongs to: named by the step, or the gate file that declares the element. */
+export function gateOfElement(map: LoadedMap, def: ElementDef, named?: GateId): GateId | undefined {
+  if (named !== undefined) return named;
+  for (const [id, gate] of map.gates) {
+    if ((gate.elements ?? []).some((e) => e.id === def.id)) return id;
+  }
+  return undefined;
+}
+
+/**
+ * The two structural bounds a heal of a GATE control gets (04 §7.3, issue #24) — the dialog it may
+ * look in, and the sibling controls it may never propose. `{}` for an ordinary screen element,
+ * which heals exactly as before; `undefined` means REFUSE THE HEAL.
+ *
+ * Both halves fail CLOSED, because the situation where they cannot be computed is precisely a
+ * redesign of the dialog — which is also precisely when a heal is attempted. An unbounded walk
+ * would then be free to propose the button next to the one we lost, and the whole point is that
+ * "heal Cancel into Delete" must be impossible rather than merely improbable: two buttons in one
+ * alert agree on role, role path and parent role and sit close together, so the 04 §7.1 score
+ * alone lands within noise of the acceptance line.
+ *
+ * Shared by both replay rungs on purpose. The guided runner and the headless runner build their
+ * own `HealInput`, and a safety property that only one of them applies is not a safety property.
+ */
+export function gateHealScope(
+  map: LoadedMap, def: ElementDef, tree: AnyTree, named?: GateId,
+): { candidateRoot?: TreeNode; forbiddenNodes?: ReadonlySet<TreeNode> } | undefined {
+  const gateId = gateOfElement(map, def, named);
+  if (gateId === undefined) {
+    // an id under the reserved `gate.` prefix whose owning gate we cannot find is NOT an ordinary
+    // screen element: it is a gate control in a half-integrated map (registered in ids.yaml,
+    // missing its gate file, or the file failed to load). Returning `{}` there would hand it the
+    // unbounded walk this function exists to prevent.
+    return /^gate\./.test(def.id) ? undefined : {};
+  }
+  const root = gateDialogRoot(map, tree, gateId);
+  if (root === undefined) return undefined;
+  const siblings = new Set<TreeNode>();
+  const registered = map.ids.gates.find((g) => g.id === gateId);
+  const others = [registered?.dismiss, ...(registered?.controls ?? []).map((c) => c.id)]
+    .filter((id): id is ElementId => typeof id === 'string' && id !== '' && id !== def.id);
+  for (const id of others) {
+    // A sibling that cannot be EXCLUDED is the dangerous case, not a benign one, whichever way it
+    // fails — its node is still in the dialog and is now the best-scoring lookalike for the control
+    // being healed. So both of these refuse rather than skip: a control ids.yaml registers but the
+    // gate file does not declare, and one that declares but does not resolve.
+    const otherDef = map.gates.get(gateId)?.elements?.find((e) => e.id === id);
+    if (otherDef === undefined) return undefined;
+    const hit = resolve(map, otherDef, tree);
+    if (hit.status !== 'hit') return undefined;
+    siblings.add(hit.node);
+  }
+  return { candidateRoot: root, ...(siblings.size > 0 ? { forbiddenNodes: siblings } : {}) };
 }
 
 /**

@@ -38,7 +38,7 @@
  */
 import type { AppMapContext } from './context.ts';
 import type { BuildInfo, Edge, IdsRegistry, ImportRouterResult, Manifest, RecipeFile, RecipeId, RouterExport, RouterExportScreen, ScreenFile, ScreenId, ScreenSource } from './types.ts';
-import { isNewerBuild } from './types.ts';
+import { CANONICAL_DEEP_LINK_SCHEME, canonicalDeepLink, isNewerBuild } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { schemaDir, screenFile } from './paths.ts';
 import { PLATFORMS } from './config.ts';
@@ -108,6 +108,40 @@ function withSource(sources: readonly ScreenSource[] | undefined, source: Screen
   list.push(source);
   list.sort();
   return { sources: list, changed: true };
+}
+
+/**
+ * The export is app-produced, so its routes carry the scheme the APP registers (issue #25); the
+ * map stores every link in the canonical `appmap://` form. Rewrite on the way in so a per-app
+ * scheme never reaches the committed YAML — otherwise the same app-map, pointed at a rebuilt app
+ * with a different scheme, would rewrite every screen file.
+ */
+function canonicalizeRoutes(screens: readonly RouterExportScreen[], scheme: string | undefined): RouterExportScreen[] {
+  const expected = new Set([CANONICAL_DEEP_LINK_SCHEME, scheme ?? CANONICAL_DEEP_LINK_SCHEME]);
+  const check = (url: string | undefined, where: string): void => {
+    if (typeof url !== 'string' || url === '' || url === 'none') return;
+    const got = /^([a-z][a-z0-9+.-]*):\/\//.exec(url)?.[1];
+    if (got === undefined || expected.has(got)) return;
+    // the misconfiguration issue #25 is ABOUT: the app answers a scheme the manifest does not
+    // name. Rewriting it silently would put a non-canonical URL in the map; ignoring it would let
+    // the map claim a route the app does not serve. Say which two disagree.
+    throw new AppMapError(
+      ERROR_CODES.BAD_INPUT,
+      `router export ${where} is ${got}://…, but the manifest declares deep_link_scheme: ${scheme ?? CANONICAL_DEEP_LINK_SCHEME}`,
+      'the app and app-map/<platform>/manifest.yaml must name the same scheme (01 R5); fix whichever is wrong before importing',
+    );
+  };
+  for (const rs of screens) {
+    check(rs.route, `route of ${rs.id}`);
+    for (const e of rs.edges ?? []) if (e.action.type === 'open_link') check(e.action.url, `an open_link edge of ${rs.id}`);
+  }
+  return screens.map((rs) => {
+    const route = typeof rs.route === 'string' ? canonicalDeepLink(rs.route, scheme) : rs.route;
+    const edges = (rs.edges ?? []).map((e) => (
+      e.action.type === 'open_link' ? { ...e, action: { ...e.action, url: canonicalDeepLink(e.action.url, scheme) } } : e
+    ));
+    return { ...rs, ...(route !== undefined ? { route } : {}), ...(rs.edges !== undefined ? { edges } : {}) };
+  });
 }
 
 /** Pure: a fresh candidate screen from one export entry. */
@@ -211,7 +245,7 @@ export function importRouter(ctx: AppMapContext, doc: RouterExport, opts: Import
 
   const result: ImportRouterResult = { created: [], updated: [], retired: [], unchanged: [], edges_added: 0, unregistered: [], purged: [], purged_recipes: [], build_updated: false };
   const exported = new Map<ScreenId, RouterExportScreen>();
-  for (const rs of doc.screens) exported.set(rs.id, rs);
+  for (const rs of canonicalizeRoutes(doc.screens, ctx.map.manifest?.deep_link_scheme)) exported.set(rs.id, rs);
 
   const unregistered: RouterExportScreen[] = [];
   const writes: Array<{ screen: ScreenFile; reason: string }> = [];

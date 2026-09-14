@@ -12,15 +12,20 @@
  * Layer: map (imports types only). Pure.
  */
 import type { Edge, EdgeAction, LoadedMap, PlanPathResult, ScreenId } from './types.ts';
-import { PREVIOUS_SCREEN, UNKNOWN_SCREEN, isGateId } from './types.ts';
+import { PREVIOUS_SCREEN, UNKNOWN_SCREEN, emitDeepLink, isGateId } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 
 type EdgeStep = { from: ScreenId; action: EdgeAction; to: ScreenId };
 
-/** a usable deep link: a non-empty string other than the literal `none` (01 R5, decision 9) */
+/**
+ * A usable deep link: a non-empty string other than the literal `none` (01 R5, decision 9), in
+ * the scheme the app actually registers — the map writes every link `appmap://` and this is one
+ * of the points it is handed to a caller who will open it (issue #25).
+ */
 function deepLinkOf(map: LoadedMap, id: ScreenId): string | undefined {
   const link = map.screens.get(id)?.deep_link;
-  return typeof link === 'string' && link !== '' && link !== 'none' ? link : undefined;
+  if (typeof link !== 'string' || link === '' || link === 'none') return undefined;
+  return emitDeepLink(link, map.manifest?.deep_link_scheme);
 }
 
 function requireScreen(map: LoadedMap, id: ScreenId, role: 'from' | 'to'): void {

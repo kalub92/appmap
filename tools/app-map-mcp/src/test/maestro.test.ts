@@ -74,9 +74,12 @@ describe('recipeToMaestroFlow — the 04 §6.2 mapping table', () => {
       // s5 tap + expect screen
       { tapOn: { id: 'invoice.save.button' } },
       { extendedWaitUntil: { visible: { id: 'screen.invoice_detail' }, timeout: 10000 } },
-      // recipe verify: screen + each visible
+      // recipe verify: screen + each visible + each value (issue #23). The value assertion is the
+      // one that proves the invoice carries the amount the run asked for rather than merely that
+      // an amount is on screen; the flow file is `.local`, so the substituted value is fine here.
       { extendedWaitUntil: { visible: { id: 'screen.invoice_detail' }, timeout: 10000 } },
       { assertVisible: { id: 'invoice.detail.amount.text' } },
+      { assertVisible: { id: 'invoice.detail.amount.text', text: '50' } },
     ]);
     assert.deepEqual(flow.command_index, { s0: 0, s1: 2, s2: 4, s3: 6, s4: 8, s5: 11 });
   });

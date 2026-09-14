@@ -33,7 +33,9 @@ import { dirname } from 'node:path';
 import { stringify } from 'yaml';
 import type { AppMapContext } from '../context.ts';
 import type { ElementDef, ElementId, Expect, GateId, Locator, LocatorStrategy, LoadedMap, MaestroExportResult, RecipeFile, RecipeParams, RecipeStatus, RecipeStep, ScreenFile, ScreenId, StepId } from '../types.ts';
-import { DEEP_LINK_REGEX, HEADLESS_STRATEGIES } from '../types.ts';
+import { DEEP_LINK_REGEX, HEADLESS_STRATEGIES, emitDeepLink } from '../types.ts';
+import { assertionOp } from '../values.ts';
+import { DEFAULT_SETTLE_MS } from '../settle.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { ciParamsFile, maestroFlowFile, maestroOutDir } from '../paths.ts';
 
@@ -53,6 +55,8 @@ export interface FlowOptions {
   fromStep?: StepId;
   /** default true; false compiles `expect.focused` to a plain assertVisible (04 §10) */
   focusedSelector?: boolean;
+  /** default true; false compiles `expect.value` to a bare `text:` match instead of `{id, text}` (issue #23) */
+  valueSelector?: boolean;
   appId?: string;
   /**
    * locator overrides per element id — the headless runner re-exports from step k with the
@@ -72,7 +76,10 @@ export interface FlowOptions {
 type Command = Record<string, unknown>;
 
 /** 10 000 ms — the `expect screen` / `wait_for` default from the 04 §6.2 mapping table. */
-const DEFAULT_WAIT_MS = 10_000;
+// one budget for both rungs: the guided settle hint (issue #26) and this export wait the same
+// amount for the same assertion, so a recipe cannot behave differently depending on which rung
+// replayed it
+const DEFAULT_WAIT_MS = DEFAULT_SETTLE_MS;
 
 /**
  * `{amount}` → `params.amount` (String()); unknown slots are left as-is. Mirrors
@@ -170,10 +177,19 @@ interface EmitState {
   map: LoadedMap;
   params: RecipeParams;
   focused: boolean;
+  valueSelector: boolean;
   overrides: FlowOptions['overrides'];
   commands: Command[];
   ineligible: Set<StepId>;
   screen: ScreenId | undefined;
+}
+
+/**
+ * A URL for `openLink`: the map writes every deep link `appmap://`, the device only answers the
+ * scheme the app registered (`manifest.deep_link_scheme`, issue #25).
+ */
+function openLinkFor(map: LoadedMap, url: string): string {
+  return emitDeepLink(url, map.manifest?.deep_link_scheme);
 }
 
 /** `extendedWaitUntil` on a screen marker (04 §6.2 `expect screen`). */
@@ -223,13 +239,39 @@ function emitExpect(st: EmitState, stepId: StepId, expect: Expect | undefined, s
     else st.commands.push({ assertNotVisible: sel });
   }
   if (expect.text_present && !skip.text_present) st.commands.push({ assertVisible: { text: expect.text_present } });
+  // issue #23: the one rung that CAN compare against the live device. `checkExpect` reads a boolean
+  // decided at ingest because the scrubbed tree carries no value; Maestro reads the device itself.
+  // The flow file is `.local`, never committed (06 R5), so the substituted value is fine here —
+  // and it must be REGEX-ESCAPED, because Maestro matches `text:` as a regex and `$50.00` is
+  // otherwise an anchor plus two wildcards.
+  for (const v of expect.value ?? []) {
+    const parsed = assertionOp(v);
+    if (parsed === undefined) continue;
+    const value = substituteSlots(parsed.slot, st.params);
+    if (value === parsed.slot) continue; // unbound param: assert nothing rather than the slot text
+    const body = escapeRegex(value);
+    const text = parsed.op === 'contains' ? `.*${body}.*` : body;
+    const sel = selectorForElement(st.map, v.element, st.screen, st.overrides);
+    if (!sel) { st.ineligible.add(stepId); continue; }
+    // 04 §10's `focusedSelector` precedent: whether Maestro ANDs the two fields of a selector is
+    // the same class of unverified claim, so `valueSelector: false` degrades to a bare text match.
+    st.commands.push({ assertVisible: st.valueSelector ? { ...sel, text } : { text } });
+  }
+}
+
+/** Every regex metacharacter escaped: a Maestro `text:` selector is a regex, an amount is not. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** the gate guards a step on `st.screen` carries (04 §6.2: emitted before every step listing the gate). */
-function emitGateGuards(st: EmitState, stepId: StepId, extra: readonly GateId[] = []): void {
+function emitGateGuards(st: EmitState, stepId: StepId, extra: readonly GateId[] = [], except?: GateId): void {
   const declared = (st.screen !== undefined ? st.map.screens.get(st.screen)?.gates : undefined) ?? [];
   const seen = new Set<GateId>();
   for (const gateId of [...extra, ...declared]) {
+    // issue #24: never guard the gate this very step means to act on — the guard taps `dismiss`,
+    // i.e. Cancel, immediately before the step that meant to tap Delete
+    if (gateId === except) continue;
     if (seen.has(gateId)) continue;
     seen.add(gateId);
     const guard = gateGuard(st.map, gateId, st.overrides);
@@ -243,7 +285,7 @@ function emitStep(st: EmitState, step: RecipeStep): void {
   const id = step.id;
   switch (step.action) {
     case 'open_link': {
-      st.commands.push({ openLink: substituteSlots(step.url, st.params) });
+      st.commands.push({ openLink: openLinkFor(st.map, substituteSlots(step.url, st.params)) });
       break;
     }
     case 'tap': {
@@ -278,6 +320,21 @@ function emitStep(st: EmitState, step: RecipeStep): void {
       const guard = gateGuard(st.map, step.gate, st.overrides);
       if (!guard) st.ineligible.add(id);
       else st.commands.push(guard);
+      break;
+    }
+    case 'tap_gate': {
+      // issue #24: deliberately NOT the optional `runFlow: {when: visible …}` shape `dismiss_gate`
+      // exports as. A gate that never appeared needs no dismissing, so skipping it silently is
+      // right; a CONFIRMATION that never appeared means the destructive action was never
+      // confirmed, and silently skipping it would let the flow report success having done
+      // nothing. So: wait for the dialog, then tap unconditionally, and fail loudly at whichever
+      // command is not satisfied.
+      const gate = st.map.gates.get(step.gate);
+      const when = gate !== undefined ? gateWhenSelector(gate) : undefined;
+      const control = selectorForElement(st.map, step.control, step.gate, st.overrides);
+      if (!when || !control) { st.ineligible.add(id); break; }
+      st.commands.push({ extendedWaitUntil: { visible: when, timeout: DEFAULT_WAIT_MS } });
+      st.commands.push({ tapOn: control });
       break;
     }
     case 'wait_for': {
@@ -315,6 +372,7 @@ export function recipeToMaestroFlow(map: LoadedMap, recipe: RecipeFile, params: 
     map,
     params,
     focused: opts.focusedSelector !== false,
+    valueSelector: opts.valueSelector !== false,
     overrides: opts.overrides,
     commands: [],
     ineligible: new Set<StepId>(),
@@ -327,11 +385,11 @@ export function recipeToMaestroFlow(map: LoadedMap, recipe: RecipeFile, params: 
   let started = opts.fromStep === undefined;
   let pendingExtraGates = opts.dismissGates ?? [];
 
-  const begin = (stepId: StepId): boolean => {
+  const begin = (stepId: StepId, exceptGate?: GateId): boolean => {
     if (!started && stepId === opts.fromStep) started = true;
     if (!started) return false;
     command_index[stepId] = st.commands.length;
-    emitGateGuards(st, stepId, pendingExtraGates);
+    emitGateGuards(st, stepId, pendingExtraGates, exceptGate);
     pendingExtraGates = [];
     return true;
   };
@@ -340,7 +398,7 @@ export function recipeToMaestroFlow(map: LoadedMap, recipe: RecipeFile, params: 
   if (deepLink) {
     const target = screenOfDeepLink(deepLink);
     if (begin('s0')) {
-      st.commands.push({ openLink: substituteSlots(deepLink, params) });
+      st.commands.push({ openLink: openLinkFor(map, substituteSlots(deepLink, params)) });
       if (target) st.commands.push(waitForScreen(target));
     }
     st.screen = target;
@@ -349,7 +407,7 @@ export function recipeToMaestroFlow(map: LoadedMap, recipe: RecipeFile, params: 
     const firstLink = map.screens.get(first)?.deep_link;
     if (firstLink && firstLink !== 'none') {
       if (begin('s0')) {
-        st.commands.push({ openLink: firstLink });
+        st.commands.push({ openLink: openLinkFor(map, firstLink) });
         st.commands.push(waitForScreen(first));
       }
       st.screen = first;
@@ -371,7 +429,7 @@ export function recipeToMaestroFlow(map: LoadedMap, recipe: RecipeFile, params: 
       if (!action || (action.type !== 'tap' && action.type !== 'select' && action.type !== 'open_link')) {
         st.ineligible.add(stepId);
       } else if (action.type === 'open_link') {
-        st.commands.push({ openLink: action.url });
+        st.commands.push({ openLink: openLinkFor(map, action.url) });
       } else {
         const sel = selectorForElement(map, action.element, from, st.overrides);
         if (!sel) st.ineligible.add(stepId);
@@ -386,7 +444,8 @@ export function recipeToMaestroFlow(map: LoadedMap, recipe: RecipeFile, params: 
 
   // ---- recipe steps ------------------------------------------------------------------------
   for (const step of recipe.steps ?? []) {
-    if (!begin(step.id)) {
+    // issue #24: a `tap_gate` step's own gate must not be auto-dismissed on the way in
+    if (!begin(step.id, step.action === 'tap_gate' ? step.gate : undefined)) {
       if (step.expect?.screen) st.screen = step.expect.screen;
       continue;
     }

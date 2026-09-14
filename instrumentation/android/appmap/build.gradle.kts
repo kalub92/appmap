@@ -7,7 +7,7 @@
 //
 // `BuildConfig.APP_MAP_DEBUG` gates every test-only surface (deep links, router export, fixtures);
 // the debug-only manifest entries live in src/debug/AndroidManifest.xml so Release contains
-// neither the appmap:// intent filter nor the export receiver (01 §4).
+// neither the deep-link intent filter nor the export receiver (01 §4).
 
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -24,6 +24,13 @@ android {
     defaultConfig {
         minSdk = 24
         consumerProguardFiles("consumer-rules.pro")
+        // issue #25: the deep-link scheme is per app. `appmap` keeps every existing single-app
+        // integration working unchanged; a repo with two instrumented apps overrides it in the
+        // consuming app's debug buildType, and must set the SAME value on
+        // `AppMapDeepLink.scheme` and in app-map/android/manifest.yaml `deep_link_scheme`.
+        //
+        //     manifestPlaceholders["appMapScheme"] = "appmap-pokedexteams"
+        manifestPlaceholders["appMapScheme"] = "appmap"
     }
 
     buildFeatures {

@@ -35,15 +35,15 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { AppMapContext } from '../context.ts';
 import type { AnyTree, ElementDef, ElementId, HealCandidate, HealInput, HealRecord, HealResult, HeadlessErrorCode, HeadlessReport, HealReport, LoadedMap, RecipeFile, RecipeParams, RecipeStatus, RecipeStep, RunRecord, ScreenId, SessionId, StepId, Tree } from '../types.ts';
-import { DEEP_LINK_REGEX, UNKNOWN_SCREEN, now, probeConditions, selectTarget } from '../types.ts';
-import type { BuildInfoProbe } from './guided.ts';
-import { defaultBuildProbe } from './guided.ts';
+import { CANONICAL_DEEP_LINK_SCHEME, DEEP_LINK_REGEX, UNKNOWN_SCREEN, now, probeConditions, selectTarget } from '../types.ts';
+import type { BuildInfoProbe, SchemeOwnerProbe } from './guided.ts';
+import { assertSchemeUnique, defaultBuildProbe, defaultSchemeOwnerProbe, opensADeepLink } from './guided.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { PACKAGE_ROOT, maestroFlowFile, maestroOutDir } from '../paths.ts';
 import { fromMaestroHierarchy, normalizeTree } from '../tree.ts';
 import { buildScrubPolicy, scrub } from '../scrub.ts';
 import { identify } from '../identify.ts';
-import { resolve as resolveElement } from '../resolve.ts';
+import { gateHealScope, gateOfElement, resolve as resolveElement } from '../resolve.ts';
 import { heal as healOnce } from '../heal.ts';
 import { markVerified as lifecycleMarkVerified, recordRunOutcome as lifecycleRecordRunOutcome } from './lifecycle.ts';
 import type { VerifiedEntities } from './lifecycle.ts';
@@ -69,6 +69,8 @@ export interface HeadlessOptions {
   exec?: ExecFn;
   hierarchy?: HierarchyProvider;
   probe?: BuildInfoProbe;
+  /** issue #25 deep-link scheme collision probe (default: `defaultSchemeOwnerProbe`) */
+  schemeOwners?: SchemeOwnerProbe;
   skipBuildCheck?: boolean;
   /** re-runs after a heal (default 2, 04 §6.1) */
   maxRetries?: number;
@@ -121,6 +123,9 @@ function elementDefFor(map: LoadedMap, id: ElementId, screen?: ScreenId): Elemen
 function elementOfStep(step: RecipeStep): ElementId | undefined {
   if ('element' in step && typeof step.element === 'string') return step.element;
   if (step.action === 'select') return selectTarget(step);
+  // issue #24: without this the headless rung can neither resolve nor heal the one step that
+  // commits a destructive action — every safety rule below would be dead code for it
+  if (step.action === 'tap_gate') return step.control;
   return undefined;
 }
 
@@ -186,6 +191,25 @@ export async function runHeadless(ctx: AppMapContext, input: HeadlessInput, opts
       return report({ error_code: 'release_build_refused' });
     }
     ctx.setProbe(probe);
+    // 01 R5 / issue #25: CI is where two instrumented apps most reliably end up on one machine, and
+    // a collision there looks like a flaky inspector rather than a routing bug. Same rule as
+    // guided: only a positive answer naming a foreign bundle refuses; an unanswerable probe is not
+    // evidence. A report, not a throw — headless answers in reports (07 §2.4).
+    if (opensADeepLink(map, recipe)) {
+      const scheme = map.manifest.deep_link_scheme || CANONICAL_DEEP_LINK_SCHEME;
+      let owners: string[] | null = null;
+      try {
+        owners = await (opts.schemeOwners ?? defaultSchemeOwnerProbe)(ctx.config, scheme);
+      } catch (e) {
+        ctx.log.warn('headless: deep-link scheme probe failed', { error: (e as Error).message });
+      }
+      try {
+        assertSchemeUnique(map.manifest.app_id, scheme, owners);
+      } catch (e) {
+        ctx.log.warn('headless: refusing to run against a colliding deep-link scheme', { recipe: recipe.id, error: (e as Error).message });
+        return report({ error_code: 'deep_link_scheme_collision' });
+      }
+    }
   }
 
   // ---- 0b. 03 §13 Maestro version -----------------------------------------------------------
@@ -273,16 +297,31 @@ export async function runHeadless(ctx: AppMapContext, input: HeadlessInput, opts
       ctx.log.debug('headless: nothing to heal at the failing step', { recipe: recipe.id, step: fallbackStep });
       break;
     }
+    // issue #24: the SAME structural bounds guided applies — a gate control is healed only inside
+    // its own dialog and never into a sibling control, and not at all when the dialog cannot be
+    // located. A safety property only one replay rung applies is not a safety property.
+    const bounds = gateHealScope(map, def, tree, step.action === 'dismiss_gate' || step.action === 'tap_gate' ? step.gate : undefined);
+    if (bounds === undefined) {
+      ctx.log.warn('headless: refusing to heal a gate control whose dialog could not be located', { recipe: recipe.id, element: def.id });
+      break;
+    }
     const healInput: HealInput = {
       recipe: recipe.id,
       step,
-      screen: screenId ?? (map.elements.get(def.id)?.[0]?.screen ?? UNKNOWN_SCREEN),
+      // the GATE owns its controls (issue #24): heal writes the new locator back to this screen, and
+      // a gate control is declared on the gate file, not on whatever screen the dialog is over
+      screen: gateOfElement(map, def, step.action === 'dismiss_gate' || step.action === 'tap_gate' ? step.gate : undefined)
+        ?? screenId ?? (map.elements.get(def.id)?.[0]?.screen ?? UNKNOWN_SCREEN),
       element: def,
-      intent_critical: step.intent_critical === true || def.intent_critical === true,
+      // the REGISTRY is the third source, as guided.isIntentCritical reads it (02 §10.6): a gate
+      // control declares its criticality in ids.yaml `gates[].controls[]`, not in the screen file,
+      // so without this 04 §7.2's exact-label protection never fires on the headless rung (issue #24)
+      intent_critical: step.intent_critical === true || def.intent_critical === true || map.elementRegistry.get(def.id)?.intent_critical === true,
       tree,
       trigger: resolveElement(map, def, tree),
       build,
       run_id: runId,
+      ...bounds,
     };
     const result = await healer(ctx, healInput, async (candidate) => {
       const retry = recipeToMaestroFlow(map, recipe, params, { fromStep: step.id, overrides: { [def.id]: candidate.proposed_locator } });

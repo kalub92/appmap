@@ -135,15 +135,15 @@ recipes  create_invoice
 {"matched":true,"recipe_id":"create_invoice","version":3,"confidence":0.9,"params_needed":[],"description":"Create an invoice for a client with an amount and save it","session":"sess_readme"}
 
 >>> run_recipe {"recipe_id":"create_invoice","params":{"amount":50,"client":"Acme Corp"},"mode":"guided","session":"sess_readme"}
-{"mode":"guided","run_id":"run_mtygq68m_mknwab","recipe":"create_invoice","version":3,"step":{"id":"s0","action":"open_link","url":"appmap://invoice_new?fixture=logged_in","expect":{"screen":"invoice_new"}},"text":"step s0 open_link appmap://invoice_new?fixture=logged_in expect screen invoice_new"}
+{"mode":"guided","run_id":"run_mtygq68m_mknwab","recipe":"create_invoice","version":3,"step":{"id":"s0","action":"open_link","url":"appmap://invoice_new?fixture=logged_in","expect":{"screen":"invoice_new"},"settle":{"target":{"by":"id","id":"screen.invoice_new"},"condition":"visible","source":"expect.screen","timeout_ms":10000}},"text":"step s0 open_link appmap://invoice_new?fixture=logged_in expect screen invoice_new settle visible screen.invoice_new 10000ms"}
 
 >>> report_step {"run_id":"run_mtygq68m_mknwab","step_id":"s0","ok":true}
-{"run_id":"run_mtygq68m_mknwab","status":"ok","step":{"id":"s1","action":"tap","element":"invoice.amount.field","expect":{"visible":["invoice.amount.field"]},"target":{"by":"id","id":"invoice.amount.field"},"resolved":{"strategy":"a11y_id","confidence":1,"degraded":false}},"text":"step s1 tap invoice.amount.field via id \"invoice.amount.field\" (a11y_id 1.00) expect visible invoice.amount.field"}
+{"run_id":"run_mtygq68m_mknwab","status":"ok","step":{"id":"s1","action":"tap","element":"invoice.amount.field","expect":{"visible":["invoice.amount.field"]},"target":{"by":"id","id":"invoice.amount.field"},"resolved":{"strategy":"a11y_id","confidence":1,"degraded":false},"settle":{"target":{"by":"id","id":"invoice.amount.field"},"condition":"visible","source":"expect.visible","timeout_ms":10000}},"text":"step s1 tap invoice.amount.field via id \"invoice.amount.field\" (a11y_id 1.00) expect visible invoice.amount.field settle visible invoice.amount.field 10000ms"}
 
 ... s1 tap, s2 type "50", s3 tap the picker, s4 select "Acme Corp" — then the step that matters ...
 
 >>> report_step {"run_id":"run_mtygq68m_mknwab","step_id":"s4","ok":true}
-{"run_id":"run_mtygq68m_mknwab","status":"ok","step":{"id":"s5","action":"tap","element":"invoice.save.button","expect":{"screen":"invoice_detail"},"intent_critical":true,"target":{"by":"id","id":"invoice.save.button"},"resolved":{"strategy":"a11y_id","confidence":1,"degraded":false}},"text":"step s5 tap invoice.save.button via id \"invoice.save.button\" (a11y_id 1.00) expect screen invoice_detail [intent_critical]"}
+{"run_id":"run_mtygq68m_mknwab","status":"ok","step":{"id":"s5","action":"tap","element":"invoice.save.button","expect":{"screen":"invoice_detail"},"intent_critical":true,"target":{"by":"id","id":"invoice.save.button"},"resolved":{"strategy":"a11y_id","confidence":1,"degraded":false},"settle":{"target":{"by":"id","id":"screen.invoice_detail"},"condition":"visible","source":"expect.screen","timeout_ms":10000}},"text":"step s5 tap invoice.save.button via id \"invoice.save.button\" (a11y_id 1.00) expect screen invoice_detail settle visible screen.invoice_detail 10000ms [intent_critical]"}
 
 >>> report_step {"run_id":"run_mtygq68m_mknwab","step_id":"s5","ok":true}
 {"run_id":"run_mtygq68m_mknwab","status":"done","done":true,"verified":true,"heals":[],"text":"done verified"}
@@ -151,7 +151,12 @@ recipes  create_invoice
 
 > **Fixture-fed; nothing on a device was driven.** No simulator, no Argent, no real app: between steps each
 > driver call is a `record_observation` of a committed accessibility-tree fixture, the technique
-> `src/test/guided.test.ts` uses, and the 07 §3 build probe is a shell stub. Server, map, recipe, locator
+> `src/test/guided.test.ts` uses, and the 07 §3 build probe is a shell stub. Each step carries
+> `settle` — the postcondition the driver polls for instead of sleeping (04 §5); `s2`, a `type`
+> with no `expect`, carries none, which means "report at once".
+> `verified: true` at the end is now a real claim about the DATA: the recipe's `verify` asserts
+> `value: [{element: invoice.detail.amount.text, equals: "{amount}"}]`, so a run that saved the
+> wrong amount would end `verified: false` (02 §6). Server, map, recipe, locator
 > resolution and run state machine are real. `run_id` is minted per run, so yours will differ.
 
 `s1` asserts `expect.visible`, not `expect.focused`: Argent's iOS `native-describe-screen` reports no
@@ -331,7 +336,7 @@ $ app-map run create_invoice --headless --json
 
 The flow's command list is parsed back to the recipe step that broke, and no on-screen text reaches the
 report. With the stubs below taken off `PATH` — nothing faked at all — the run stops before it starts:
-`"error_code": "release_build_refused"`, `steps_done: 0`, no debug probe, no execution.
+`"error_code": "release_build_refused"`, `steps_done: 0`, no debug probe, no execution. A run that opens a deep link is also refused with `deep_link_scheme_collision` when another installed bundle registers the app's `deep_link_scheme` (01 R5): the OS would deliver the link, and the `?fixture=` seeding state with it, to an app the run never meant to touch.
 
 *Fake device; no simulator, no real Maestro, no app. Three shell stubs stand in for `maestro`, `xcrun` and
 `plutil`, mirroring `makeFakeDevice()` in `src/test/cli.test.ts`, and the params came from
@@ -507,7 +512,8 @@ the table are elided. The two JSON rows are separate runs of that same stub with
   `fixtures/hooks/post-tool-use.tap.json`: of the 29 human-readable strings in its normalized tree, 15
   survive `scrub()` and 14 do not — among them the date picker's rendered `Oct 10, 2026`.
 - **Debug and sandbox only.** `run_recipe` reads the app's `APP_MAP_DEBUG` probe and refuses with
-  `release_build_refused` against a Release build.
+  `release_build_refused` against a Release build; `deep_link_scheme_collision` when another
+  installed app claims the same deep-link scheme (01 R5).
 - **Pinned supply chain.** Every MCP server must be in `app-map/policy/mcp-allowlist.yaml` at an exact version;
   `policy-check` fails on an unlisted server or an unpinned `npx`.
 - **Human-reviewed heals.** An accepted heal is `healed_pending_review`, never `verified`. Nightly heals open

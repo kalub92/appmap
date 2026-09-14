@@ -212,7 +212,7 @@ export function createServer(ctx: AppMapContext, opts: ServerOptions = {}): McpS
     inputSchema: {
       screen_id: z.unknown().optional().describe('id registered in ids.yaml screens[]'),
       title: z.unknown().optional(),
-      deep_link: z.unknown().optional().describe('appmap://<id>, or none'),
+      deep_link: z.unknown().optional().describe('the screen\'s deep link as get_screen/plan_path showed it, or none'),
       force: z.unknown().optional().describe('re-learn a screen that is no longer candidate (02 §8); records meta.relearned_from'),
       ...sessionArg,
     },

@@ -117,7 +117,7 @@ jobs:
   # they need no app, no simulator and no APP_MAP_HAS_APP — gating them behind that variable is what
   # kept AppMapReleaseGateTests / AppMapRouterRegistryReleaseTests / AppMapDeepLinkTest from ever
   # running, which is precisely the regression 01 §4 exists to catch (a Release build that still
-  # answers `appmap://`).
+  # answers its deep-link scheme).
   ios-instrumentation:
     runs-on: macos-15
     timeout-minutes: 20

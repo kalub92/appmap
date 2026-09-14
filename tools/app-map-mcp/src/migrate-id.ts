@@ -14,7 +14,7 @@ import { basename, dirname, join, relative, sep } from 'node:path';
 import type { AppMapConfig, Platform } from './config.ts';
 import { PLATFORMS } from './config.ts';
 import type { IdsRegistry, MigrateIdResult } from './types.ts';
-import { ELEMENT_ID_REGEX, GATE_DISMISS_REGEX, GATE_ID_REGEX, SCREEN_ID_REGEX, markerOfScreen } from './types.ts';
+import { CANONICAL_DEEP_LINK_SCHEME, ELEMENT_ID_REGEX, GATE_DISMISS_REGEX, GATE_ID_REGEX, SCREEN_ID_REGEX, markerOfScreen } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import type { YamlKind } from './paths.ts';
 import { idsFile, kindForPath, manifestFile, recipesDir, screenFile, screensDir } from './paths.ts';
@@ -34,6 +34,8 @@ function registryKind(ids: IdsRegistry, id: string): IdKind | undefined {
   if (ids.gates.some((g) => g.id === id)) return 'gate';
   if (ids.elements.some((e) => e.id === id)) return 'element';
   if (ids.gates.some((g) => g.dismiss === id)) return 'dismiss';
+  // issue #24: a gate's other controls are registered ids too, and rename the same way
+  if (ids.gates.some((g) => (g.controls ?? []).some((c) => c.id === id))) return 'dismiss';
   return undefined;
 }
 
@@ -81,7 +83,7 @@ export function migrateId(config: AppMapConfig, oldId: string, newId: string, op
   if (registryKind(ids, newId)) {
     throw new AppMapError(ERROR_CODES.BAD_INPUT, `id ${newId} already exists in ids.yaml`, 'pick an unused id; merging two ids is not a migration (02 §8)');
   }
-  if (kind === 'gate' && ids.gates.some((g) => g.dismiss.startsWith(`${newId}.`))) {
+  if (kind === 'gate' && ids.gates.some((g) => g.dismiss.startsWith(`${newId}.`) || (g.controls ?? []).some((c) => c.id.startsWith(`${newId}.`)))) {
     throw new AppMapError(ERROR_CODES.BAD_INPUT, `dismiss controls under ${newId}. already exist`, 'pick an unused gate name');
   }
 
@@ -137,7 +139,11 @@ function rel(config: Pick<AppMapConfig, 'dir'>, path: string): string {
 const ID_KEYS: ReadonlySet<string> = new Set(['id', 'element', 'list', 'cell', 'to', 'focused', 'dismiss', 'screen', 'gate']);
 /** keys whose string items are ids */
 const ID_LIST_KEYS: ReadonlySet<string> = new Set(['visible', 'not_visible', 'required_ids', 'dynamic_regions', 'gates', 'fallback_path']);
-/** keys carrying `appmap://<screen_id>[?…]` */
+/**
+ * keys carrying a deep link. The MAP always writes the canonical `appmap://` form whatever scheme
+ * the app registers (issue #25), so the rename works on that one prefix and never has to read the
+ * manifest.
+ */
 const URL_KEYS: ReadonlySet<string> = new Set(['deep_link', 'route', 'url']);
 
 /**
@@ -172,10 +178,10 @@ export function rewriteIdReferences<T>(doc: T, oldId: string, newId: string): { 
   };
   const url = (s: string): string => {
     if (!isScreen) return s;
-    const prefix = `appmap://${oldId}`;
+    const prefix = `${CANONICAL_DEEP_LINK_SCHEME}://${oldId}`;
     if (s === prefix || s.startsWith(`${prefix}?`)) {
       count++;
-      return `appmap://${newId}${s.slice(prefix.length)}`;
+      return `${CANONICAL_DEEP_LINK_SCHEME}://${newId}${s.slice(prefix.length)}`;
     }
     return s;
   };

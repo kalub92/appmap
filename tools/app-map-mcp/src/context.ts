@@ -36,7 +36,7 @@ import { createLogger } from './log.ts';
 import type { AppMapDb } from './store/db.ts';
 import { openDb } from './store/db.ts';
 import type { BuildNumber, BuildProbeResult, IdsRegistry, LoadedMap, Manifest } from './types.ts';
-import { now } from './types.ts';
+import { CANONICAL_DEEP_LINK_SCHEME, now } from './types.ts';
 import { AppMapError, ERROR_CODES } from './errors.ts';
 import { localDir, stringsFile } from './paths.ts';
 import { indexMap, loadMap } from './yaml/load.ts';
@@ -84,7 +84,7 @@ export function emptyMap(config: Pick<AppMapConfig, 'platform' | 'build'>): Load
     schema_version: 1,
     app_id: '',
     platform: config.platform,
-    deep_link_scheme: 'appmap',
+    deep_link_scheme: CANONICAL_DEEP_LINK_SCHEME,
     build: { version: '', build_number: config.build !== 'auto' && config.build !== '' ? config.build : '0', git_sha: '' },
     generated_at: now(),
     generator: 'app-map-mcp (empty map)',

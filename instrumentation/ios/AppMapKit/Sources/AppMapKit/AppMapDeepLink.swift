@@ -1,6 +1,7 @@
 // AppMapKit — test-only deep links (01 R5).
 //
-// Scheme: appmap://<screen_id>[?fixture=<name>&k=v…]
+// Scheme: <scheme>://<screen_id>[?fixture=<name>&k=v…], `appmap` by default and configurable per
+// app via AppMapDeepLink.scheme (issue #25: two instrumented apps on one device otherwise collide).
 // The parser produces an `AppMapRoute`; the app's *real* router consumes it so the resulting
 // state is genuine, not a bare view. Nothing in this file exists outside APP_MAP_DEBUG: the
 // `#if` leaves no symbol behind, which is what 01 §4 asks a Release unit test to verify
@@ -23,7 +24,38 @@ public struct AppMapRoute: Equatable, Sendable {
 }
 
 public enum AppMapDeepLink {
-    public static let scheme = "appmap"
+    /// The default scheme.
+    ///
+    /// Every app-map app used to register exactly this, which meant two instrumented apps on one
+    /// device both claimed it and iOS delivered `appmap://<screen>` — and the `?fixture=` it
+    /// carries — to whichever it liked, while the app-scoped capture kept describing the other one
+    /// and timed out (issue #25).
+    public static let defaultScheme = "appmap"
+
+    /// The scheme THIS app registers. Set it once at launch in debug builds when more than one
+    /// app-map app can be installed at once, and declare the SAME value as `deep_link_scheme` in
+    /// `app-map/ios/manifest.yaml` and in the Debug target's `CFBundleURLTypes`.
+    /// `appmap-<last component of the bundle id>` is the conventional choice.
+    ///
+    ///     AppMapDeepLink.scheme = "appmap-pokedexteams"
+    ///
+    /// Setting an invalid scheme is a programmer error and traps: an app that answers a scheme the
+    /// map does not name is the failure this exists to prevent, and it is silent at runtime.
+    public static var scheme: String {
+        get { storedScheme }
+        set {
+            let normalized = newValue.trimmingCharacters(in: .whitespaces).lowercased()
+            precondition(
+                normalized.range(of: schemePattern, options: .regularExpression) != nil,
+                "app-map deep link scheme must be a lowercase URL scheme, got '\(newValue)'"
+            )
+            storedScheme = normalized
+        }
+    }
+
+    private static var storedScheme = defaultScheme
+    /// RFC 3986 `scheme`, narrowed the same way `manifest.schema.json` narrows `deep_link_scheme`.
+    private static let schemePattern = "^[a-z][a-z0-9+.-]{0,63}$"
     /// Screen ids are bare snake_case names (01 R2; app-map/schema/ids.schema.json); the marker is `screen.<id>`.
     private static let screenIDPattern = "^[a-z][a-z0-9_]*$"
 
@@ -38,7 +70,7 @@ public enum AppMapDeepLink {
     }
 
     private static func parse(_ components: URLComponents) -> AppMapRoute? {
-        guard components.scheme?.lowercased() == scheme else { return nil }
+        guard components.scheme?.lowercased() == storedScheme else { return nil }
         guard let host = components.host, !host.isEmpty else { return nil }
         guard components.path.isEmpty || components.path == "/" else { return nil }
         guard host.range(of: screenIDPattern, options: .regularExpression) != nil else { return nil }

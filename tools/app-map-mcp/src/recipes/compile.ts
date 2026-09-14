@@ -64,7 +64,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppMapContext } from '../context.ts';
 import type { CompileRecipeInput, CompileRecipeResult, Condition, DriverInput, ElementId, Expect, LoadedMap, Observation, RecipeEntry, RecipeFile, RecipeParam, RecipeStep, ScreenId, ScrubbedTree, StepAction, StepId, SwipeDirection } from '../types.ts';
-import { PARAM_SLOT_REGEX, SWIPE_DIRECTIONS, UNKNOWN_SCREEN, conditionKey, focusObservable, screenIdOfDeepLink, stepElement } from '../types.ts';
+import { PARAM_SLOT_REGEX, SWIPE_DIRECTIONS, UNKNOWN_SCREEN, canonicalDeepLink, conditionKey, focusObservable, screenIdOfDeepLink, stepElement } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { PACKAGE_ROOT } from '../paths.ts';
 import { walk } from '../tree.ts';
@@ -387,7 +387,7 @@ export interface TranslateResult { steps: TranslatedStep[]; warnings: string[] }
  * THE DAY A PRODUCER EXISTS — a `wait`/`waitForElement` driver verb translated in step 3, say —
  * add its action here and the exemption disappears by itself, with no change in lifecycle.ts.
  */
-export const COMPILABLE_STEP_ACTIONS: readonly StepAction[] = ['tap', 'type', 'select', 'swipe', 'open_link', 'dismiss_gate'];
+export const COMPILABLE_STEP_ACTIONS: readonly StepAction[] = ['tap', 'type', 'select', 'swipe', 'open_link', 'dismiss_gate', 'tap_gate'];
 
 /** Pure: can the compiler produce a step of this kind at all? See `COMPILABLE_STEP_ACTIONS`. */
 export function compilerCanEmit(action: StepAction): boolean {
@@ -418,7 +418,10 @@ export function translateSteps(map: LoadedMap, observations: readonly Observatio
         drop('carried no url, so no open_link step could be written (04 §3.3)');
         continue;
       }
-      push({ id, action: 'open_link', url: obs.input.url });
+      // the driver reported the URL it opened, in the scheme the APP registers; the map is
+      // written in the canonical form (issue #25), and recipe.schema.json enforces it — a draft
+      // carrying `pokedex://…` would be refused by rule 1 on `mark`
+      push({ id, action: 'open_link', url: canonicalDeepLink(obs.input.url, map.manifest?.deep_link_scheme) });
       continue;
     }
     if (kind === 'type') {
@@ -471,6 +474,28 @@ export function translateSteps(map: LoadedMap, observations: readonly Observatio
       const dismissed = before.find((g) => !after.includes(g) && map.ids.gates.some((x) => x.id === g && x.dismiss === element));
       if (dismissed !== undefined) {
         push({ id, action: 'dismiss_gate', gate: dismissed });
+        continue;
+      }
+      // issue #24: a tap on a gate's OTHER control — the confirm half of a destructive prompt.
+      // Same shape as the dismissal above (the gate was up before and is gone after) but the
+      // element is one of `gates[].controls[]`, so it compiles to `tap_gate`, never to
+      // `dismiss_gate`: the two press opposite buttons and only one of them commits.
+      //
+      // This must be emittable, not merely expressible. `lifecycle`'s 04 §8 write guard exempts
+      // reviewed steps of kinds the compiler cannot produce, so a `tap_gate` outside
+      // `COMPILABLE_STEP_ACTIONS` would be DROPPED by every automatic recompile — leaving a
+      // recipe named "delete the team" passing while deleting nothing (issue #13's erosion,
+      // aimed at the one step where it matters most).
+      const confirmedGate = before.find((g) => !after.includes(g) && map.ids.gates.some((x) => x.id === g && (x.controls ?? []).some((c) => c.id === element)));
+      if (confirmedGate !== undefined) {
+        // 02 §6 requires `expect` on `tap_gate`: a committing step with no postcondition can be
+        // neither verified nor healed (04 §7.2 rule 3). The screen the dialog left behind is the
+        // honest one; `unknown` means the trajectory cannot support the step at all.
+        if (obs.screen_after === UNKNOWN_SCREEN) {
+          drop(`tapped ${element} to confirm ${confirmedGate}, but the screen it left behind was not identified, and 02 §6 requires an expect on tap_gate (04 §3.6)`);
+          continue;
+        }
+        push({ id, action: 'tap_gate', gate: confirmedGate, control: element, expect: { screen: obs.screen_after } });
         continue;
       }
       // a tap on a `dynamic` cell is a `select` (04 §3.3)

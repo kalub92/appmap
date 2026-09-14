@@ -6,7 +6,7 @@ description: Drive the mobile app on the simulator/emulator through the app-map.
 
 ## Four rules
 1. **Recipe first.** `match_recipe` with the task text; on a match `run_recipe` in guided mode, or delegate to the `app-nav-replayer` subagent. Execute exactly the step returned, then `report_step`. Example: "create an invoice for $50 for Acme" → create_invoice {amount: 50, client: Acme}.
-2. **Identify before you tap.** No match → `identify_screen`, then `get_screen` once per visit. Tap by the `a11y_id` it shows, e.g. invoice.add.button — never by coordinates or guessed text. Enter by `plan_path` deep link, e.g. appmap://invoice_new?fixture=logged_in; tapping through is the fallback.
+2. **Identify before you tap.** No match → `identify_screen`, then `get_screen` once per visit. Tap by the `a11y_id` it shows, e.g. invoice.add.button — never by coordinates or guessed text. Enter by `plan_path` deep link — open the URL exactly as `plan_path`/`get_screen` gives it, e.g. appmap://invoice_new?fixture=logged_in; the scheme is per app (01 R5), so never retype it from memory. Tapping through is the fallback.
 3. **Tree over screenshots.** Screenshot only when the tree is empty or the task is visual. Never paste a tree into `record_observation` — the PostToolUse hook records every driver call already.
 4. **Compile what worked.** When a new task succeeds, `compile_recipe`, review the draft — see reference/review-a-recipe.md — then `mark` with status candidate. Nothing is written without that call.
 

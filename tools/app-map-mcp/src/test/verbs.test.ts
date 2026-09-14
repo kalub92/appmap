@@ -23,6 +23,8 @@ function toolsLine(file: string): string {
   return line;
 }
 const classify = (tool: string, driver = ARGENT): VerbKind => classifyVerb(tool, driver);
+/** 04 §5 / issue #26: the one non-step tool the replayer is granted, to poll a step's settle hint. */
+const SETTLE_POLL_TOOL = 'await-ui-element';
 
 describe('classifyVerb — the @swmansion/argent@0.25.0 tool surface (04 §3.3, issue #9)', () => {
   it('classifies every tool the reporter confirmed against `argent tools`', () => {
@@ -260,9 +262,19 @@ describe('the harness config only grants Argent tools that exist (05 §5, harnes
       //    classifier, so `open_url` passes (1) while being a name the harness can never match:
       //    `tools:` entries are compared literally. No confirmed tool contains an underscore.
       assert.ok(!bare.includes('_'), `${tool}: Argent registers hyphenated names, so this never matches`);
-      // 3. The replayer only ever executes steps (04 §5), so every grant must be a step verb —
-      //    no perception tools (§6 rule 1), no `run-sequence` (`batch`, rejected by the compiler).
+      // 3. The replayer executes steps (04 §5) and waits for their postconditions, and nothing
+      //    else: every grant must be a step verb, or the ONE wait tool the settle protocol needs.
+      //    Still no perception tools (§6 rule 1) and no `run-sequence` (`batch`, which the compiler
+      //    rejects). `await-ui-element` is admitted BY NAME rather than by kind — `lifecycle` also
+      //    covers `launch-app`, `restart-app` and the log dumps, none of which the replayer may
+      //    have — so the exception cannot widen to a second tool by accident.
       const kind = classifyVerb(tool, ARGENT);
+      if (bare === SETTLE_POLL_TOOL) {
+        // issue #26: the server hands each step the postcondition to poll for; without this the
+        // subagent can only sleep, which is both slower and less reliable
+        assert.equal(kind, 'lifecycle', `${SETTLE_POLL_TOOL} must stay a known non-step`);
+        continue;
+      }
       assert.ok(isStepVerb(kind), `${tool} classifies as ${kind}, which is not a replayable step`);
       verbs.add(kind);
     }

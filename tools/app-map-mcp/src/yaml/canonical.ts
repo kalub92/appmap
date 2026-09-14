@@ -154,17 +154,18 @@ export const YAML_STRINGIFY_OPTIONS = {
 
 /** Sub-types addressed by `KEY_ORDER`; a YamlKind is also a canonical type. */
 export type CanonicalType =
-  | 'ids' | 'ids.screen' | 'ids.gate' | 'ids.element'
+  | 'ids' | 'ids.screen' | 'ids.gate' | 'ids.gate.control' | 'ids.element'
   | 'manifest' | 'build'
   | 'screen' | 'signature' | 'variant' | 'element' | 'locator' | 'role_label' | 'point' | 'bbox' | 'fingerprint'
   | 'edge' | 'action' | 'condition' | 'meta'
-  | 'recipe' | 'param' | 'entry' | 'step' | 'match' | 'expect' | 'provenance'
+  | 'recipe' | 'param' | 'entry' | 'step' | 'match' | 'expect' | 'value_assertion' | 'provenance'
   | 'mcp-allowlist' | 'server';
 
 export const KEY_ORDER: Readonly<Record<CanonicalType, readonly string[]>> = {
   ids: ['schema_version', 'screens', 'gates', 'elements'],
   'ids.screen': ['id', 'title', 'deep_link'],
-  'ids.gate': ['id', 'dismiss'],
+  'ids.gate': ['id', 'dismiss', 'dismiss_intent_critical', 'controls'],
+  'ids.gate.control': ['id', 'intent_critical'],
   'ids.element': ['id', 'kind', 'intent_critical', 'dynamic', 'label_regex'],
   manifest: ['schema_version', 'app_id', 'platform', 'deep_link_scheme', 'build', 'generated_at', 'generator'],
   build: ['version', 'build_number', 'git_sha'],
@@ -189,9 +190,11 @@ export const KEY_ORDER: Readonly<Record<CanonicalType, readonly string[]>> = {
   param: ['name', 'type', 'required', 'values'],
   entry: ['deep_link', 'fallback_path'],
   // `cell` sits beside `list`: they are the two element keys of the two `select` forms (issue #19)
-  step: ['id', 'action', 'element', 'list', 'cell', 'match', 'text', 'direction', 'duration_ms', 'url', 'gate', 'timeout_ms', 'expect', 'intent_critical'],
+  step: ['id', 'action', 'element', 'list', 'cell', 'match', 'text', 'direction', 'duration_ms', 'url', 'gate', 'control', 'timeout_ms', 'expect', 'intent_critical'],
   match: ['text'],
-  expect: ['screen', 'focused', 'visible', 'not_visible', 'text_present'],
+  expect: ['screen', 'focused', 'visible', 'not_visible', 'text_present', 'value'],
+  // issue #23: `equals` and `contains` are alternatives, so only one is ever written
+  value_assertion: ['element', 'equals', 'contains'],
   // `machine_recompile` sits directly above `reviewed_by` on purpose (issue #13 criterion 4): in a
   // PR diff the two lines are then read together — "these steps are machine-made, the signature
   // below is historical" — instead of the marker landing at the end where it reads as a footnote.
@@ -203,6 +206,7 @@ export const KEY_ORDER: Readonly<Record<CanonicalType, readonly string[]>> = {
 /** child key → sub-type, per parent type (locator `value` is typed by `strategy`: role_label | point | scalar). */
 export const CHILD_TYPES: Readonly<Partial<Record<CanonicalType, Readonly<Record<string, CanonicalType>>>>> = {
   ids: { screens: 'ids.screen', gates: 'ids.gate', elements: 'ids.element' },
+  'ids.gate': { controls: 'ids.gate.control' },
   manifest: { build: 'build' },
   screen: { signature: 'signature', variants: 'variant', elements: 'element', edges: 'edge', meta: 'meta' },
   signature: { required_labels: 'role_label' },
@@ -212,6 +216,7 @@ export const CHILD_TYPES: Readonly<Partial<Record<CanonicalType, Readonly<Record
   edge: { action: 'action', preconditions: 'condition', postconditions: 'condition' },
   recipe: { params: 'param', preconditions: 'condition', entry: 'entry', steps: 'step', verify: 'expect', provenance: 'provenance' },
   step: { match: 'match', expect: 'expect' },
+  expect: { value: 'value_assertion' },
   'mcp-allowlist': { servers: 'server' },
 };
 
@@ -229,7 +234,19 @@ export const QUOTED_STRING_KEYS: Readonly<Partial<Record<CanonicalType, Readonly
 };
 
 export const SORTED_STRING_SETS: ReadonlySet<string> = new Set(['required_ids', 'dynamic_regions', 'gates', 'sources', 'visible', 'not_visible']);
-export const ID_SORTED_LISTS: ReadonlySet<string> = new Set(['screens', 'gates', 'elements', 'variants']);
+export const ID_SORTED_LISTS: ReadonlySet<string> = new Set(['screens', 'gates', 'elements', 'variants', 'controls']);
+/**
+ * Object lists with no `id`, sorted by a tuple instead, keyed by `<parent>.<key>` (issue #23: an
+ * `expect.value` entry is keyed by the element it names and the operator it uses, so two
+ * assertions on one element still order deterministically).
+ *
+ * Keyed by PARENT and key, not by key alone: `value` is also a key of `condition`
+ * (`KEY_ORDER.condition`), where it is a scalar today — a bare-key rule would be one schema change
+ * away from silently reordering something else.
+ */
+export const TUPLE_SORTED_LISTS: Readonly<Record<string, (o: Record<string, unknown>) => string[]>> = {
+  'expect.value': (o) => [String(o['element'] ?? ''), typeof o['equals'] === 'string' ? `0${o['equals']}` : `1${String(o['contains'] ?? '')}`],
+};
 
 /**
  * Required arrays per parent type (rule 2: kept even when empty). Every other empty array is an
@@ -298,6 +315,8 @@ function canonicalizeArray(parent: CanonicalType, key: string, arr: unknown[]): 
   const allObjects = items.every(isPlainObject);
   if (allStrings && SORTED_STRING_SETS.has(key)) return [...(items as string[])].sort(codePointCompare);
   if (allObjects && ID_SORTED_LISTS.has(key)) return sortBy(items, (o) => [String((o as Record<string, unknown>)['id'] ?? '')]);
+  const tuple = TUPLE_SORTED_LISTS[`${parent}.${key}`];
+  if (allObjects && tuple !== undefined) return sortBy(items, (o) => tuple(o as Record<string, unknown>));
   if (allObjects && key === 'edges') return sortBy(items, edgeSortKey);
   if (allObjects && key === 'servers') return sortBy(items, (o) => [String((o as Record<string, unknown>)['name'] ?? '')]);
   return items;

@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Debug-only manifest (01 R5, R6). Merged into the app only for debug builds.
 
-     appmap://<screen_id>[?fixture=name&k=v] is received by a transparent trampoline activity
+     <scheme>://<screen_id>[?fixture=name&k=v] — `appmap` by default, per app via the
+     `appMapScheme` manifest placeholder (issue #25) — is received by a transparent trampoline activity
      that parses the link, applies the fixture and hands the route to the router the app
      installed with AppMapDeepLink.installRouter { … } (01 R5: the real router, not a bare view).
 
@@ -22,7 +23,19 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="appmap" />
+                <!-- issue #25: the scheme is per app. `appMapScheme` defaults to `appmap` and is
+                     overridden in the debug buildType when more than one app-map app can be
+                     installed at once:
+
+                         android { buildTypes { debug {
+                             manifestPlaceholders["appMapScheme"] = "appmap-pokedexteams"
+                         } } }
+
+                     It must equal `deep_link_scheme` in app-map/android/manifest.yaml AND the value
+                     passed to AppMapDeepLink.scheme — a configurable parser behind a hard-coded
+                     filter means the app never receives the intent at all, which is worse than the
+                     collision this exists to fix. -->
+                <data android:scheme="${appMapScheme}" />
             </intent-filter>
         </activity>
 

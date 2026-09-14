@@ -95,7 +95,7 @@ Verify field names (`tool_response`, `hookSpecificOutput`, `PostToolUseFailure`)
 ---
 name: app-nav-replayer
 description: Replays a known app-map recipe step by step on the simulator. Use for any task that match_recipe resolves.
-tools: mcp__app-map__run_recipe, mcp__app-map__report_step, mcp__app-map__identify_screen, mcp__argent__gesture-tap, mcp__argent__keyboard, mcp__argent__open-url, mcp__argent__gesture-swipe
+tools: mcp__app-map__run_recipe, mcp__app-map__report_step, mcp__app-map__identify_screen, mcp__argent__gesture-tap, mcp__argent__keyboard, mcp__argent__open-url, mcp__argent__gesture-swipe, mcp__argent__await-ui-element
 model: haiku
 ---
 You execute exactly the step the app-map server returns, then call report_step. You never take screenshots, never call get_screen, and never improvise. If report_step returns fallback, stop and return the fallback payload to the caller.
@@ -103,7 +103,9 @@ You execute exactly the step the app-map server returns, then call report_step. 
 
 The main agent delegates matched tasks here; exploration stays on the main model. This is the model-routing lever: cheap model for replay, large model for recovery.
 
-The tool names above are the ones `@swmansion/argent@0.25.0` actually registers, confirmed against `argent tools` (issues #9, #21) — they are **hyphenated**, and neither `tap`, `type_text`, `open_url` nor `swipe` exists. They are exactly the four tools that carry the four 02 §6 step verbs (`gesture-tap` → `tap`, `keyboard` → `type`, `open-url` → `open_link`, `gesture-swipe` → `swipe`); a `select` step replays as a tap on the matched row (04 §3.3, issue #19), so it needs no fifth tool. The `tools` field accepts `mcp__argent` (whole server) and `mcp__argent__*` (all of a server's tools) but no per-tool glob, so the list stays explicit — and narrow, per §6 rule 6. `tools/app-map-mcp/src/recipes/verbs.ts` (`ARGENT_VERBS`) is the machine-readable copy of the same table, and `verbs.test.ts` pins this block and the subagent file to it so neither can drift back to a name the driver does not answer to.
+The tool names above are the ones `@swmansion/argent@0.25.0` actually registers, confirmed against `argent tools` (issues #9, #21) — they are **hyphenated**, and neither `tap`, `type_text`, `open_url` nor `swipe` exists. Four of them carry the four 02 §6 step verbs (`gesture-tap` → `tap`, `keyboard` → `type`, `open-url` → `open_link`, `gesture-swipe` → `swipe`); a `select` step replays as a tap on the matched row (04 §3.3, issue #19), so it needs no tool of its own.
+
+`await-ui-element` is the fifth, and the one grant that is not a step verb. Every step the server hands out may carry a `settle` hint — the postcondition `report_step` is about to check anyway — and the replayer polls for it instead of sleeping between the action and the report (04 §5, issue #26). Without the grant the instruction is inert and the subagent falls back to a fixed sleep, which measured ~1.8× slower across a real suite and is *less* reliable, since a slow network outruns a hard-coded wait. It stays compatible with §6 rule 1: the poll answers a boolean about one selector, it does not read the tree, so it is not perception and costs no tokens. `verbs.ts` classifies it `lifecycle`, and `verbs.test.ts` admits it by name rather than by kind so no other non-step tool can arrive with it. The `tools` field accepts `mcp__argent` (whole server) and `mcp__argent__*` (all of a server's tools) but no per-tool glob, so the list stays explicit — and narrow, per §6 rule 6. `tools/app-map-mcp/src/recipes/verbs.ts` (`ARGENT_VERBS`) is the machine-readable copy of the same table, and `verbs.test.ts` pins this block and the subagent file to it so neither can drift back to a name the driver does not answer to.
 
 ## 6. Token rules for exploration
 
@@ -130,3 +132,18 @@ Optional (phase 2): a PreToolUse hook on `mcp__argent__gesture-tap` that consult
 
 - Whether Claude Code's PostToolUse can rewrite the driver's tool output (to strip a full tree down to a diff). If it can, add it; if not, rely on the driver's own snapshot options.
 - Session correlation across subagents: confirm the subagent's driver calls carry a `session_id` the hook can map to the parent run.
+- **`gate.open_in_app` is deliberately not modelled yet** (01 R5, issue #25). iOS may interpose an
+  "Open in <App>?" confirmation on a custom-scheme open, and it is a real interrupter: the app
+  receives the URL — and applies `?fixture=` — only after the sheet is confirmed, so a driver that
+  settles before dismissing it captures the pre-fixture screen and teaches the map the wrong thing.
+  It is left out of the committed pilot for two reasons. It cannot be verified without a simulator
+  showing the sheet, so its signature would be guesswork in a file whose whole job is to be
+  observed truth. And it inverts `dismiss`: the safe escape on that sheet is *Cancel*, which is
+  also the one that makes the deep link never arrive — so registering **Open** as the `dismiss`
+  would break the invariant 01 R7 just established, while registering Cancel would have guided
+  replay cancel every entry it was meant to confirm. When a real capture exists, model it with a
+  `controls[]` entry for **Open** and reach it with `tap_gate`, not as a dismissal.
+- `settle` (04 §5) assumes `argent await-ui-element` answers a boolean about one selector without
+  returning a tree. Confirm against a live `argent await-ui-element --help`; if it returns a tree,
+  the grant costs tokens and §6 rule 1 applies, so it should be withdrawn and the hint left for
+  other drivers to honour.

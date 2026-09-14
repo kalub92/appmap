@@ -43,8 +43,11 @@ Protocol between the LLM (or the `app-nav-replayer` subagent, 05 §5) and the se
 ```
 LLM   run_recipe(create_invoice, {amount: 50, client: Acme}, mode: guided)
 SRV   → {run_id, step: {id: s0, action: open_link, url: appmap://invoice_new?fixture=logged_in,
-                        expect: {screen: invoice_new}}}
+                        expect: {screen: invoice_new},
+                        settle: {target: {by: id, id: screen.invoice_new},
+                                 condition: visible, timeout_ms: 10000, source: expect.screen}}}
 LLM   argent.open-url(...)                     # PostToolUse hook records observation
+LLM   argent.await-ui-element(screen.invoice_new)   # the settle: poll, do not sleep
 LLM   report_step(run_id, s0, ok: true)
 SRV   verifies last observation against expect:
         ok   → {step: s1 …}
@@ -61,6 +64,38 @@ Rules:
 - Each step returned is ≤120 tokens: action, resolved locator (the strategy that will hit), expectation.
 - On `fallback`, the LLM takes over from that step in `explore` mode with the map as a prior; the run is logged as `guided_fallback` and the trajectory from that point is compilable into a recipe **revision** (§8).
 - Max 2 gate dismissals per step and 1 heal per step; beyond that, fallback.
+- **Every step may carry a `settle` hint, and the driver must never sleep instead.** The hint is
+  the step's own declared postcondition — the same assertion `report_step` is about to check —
+  rendered as `{target, condition, timeout_ms, source}` in the same `DriverTarget` vocabulary the
+  step's `target` uses. Poll for it, then report as soon as it is satisfied. **`settle` ABSENT
+  means the step declares nothing pollable: report immediately.** There is no empty-hint form, so
+  absent cannot be confused with "wait for nothing in particular".
+
+  It belongs on the server because only the server knows which elements are `dynamic` (so it can
+  prefer the stable `screen.<id>` marker over a list cell whose label changes per run), what budget
+  the recipe declared (`wait_for.timeout_ms`, else 10 s — the same budget §6.2 gives
+  `extendedWaitUntil`, so the two rungs wait alike), and what the recipe's `verify` asserts on the
+  last step. Measured against a fixed `sleep(n)` on a real suite: 144.1 s → 79.7 s, with the flake
+  mode removed rather than traded away — a slow network can outrun a hard-coded wait, and an
+  assertion and a wait that are the same declaration cannot drift apart.
+
+  Priority: `expect.screen` marker → a non-`dynamic` `expect.visible` → `text_present` →
+  `focused` (as *visible*: no driver reports focus, §10) → an `expect.value` element (the value is
+  decided at ingest and only a boolean survives, so the value itself is not pollable — its presence
+  is) → `not_visible` last, a negative also being satisfied by nothing having rendered yet. On the
+  last step the recipe's `verify` stands in when the step declares nothing.
+
+  A synthesized gate dismissal settles on **its own dismiss control disappearing**, not on the
+  interrupted step's postcondition: that step is handed back with `retry` and has not been re-run,
+  so its postcondition legitimately does not hold yet and polling for it would burn the whole
+  budget on every gate. This is also where a fixed sleep does worst — a dialog still animating away
+  — and it is the case a driver deriving its own hint cannot cover, there being no `expect` to
+  derive from.
+
+  `gates_possible` lists the gates the destination screen declares on entry. It is advisory: while
+  one is up the marker being polled is occluded, so the settle may time out. **A settle timeout is
+  not a failure** — report the step anyway and let the server decide; it answers `status: gate` and
+  hands out the dismissal.
 
 ## 6. Headless replay (rung `headless`)
 
@@ -84,10 +119,12 @@ Rules:
 | `select cell match.text` | the same two commands — neither form addresses the container, so both export identically |
 | `swipe` | `- swipe: { direction, duration }` |
 | `dismiss_gate g` | `- runFlow: { when: { visible: { id: "<gate marker or label regex>" } }, commands: [ - tapOn: { id: "<dismiss>" } ] }` — emitted before every step that lists `g` |
+| `tap_gate g control` | `- extendedWaitUntil: { visible: { id: "<gate marker or label regex>" } }` then `- tapOn: { id: "<control>" }` — **unconditional**, unlike `dismiss_gate`'s optional `runFlow` guard. A gate that never appeared needs no dismissing, so skipping it silently is right; a *confirmation* that never appeared means the destructive action was never confirmed, and skipping it would let the flow report success having done nothing. The gate a `tap_gate` step names is also excluded from that step's own dismiss guards, or the export would press Cancel immediately before Delete. |
 | `expect screen s` | `- extendedWaitUntil: { visible: { id: "screen.<s>" }, timeout: 10000 }` |
 | `expect visible e` | `- assertVisible: { id: "<e>" }` |
+| `expect value {element, equals\|contains}` | `- assertVisible: { id: "<element>", text: "<substituted, regex-escaped>" }` (`.*x.*` for `contains`). This is the one rung that compares against the live device: guided reads a boolean decided at ingest, because its snapshot is scrubbed (02 §6). The flow file is `.local` and never committed (06 R5), so the substituted value is fine here — and it must be regex-escaped, Maestro matching `text:` as a regex, or `$50.00` is an anchor plus two wildcards. `valueSelector: false` degrades to a bare `text:` match, the same escape `focusedSelector` has for the same reason (§10). |
 | `wait_for` | `- extendedWaitUntil` |
-| recipe `verify` | assertions for `screen` and each `visible` |
+| recipe `verify` | assertions for `screen`, each `visible`, and each `value` |
 
 Locators export in cascade order as far as Maestro can express them: `a11y_id` → `id:`, `role_label` → `id:` regex or `text:`, `text` → `text:`. `path` and `geometry` are not exported; a step whose only viable locator is one of those is not headless-eligible and the recipe stays at `guided`.
 

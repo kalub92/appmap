@@ -21,8 +21,10 @@
       ]
     },
     "deep_link_scheme": {
-      "const": "appmap",
-      "description": "fixed by 01 R5; every deep-link pattern in the schemas hard-codes appmap://"
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9+.-]{0,63}$",
+      "default": "appmap",
+      "description": "01 R5 — the custom URL scheme THIS app registers. Default `appmap`; an app installed beside another instrumented app must pick its own, because the OS routes a scheme both apps claim to whichever it likes (issue #25). The map stays scheme-relative: every deep_link/url in the YAML is written `appmap://` and rewritten to this scheme when a URL is handed to a driver."
     },
     "build": {
       "type": "object",
