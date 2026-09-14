@@ -138,7 +138,7 @@ function fromExpect(
   const focused = expect.focused !== undefined ? addressableTarget(defOf(map, expect.focused, screen)) : undefined;
   if (focused !== undefined) return { target: focused, condition: 'visible', source: `${prefix}.focused` };
   // A value assertion is decided at ingest against the raw tree and only a boolean survives
-  // (recipes/values.ts), so the VALUE cannot be polled — but the element carrying it can, and
+  // (values.ts), so the VALUE cannot be polled — but the element carrying it can, and
   // waiting for it to appear is strictly better than sleeping.
   const valued = pickElement(map, (expect.value ?? []).map((v) => v.element), screen);
   if (valued !== undefined) return { target: valued, condition: 'visible', source: `${prefix}.value` };

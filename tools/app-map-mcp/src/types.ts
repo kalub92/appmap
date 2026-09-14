@@ -136,7 +136,13 @@ export const HEADLESS_STRATEGIES: readonly LocatorStrategy[] = ['a11y_id', 'role
 export const STEP_ACTIONS = ['tap', 'type', 'select', 'swipe', 'open_link', 'wait_for', 'dismiss_gate', 'tap_gate'] as const;
 export type StepAction = (typeof STEP_ACTIONS)[number];
 
-/** edge actions are the step actions minus `wait_for` */
+/**
+ * Edge actions are the step actions minus `wait_for` and minus `tap_gate`. `wait_for` waits, it
+ * does not move; `tap_gate` is deliberately excluded (issue #24) because an edge is a claim about
+ * NAVIGATION and a gate is dismissed rather than navigated through — modelling a confirmation as
+ * an edge would also put a destructive control on the `fallback_path` expansion, which the runner
+ * walks unattended. Validate rejects a plain `tap` edge naming a gate control for the same reason.
+ */
 export const EDGE_ACTION_TYPES = ['tap', 'type', 'select', 'swipe', 'open_link', 'dismiss_gate'] as const;
 export type EdgeActionKind = (typeof EDGE_ACTION_TYPES)[number];
 
@@ -414,7 +420,7 @@ export interface ScreenFile {
  */
 export interface ValueAssertion {
   element: ElementId;
-  /** a bare `{param}` slot; compared with the compiler's own semantics (recipes/values.ts) */
+  /** a bare `{param}` slot; compared with the compiler's own semantics (values.ts) */
   equals?: string;
   /** a bare `{param}` slot; case-insensitive substring */
   contains?: string;

@@ -67,10 +67,6 @@ function isGateElement(map: LoadedMap, element: ElementDef): boolean {
 }
 
 /**
- * Nodes under an `alert`/`sheet` (other than the screen root itself) whose subtree satisfies the
- * signature of a gate that is present — those never satisfy a screen element (header).
- */
-/**
  * The subtree node of the dialog `gateId` is showing, or `undefined` when it is not up. The
  * one-gate variant of `gateDialogNodes`, exported so healing can scope its candidate search to the
  * dialog a gate control lives in (issue #24) instead of walking the whole screen.
@@ -135,6 +131,10 @@ export function gateHealScope(
   return { candidateRoot: root, ...(siblings.size > 0 ? { forbiddenNodes: siblings } : {}) };
 }
 
+/**
+ * Nodes under an `alert`/`sheet` (other than the screen root itself) whose subtree satisfies the
+ * signature of a gate that is present — those never satisfy a screen element (header).
+ */
 function gateDialogNodes(map: LoadedMap, tree: AnyTree, root: TreeNode, opts: ResolveOptions): Set<TreeNode> {
   const excluded = new Set<TreeNode>();
   const present = opts.gatesPresent !== undefined

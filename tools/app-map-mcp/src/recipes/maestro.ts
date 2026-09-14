@@ -34,7 +34,7 @@ import { stringify } from 'yaml';
 import type { AppMapContext } from '../context.ts';
 import type { ElementDef, ElementId, Expect, GateId, Locator, LocatorStrategy, LoadedMap, MaestroExportResult, RecipeFile, RecipeParams, RecipeStatus, RecipeStep, ScreenFile, ScreenId, StepId } from '../types.ts';
 import { DEEP_LINK_REGEX, HEADLESS_STRATEGIES, emitDeepLink } from '../types.ts';
-import { assertionOp } from './values.ts';
+import { assertionOp } from '../values.ts';
 import { DEFAULT_SETTLE_MS } from '../settle.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { ciParamsFile, maestroFlowFile, maestroOutDir } from '../paths.ts';

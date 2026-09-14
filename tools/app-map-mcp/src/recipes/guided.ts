@@ -81,7 +81,7 @@ import { indexMap } from '../yaml/load.ts';
 import { finishTask, recordObservation } from '../observe.ts';
 import { applyHeal, proposeHeal, rejectHeal, toPendingHeal } from '../heal.ts';
 import { markVerified, recordRunOutcome } from './lifecycle.ts';
-import { substituteParams, valueChecksOfExpect } from './values.ts';
+import { substituteParams, valueChecksOfExpect } from '../values.ts';
 import type { SettleOptions } from '../settle.ts';
 import { settleFor } from '../settle.ts';
 
@@ -605,7 +605,7 @@ export function assertDebugSandbox(probe: BuildProbeResult | null): void {
  * `values.ts` so `observe.ts` can substitute at ingest without importing the state machine
  * (issue #23); re-exported here because that is where every caller already looks for it.
  */
-export { substituteParams } from './values.ts';
+export { substituteParams } from '../values.ts';
 
 /** the screen a deep link points at (query stripped, 01 R5) */
 function screenOfDeepLink(map: LoadedMap, url: string | undefined): ScreenId | undefined {
@@ -822,7 +822,7 @@ export function checkExpect(map: LoadedMap, expect: Expect | undefined, tree: An
     if (!seen) failed.push(`text_present:${expect.text_present}`);
   }
   // issue #23: `value` was decided at ingest, against the raw tree — the only place the typed
-  // value existed (recipes/values.ts). All that reaches here is one boolean per assertion; an
+  // value existed (values.ts). All that reaches here is one boolean per assertion; an
   // assertion with no verdict was never decided, which is not the same as satisfied.
   for (const check of valueChecksOfExpect(expect)) {
     if (opts.valueChecks?.[check.key] !== true) failed.push(`value:${check.element}`);
@@ -1262,7 +1262,7 @@ function prepareNextStep(
     };
   }
   // issue #24: a gate control whose dialog (or whose sibling controls) cannot be located is not
-  // healed at all — see `gateHealBounds`. Falling back is the safe answer: the LLM takes over and
+  // healed at all — see `resolve.gateHealScope`. Falling back is the safe answer: the LLM takes over and
   // a human decides which button to press.
   const bounds = gateHealScope(map, def, tree, next.step.action === 'dismiss_gate' || next.step.action === 'tap_gate' ? next.step.gate : undefined);
   if (bounds === undefined) {

@@ -227,6 +227,11 @@ function formatExpect(e: Expect | undefined): string | undefined {
   if (Array.isArray(e.visible) && e.visible.length > 0) parts.push(`visible ${e.visible.join(',')}`);
   if (Array.isArray(e.not_visible) && e.not_visible.length > 0) parts.push(`not_visible ${e.not_visible.join(',')}`);
   if (e.text_present !== undefined) parts.push(`text_present ${q(e.text_present)}`);
+  // issue #23: the SLOT, never the value — this string reaches the LLM and the fallback line
+  for (const v of e.value ?? []) {
+    const op = typeof v?.equals === 'string' ? `= ${v.equals}` : typeof v?.contains === 'string' ? `~ ${v.contains}` : undefined;
+    if (op !== undefined) parts.push(`value ${v.element} ${op}`);
+  }
   return parts.length > 0 ? `expect ${parts.join(' ')}` : undefined;
 }
 

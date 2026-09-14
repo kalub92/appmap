@@ -22,6 +22,7 @@ import type { ElementDef, ScreenFile, Tree, TreeNode } from '../types.ts';
 import { idsFile, screenFile } from '../paths.ts';
 import { scoreCandidates } from '../heal.ts';
 import { gateDialogRoot, gateHealScope, resolve as resolveElement } from '../resolve.ts';
+import { identify } from '../identify.ts';
 import { validateMap } from '../validate.ts';
 import { canonicalYaml } from '../yaml/canonical.ts';
 import { makeTempAppMapDir } from './helpers.ts';
@@ -72,8 +73,8 @@ function writeGate(path: string, doc: ScreenFile): void {
   writeFileSync(path, canonicalYaml('screen', doc), 'utf8');
 }
 
-/** an alert with both buttons, as the OS would present it */
-function dialogTree(): Tree {
+/** an alert with both buttons, as the OS would present it, over `markerScreen` */
+function dialogTree(markerScreen = 'invoice_list'): Tree {
   const btn = (label: string, y: number): TreeNode => ({
     role: 'button', label, enabled: true, bbox_norm: { x: 0.1, y, w: 0.35, h: 0.06 }, children: [],
   });
@@ -82,7 +83,7 @@ function dialogTree(): Tree {
     root: {
       role: 'application', bbox_norm: { x: 0, y: 0, w: 1, h: 1 },
       children: [{
-        role: 'container', a11y_id: 'screen.invoice_list', bbox_norm: { x: 0, y: 0, w: 1, h: 1 }, children: [],
+        role: 'container', a11y_id: `screen.${markerScreen}`, bbox_norm: { x: 0, y: 0, w: 1, h: 1 }, children: [],
       }, {
         role: 'alert', bbox_norm: { x: 0.05, y: 0.4, w: 0.9, h: 0.25 },
         children: [
@@ -174,6 +175,42 @@ describe('healing can never cross from one gate control to another (04 §7.3, is
   it('an ordinary screen element is unaffected — it heals exactly as before', () => {
     const def = ctx.map.screens.get('invoice_list')!.elements.find((e) => e.id === 'invoice.add.button')!;
     assert.deepEqual(gateHealScope(ctx.map, def, dialogTree()), {}, 'no gate, no bounds');
+  });
+});
+
+describe('the covered-screen rule never masks a real navigation (03 §5.1b, issue #24)', () => {
+  it('answers the REMEMBERED screen when a modal occluded its marker', () => {
+    // the reported failure: a dialog over the current screen hides its `screen.<id>`, so the
+    // deepest surviving marker is an ancestor and rule 2 answers THAT at confidence 1.0.
+    // `invoice_new` is the ancestor here and declares no gate, so nothing contradicts the memory.
+    const tree = dialogTree('invoice_new');
+    const covered = identify(ctx.map, tree, { covered_screen: 'client_picker' });
+    assert.equal(covered.screen_id, 'client_picker');
+    assert.equal(covered.confidence, 0.75, 'above unknown, below any live evidence, below a marker');
+    assert.equal(covered.candidates?.[0]?.screen_id, 'invoice_new', 'the marker-named ancestor stays visible');
+  });
+
+  it('but stands down when the marker-named screen is the one that RAISED the gate', () => {
+    // `invoice_list` declares gate.push_permission on entry (02 §4.2). A capture showing
+    // `screen.invoice_list` with that gate up is a screen that NAVIGATED and raised its own gate —
+    // the marker is the better witness. Without this the rule masks every navigation to a
+    // gate-raising screen, reporting the screen we came from for as long as the gate is up.
+    assert.ok((ctx.map.screens.get('invoice_list')?.gates ?? []).includes(GATE), 'precondition: the screen declares the gate');
+    assert.equal(identify(ctx.map, dialogTree('invoice_list'), { covered_screen: 'client_picker' }).screen_id, 'invoice_list');
+  });
+
+  it('and stands down when the remembered screen\u2019s own marker is still in the tree', () => {
+    // nothing is occluded: rule 2 has the evidence and must win
+    const r = identify(ctx.map, dialogTree('invoice_new'), { covered_screen: 'invoice_new' });
+    assert.equal(r.screen_id, 'invoice_new');
+    assert.equal(r.confidence, 1);
+  });
+
+  it('ignores the memory entirely when no gate is present', () => {
+    const base = dialogTree('invoice_new');
+    const noGate = { ...base, root: { ...base.root, children: [base.root.children[0]!] } } as Tree;
+    assert.equal(identify(ctx.map, noGate, { covered_screen: 'client_picker' }).screen_id, 'invoice_new',
+      'otherwise an ordinary push/pop would report the previous screen for ever');
   });
 });
 

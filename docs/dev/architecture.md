@@ -9,12 +9,12 @@ signature without updating this file and every caller. Read `docs/dev/toolchain.
 
 | tag | files | status | depends on |
 |---|---|---|---|
-| contract | `src/types.ts`, `src/config.ts`, `src/errors.ts`, `src/paths.ts`, `src/token.ts`, `src/lib.ts`, `src/test/helpers.ts` | **implemented** | — |
-| A1 | `src/yaml/load.ts`, `src/yaml/canonical.ts`, `src/yaml/schemas.ts`, `src/validate.ts`, `src/migrate-id.ts`, `src/merge-driver.ts` | stub | contract, `scrub.ts` (rule 8 patterns) |
+| contract | `src/types.ts`, `src/config.ts`, `src/errors.ts`, `src/paths.ts`, `src/token.ts`, `src/values.ts`, `src/lib.ts`, `src/test/helpers.ts` | **implemented** | — |
+| A1 | `src/yaml/load.ts`, `src/yaml/canonical.ts`, `src/yaml/schemas.ts`, `src/validate.ts`, `src/migrate-id.ts`, `src/merge-driver.ts` | stub | contract, `scrub.ts` (rule 8 patterns), `values.ts` (rules 8 and 9 read `{param}` slots) |
 | A2 | `src/log.ts`, `src/store/db.ts`, `src/store/export.ts`, `src/events.ts`, `src/context.ts` | stub | contract, A1 |
 | B1 | `src/tree.ts`, `src/scrub.ts`, `src/signature.ts` | stub | contract |
 | B2 | `src/identify.ts`, `src/resolve.ts`, `src/plan.ts`, `src/format.ts`, `src/settle.ts` | stub | contract, B1 |
-| C1 | `src/observe.ts`, `src/recipes/match.ts`, `src/recipes/compile.ts`, `src/recipes/verbs.ts`, `src/recipes/values.ts`, `src/recipes/lifecycle.ts` | stub | A2, B1, B2 |
+| C1 | `src/observe.ts`, `src/recipes/match.ts`, `src/recipes/compile.ts`, `src/recipes/verbs.ts`, `src/recipes/lifecycle.ts` | stub | A2, B1, B2 |
 | C2 | `src/heal.ts`, `src/recipes/guided.ts` | stub | A2, B1, B2, C1 (lifecycle, observe) |
 | C3 | `src/recipes/maestro.ts`, `src/recipes/headless.ts`, `src/drift.ts`, `src/router-import.ts` | stub | A2, B1, B2, C1, C2 |
 | D1 | `src/tools.ts`, `src/server.ts`, `src/ingest-socket.ts`, `src/index.ts` | stub | everything |
@@ -352,7 +352,10 @@ sample.events.jsonl` is a validated sample of every kind (report.test.ts input).
     (`s[0-9]+[a-z]?`).
 18. **Decay** (02 §8) applies only when both build numbers parse as integers; otherwise no decay.
 19. **Gates never win identification**; a tree that is only a gate is `unknown` +
-    `gates_present`.
+    `gates_present`. Still true — a gate is never the answer. What changed with decision 68 is what
+    the answer is when a gate is present and has HIDDEN the answer: the screen the session
+    remembers, at 0.75, rather than an ancestor's surviving marker at 1.0. The gate itself is still
+    only ever reported in `gates_present`.
 20. **07 §3 Release-build probe** = the iOS `UserDefaults` record `app_map_debug_probe`
     (instrumentation/ios AppMapDebugEndpoint) read via `simctl spawn … defaults export`, falling back
     to the app's container plist via `plutil -convert xml1` (iOS 26's `defaults` no longer resolves a

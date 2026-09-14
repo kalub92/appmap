@@ -106,7 +106,6 @@ Tool names appear to the harness as `mcp__app-map__<name>`. All outputs are comp
 | `plan_path` | `{from?, to}` | `{deep_link}` or ordered edge list | prefers deep link (invariant 7); an omitted `from` is the last observation's screen, else `unknown` (§2) |
 | `match_recipe` | `{instruction, platform?}` | `{recipe_id, confidence, params_needed[]}` or `{no_match, candidates[]}` | regex cascade; candidates ≤ 8 lines |
 | `run_recipe` | `{recipe_id, params, mode: guided \| headless}` | guided: `{run_id, step}`; headless: run report | 04 §5–6 |
-
 | `report_step` | `{run_id, step_id, ok, note?}` | next step, `done`, or `fallback: {step, reason, screen_seen, screen_seen_seq, identified_by}` | verifies against last observation |
 | `record_observation` | `{tool, input, snapshot, ok}` | `{screen_before, screen_after}` | fallback when hooks are unavailable; costs tokens |
 | `name_screen` | `{screen_id, title?, deep_link?, force?}` | candidate screen created from last observation | explore mode only; `force` re-learns a screen that is no longer `candidate` and records `meta.relearned_from` (02 §8) |

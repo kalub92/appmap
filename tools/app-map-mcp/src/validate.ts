@@ -68,7 +68,7 @@ import { AppMapError } from './errors.ts';
 import { allowlistFile, idsFile, kindForPath, manifestFile, recipesDir, schemaDir, screensDir, stringsFile } from './paths.ts';
 import type { YamlKind } from './paths.ts';
 import { PII_PATTERNS } from './scrub.ts';
-import { assertionOp, observedParams, paramOfSlot } from './recipes/values.ts';
+import { assertionOp, observedParams, paramOfSlot } from './values.ts';
 import { isCanonical, parseYamlDoc } from './yaml/canonical.ts';
 import { schemaIssueDetail, validateAgainstSchema } from './yaml/schemas.ts';
 

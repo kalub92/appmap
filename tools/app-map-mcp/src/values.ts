@@ -28,11 +28,13 @@
  * case-insensitive). If the two disagreed, a recipe could not verify the very run it was compiled
  * from: the trajectory typed `50` and the detail screen renders `$50.00`.
  *
- * Layer: leaf (imports types only). Pure. It is a module of its own rather than more of
- * `guided.ts` because `observe.ts` needs it and `guided.ts` already imports `observe.ts`.
+ * Layer: leaf (imports `types.ts` only). Pure, and a module of its own rather than more of
+ * `guided.ts`, because three layers need it and none of them may depend on the replay state
+ * machine: `observe.ts` substitutes and compares at ingest, `validate.ts` (the YAML layer) reads
+ * the slots for rules 8 and 9, and `maestro.ts` substitutes for the export.
  */
-import type { ElementId, Expect, RecipeFile, RecipeParam, RecipeParams, ValueAssertion } from '../types.ts';
-import { PARAM_SLOT_REGEX } from '../types.ts';
+import type { ElementId, Expect, RecipeFile, RecipeParam, RecipeParams, ValueAssertion } from './types.ts';
+import { PARAM_SLOT_REGEX } from './types.ts';
 
 /** Pure: `{amount}` → params.amount (String()); unknown slots left as-is. */
 export function substituteParams(text: string, params: RecipeParams): string {

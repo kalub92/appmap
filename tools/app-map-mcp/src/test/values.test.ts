@@ -21,7 +21,7 @@ import { normalizeTree, walk } from '../tree.ts';
 import { declareTask, recordObservation } from '../observe.ts';
 import type { BuildInfoProbe } from '../recipes/guided.ts';
 import { checkExpect, reportStep, startGuidedRun } from '../recipes/guided.ts';
-import { assertionKey, compareValue, observedParams, valueChecksOfRecipe } from '../recipes/values.ts';
+import { assertionKey, compareValue, observedParams, valueChecksOfRecipe } from '../values.ts';
 import { forbiddenContentIssues, validateMap } from '../validate.ts';
 import { loadFixtureTree, makeTempAppMapDir } from './helpers.ts';
 import type { TempAppMapDir } from './helpers.ts';

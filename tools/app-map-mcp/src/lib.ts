@@ -50,8 +50,8 @@ export { disambiguate, findElement, findElementDef, queryLocator, resolve, targe
 export type { ResolveOptions } from './resolve.ts';
 export { DEFAULT_SETTLE_MS, SETTLE_SOURCE_VALUES, addressableTarget, formatSettle, settleFor } from './settle.ts';
 export type { SettleOptions } from './settle.ts';
-export { assertionKey, assertionOp, compareValue, keyOf, observedParams, paramOfSlot, valueChecksOfExpect, valueChecksOfRecipe } from './recipes/values.ts';
-export type { PendingValueCheck, ValueOp } from './recipes/values.ts';
+export { assertionKey, assertionOp, compareValue, keyOf, observedParams, paramOfSlot, valueChecksOfExpect, valueChecksOfRecipe } from './values.ts';
+export type { PendingValueCheck, ValueOp } from './values.ts';
 export { planPath, shortestEdgePath } from './plan.ts';
 export * as format from './format.ts';
 

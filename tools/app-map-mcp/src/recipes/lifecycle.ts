@@ -207,7 +207,7 @@ import type { ParsedYaml } from '../yaml/canonical.ts';
 import { canonicalYaml, parseYamlDoc } from '../yaml/canonical.ts';
 import { formatSchemaIssue, validateAgainstSchema } from '../yaml/schemas.ts';
 import { compileRecipe, compilerCanEmit, isNormalisationWarning } from './compile.ts';
-import { keyOf as keyOfValueAssertion } from './values.ts';
+import { keyOf as keyOfValueAssertion } from '../values.ts';
 
 // `conditionKey` used to live here; it moved to types.ts so the COMPILER can dedupe the
 // conditions it carries forward on the very key this guard compares them with (see its doc

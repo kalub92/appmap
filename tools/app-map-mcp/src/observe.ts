@@ -61,7 +61,7 @@ import { PII_PATTERNS, buildScrubPolicy, perceptionBytes, redactString, scrub } 
 import { labelNorm, observedSignature, structuralHash } from './signature.ts';
 import { centerOf, extractSnapshot, normalizeTree, parentOf, pathOf, siblingIndex, walk } from './tree.ts';
 import { markVerified } from './recipes/lifecycle.ts';
-import { compareValue, paramOfSlot, substituteParams, valueChecksOfRecipe } from './recipes/values.ts';
+import { compareValue, paramOfSlot, substituteParams, valueChecksOfRecipe } from './values.ts';
 
 /** tool names that cost a screenshot (08 §2 `screenshots` counter) */
 const SCREENSHOT_RE = /screenshot|screen_shot|capture_image/i;
