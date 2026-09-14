@@ -64,7 +64,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppMapContext } from '../context.ts';
 import type { CompileRecipeInput, CompileRecipeResult, Condition, DriverInput, ElementId, Expect, LoadedMap, Observation, RecipeEntry, RecipeFile, RecipeParam, RecipeStep, ScreenId, ScrubbedTree, StepAction, StepId, SwipeDirection } from '../types.ts';
-import { PARAM_SLOT_REGEX, SWIPE_DIRECTIONS, UNKNOWN_SCREEN, conditionKey, focusObservable, screenIdOfDeepLink, stepElement } from '../types.ts';
+import { PARAM_SLOT_REGEX, SWIPE_DIRECTIONS, UNKNOWN_SCREEN, canonicalDeepLink, conditionKey, focusObservable, screenIdOfDeepLink, stepElement } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { PACKAGE_ROOT } from '../paths.ts';
 import { walk } from '../tree.ts';
@@ -418,7 +418,10 @@ export function translateSteps(map: LoadedMap, observations: readonly Observatio
         drop('carried no url, so no open_link step could be written (04 §3.3)');
         continue;
       }
-      push({ id, action: 'open_link', url: obs.input.url });
+      // the driver reported the URL it opened, in the scheme the APP registers; the map is
+      // written in the canonical form (issue #25), and recipe.schema.json enforces it — a draft
+      // carrying `pokedex://…` would be refused by rule 1 on `mark`
+      push({ id, action: 'open_link', url: canonicalDeepLink(obs.input.url, map.manifest?.deep_link_scheme) });
       continue;
     }
     if (kind === 'type') {

@@ -575,11 +575,19 @@ export function assertSchemeUnique(appId: string, scheme: string, owners: readon
   );
 }
 
-/** Does replaying this recipe open a custom-scheme URL at all? (entry deep link or an `open_link` step) */
-export function opensADeepLink(recipe: RecipeFile): boolean {
+/**
+ * Does replaying this recipe open a custom-scheme URL at all? The entry deep link, an `open_link`
+ * step — or the FIRST screen of a `fallback_path`, whose own deep link `expandSteps` synthesizes
+ * into `s0` when the recipe has no entry link of its own. Missing that third case would skip the
+ * issue-#25 collision probe for exactly the recipes that enter the long way round.
+ */
+export function opensADeepLink(map: LoadedMap, recipe: RecipeFile): boolean {
   const entry = recipe.entry?.deep_link;
   if (typeof entry === 'string' && entry !== '' && entry !== 'none') return true;
-  return (recipe.steps ?? []).some((step) => step.action === 'open_link');
+  if ((recipe.steps ?? []).some((step) => step.action === 'open_link')) return true;
+  const first = recipe.entry?.fallback_path?.[0];
+  const link = first === undefined ? undefined : map.screens.get(first)?.deep_link;
+  return typeof link === 'string' && link !== '' && link !== 'none';
 }
 
 /** Throws `release_build_refused` unless `probe` is a sandbox Debug build. Pure. */
@@ -787,7 +795,7 @@ export function toRunStep(map: LoadedMap, step: RecipeStep, params: RecipeParams
 // ---------------------------------------------------------------------------------------------
 
 /** Pure: does `expect` hold on `tree`? `screenId` is the identified screen (or `unknown`). */
-export function checkExpect(map: LoadedMap, expect: Expect | undefined, tree: AnyTree, screenId: ScreenId | 'unknown', opts: { previousScreen?: ScreenId | 'unknown'; valueChecks?: Record<string, boolean> } = {}): { ok: boolean; failed: string[] } {
+export function checkExpect(map: LoadedMap, expect: Expect | undefined, tree: AnyTree, screenId: ScreenId | 'unknown', opts: { previousScreen?: ScreenId | 'unknown'; valueChecks?: Record<string, boolean>; params?: RecipeParams } = {}): { ok: boolean; failed: string[] } {
   const failed: string[] = [];
   if (expect === undefined) {
     // 02 §6: a step without `expect` inherits "screen unchanged"
@@ -825,6 +833,11 @@ export function checkExpect(map: LoadedMap, expect: Expect | undefined, tree: An
   // value existed (values.ts). All that reaches here is one boolean per assertion; an
   // assertion with no verdict was never decided, which is not the same as satisfied.
   for (const check of valueChecksOfExpect(expect)) {
+    // an OPTIONAL parameter the caller did not supply leaves its slot unsubstituted, so ingest had
+    // nothing to compare and recorded no verdict. There is nothing to assert about a value the run
+    // was never given — skipping is the honest reading, and treating it as failed would make every
+    // recipe with an optional parameter fall back the moment the parameter is omitted.
+    if (opts.params !== undefined && substituteParams(check.slot, opts.params) === check.slot) continue;
     if (opts.valueChecks?.[check.key] !== true) failed.push(`value:${check.element}`);
   }
   return { ok: failed.length === 0, failed };
@@ -903,7 +916,7 @@ export async function startGuidedRun(ctx: AppMapContext, input: StartGuidedRunIn
     // installed bundle registers the same scheme the link — and its `?fixture=` — can land in the
     // wrong app, and all we would see is the app-scoped capture timing out. Best-effort: an
     // unanswerable probe changes nothing.
-    if (opensADeepLink(recipe)) {
+    if (opensADeepLink(ctx.map, recipe)) {
       const scheme = ctx.map.manifest.deep_link_scheme || CANONICAL_DEEP_LINK_SCHEME;
       let owners: string[] | null = null;
       try {
@@ -1125,7 +1138,7 @@ export async function reportStep(ctx: AppMapContext, input: ReportStepInput): Pr
   }
 
   // 4. the postcondition
-  const verdict = checkExpect(map, current.step.expect, tree, screenSeen, { previousScreen: obs.screen_before, ...(obs.value_checks !== undefined ? { valueChecks: obs.value_checks } : {}) });
+  const verdict = checkExpect(map, current.step.expect, tree, screenSeen, { previousScreen: obs.screen_before, params: run.params, ...(obs.value_checks !== undefined ? { valueChecks: obs.value_checks } : {}) });
 
   // 4a. settle a heal handed out on the previous call (04 §7.2 rule 3)
   let healed: HealSummary | undefined;
@@ -1205,12 +1218,12 @@ function verifyObserved(
   markVerified(ctx, { screens, elements, edges }, run.build ?? ctx.build);
 }
 
-/** 04 §5: the last step is done — the recipe's own `verify` decides `verified`. *//** 04 §5: the last step is done — the recipe's own `verify` decides `verified`. */
+/** 04 §5: the last step is done — the recipe's own `verify` decides `verified`. */
 function finish(ctx: AppMapContext, map: LoadedMap, run: RunRecord, recipe: RecipeFile, obs: Observation, steps: number, screenSeen: ScreenId | typeof UNKNOWN_SCREEN): ReportStepResult {
   // `screenSeen`, not `obs.screen_after`: the caller re-identified against the SESSION map, and
   // deciding `verified` against a different screen than the steps were checked against is the
   // split-brain issue #24 found in `screen_seen` (guided fallbacks) in the first place
-  const verdict = checkExpect(map, recipe.verify, obs.snapshot!, screenSeen, obs.value_checks !== undefined ? { valueChecks: obs.value_checks } : {});
+  const verdict = checkExpect(map, recipe.verify, obs.snapshot!, screenSeen, { params: run.params, ...(obs.value_checks !== undefined ? { valueChecks: obs.value_checks } : {}) });
   const verified = verdict.ok;
   run.state = verified ? 'done' : 'failed';
   run.finished_at = now();

@@ -195,7 +195,7 @@ export async function runHeadless(ctx: AppMapContext, input: HeadlessInput, opts
     // a collision there looks like a flaky inspector rather than a routing bug. Same rule as
     // guided: only a positive answer naming a foreign bundle refuses; an unanswerable probe is not
     // evidence. A report, not a throw — headless answers in reports (07 §2.4).
-    if (opensADeepLink(recipe)) {
+    if (opensADeepLink(map, recipe)) {
       const scheme = map.manifest.deep_link_scheme || CANONICAL_DEEP_LINK_SCHEME;
       let owners: string[] | null = null;
       try {

@@ -140,13 +140,20 @@ describe('settleFor — the server derives what the driver should poll for (issu
     // not on the interrupted step's postcondition: the runner hands that step back with `retry`,
     // so it has not been re-executed and its postcondition legitimately does not hold yet —
     // polling for it would burn the whole budget on every single gate.
-    const dismissal: RecipeStep = { id: 's3', action: 'dismiss_gate', gate: 'gate.push_permission' };
+    const dismissal: RecipeStep = { id: 's3', action: 'dismiss_gate', gate: 'gate.biometric_prompt' };
     const hint = settleFor(ctx.map, dismissal, {});
     assert.equal(hint?.source, 'gate.retry');
     assert.equal(hint?.condition, 'not_visible');
-    // the pilot's push_permission deny button is addressed by its label regex (an OS dialog
-    // carries no app id), which is the id-shaped form a driver polls
-    assert.deepEqual(hint?.target, { by: 'id', id: '^Don.t Allow$' });
+    assert.deepEqual(hint?.target, { by: 'role_label', role: 'button', label: 'Cancel' });
+  });
+
+  it('gives NO hint for a control only a REGEX can address, rather than one that always times out', () => {
+    // the pilot's push_permission deny button has a `label_regex` locator and nothing literal.
+    // Maestro can use that (it matches `id:` as a regex, 04 §6.2) but a driver polling an
+    // `identifier` takes it literally, so the hint would never be satisfied — and a hint that
+    // always burns the full timeout is strictly worse than the bounded sleep it replaced.
+    const dismissal: RecipeStep = { id: 's3', action: 'dismiss_gate', gate: 'gate.push_permission' };
+    assert.equal(settleFor(ctx.map, dismissal, {}), undefined);
   });
 
   it('a gate whose dismiss control cannot be addressed gets no hint rather than a guess', () => {

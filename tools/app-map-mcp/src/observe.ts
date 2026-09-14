@@ -195,6 +195,8 @@ function resolveActedElement(ctx: AppMapContext, input: DriverInput, screenBefor
 function evaluateValueChecks(ctx: AppMapContext, session: SessionId, tree: Tree): Record<string, boolean> | undefined {
   const runs = ctx.db.listRunsForSession(session, { states: ['active'] });
   if (runs.length === 0) return undefined;
+  const cached = ctx.db.listScreens();
+  const screens: readonly ScreenFile[] = cached.length > 0 ? cached : Array.from(ctx.map.screens.values());
   const out: Record<string, boolean> = {};
   for (const run of runs) {
     const recipe = ctx.db.getRecipe(run.recipe) ?? ctx.map.recipes.get(run.recipe);
@@ -204,11 +206,15 @@ function evaluateValueChecks(ctx: AppMapContext, session: SessionId, tree: Tree)
       const expected = substituteParams(check.slot, run.params);
       // an unbound slot substitutes to itself: there is nothing to compare against, so say nothing
       if (expected === check.slot) continue;
-      const def = elementDefAnywhere(ctx, check.element);
+      const def = elementDefAnywhere(ctx, screens, check.element);
       if (def === undefined) continue;
       const hit = resolveElement(ctx.map, def, tree);
       if (hit.status !== 'hit') { out[check.key] = false; continue; }
-      const observed = hit.node.label ?? hit.node.value ?? hit.node.text;
+      // `value` FIRST: on a text field the accessibility `label` is the PLACEHOLDER and the typed
+      // content is `value`, so reading the label would compare `{amount}` against "Amount" — on
+      // exactly the element class issue #23 is about. A static text carries no `value`, so it
+      // falls through to `label` and reads the same as before.
+      const observed = hit.node.value ?? hit.node.label ?? hit.node.text;
       if (typeof observed !== 'string') { out[check.key] = false; continue; }
       out[check.key] = compareValue(observed, expected, check.op, paramTypes.get(paramOfSlot(check.slot) ?? ''));
     }
@@ -216,10 +222,13 @@ function evaluateValueChecks(ctx: AppMapContext, session: SessionId, tree: Tree)
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-/** The first declaration of `id` on any screen the session knows (cache first, like everything else here). */
-function elementDefAnywhere(ctx: AppMapContext, id: ElementId): ElementDef | undefined {
-  const cached = ctx.db.listScreens();
-  for (const screen of cached.length > 0 ? cached : Array.from(ctx.map.screens.values())) {
+/**
+ * The first declaration of `id` on any screen the session knows (cache first, like everything else
+ * here). `screens` is passed in rather than re-read: this runs once per declared assertion, on the
+ * ingest path 03 §11 budgets at 50 ms, and `db.listScreens()` is a full table read.
+ */
+function elementDefAnywhere(ctx: AppMapContext, screens: readonly ScreenFile[], id: ElementId): ElementDef | undefined {
+  for (const screen of screens) {
     const def = screen.elements?.find((e) => e.id === id);
     if (def !== undefined) return def;
   }

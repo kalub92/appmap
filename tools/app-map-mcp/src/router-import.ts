@@ -126,7 +126,7 @@ function canonicalizeRoutes(screens: readonly RouterExportScreen[], scheme: stri
   });
 }
 
-/** Pure: a fresh candidate screen from one export entry. *//** Pure: a fresh candidate screen from one export entry. */
+/** Pure: a fresh candidate screen from one export entry. */
 export function routerScreenToScreenFile(rs: RouterExportScreen, build: BuildInfo): ScreenFile {
   // `build` is deliberately not stamped anywhere: a screen seeded from the router export has
   // never been verified against a hierarchy, so it carries no `last_verified_build` (02 §8).

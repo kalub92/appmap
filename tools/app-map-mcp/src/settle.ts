@@ -69,9 +69,11 @@ export function addressableTarget(def: ElementDef | undefined): DriverTarget | u
     if (loc.strategy === 'text' && typeof loc.value === 'string' && loc.value !== '') return { by: 'text', text: loc.value };
     if (loc.strategy === 'role_label' && loc.value !== null && typeof loc.value === 'object') {
       const rl = loc.value as { role?: string; label?: string; label_regex?: string };
-      // a computed label (07 §9) is a regex, which is an id-shaped pattern to a driver, not a
-      // literal to compare — the Maestro export makes the same choice (04 §6.2)
-      if (typeof rl.label_regex === 'string' && rl.label_regex !== '') return { by: 'id', id: rl.label_regex };
+      // A `label_regex` is deliberately NOT usable here, unlike in the Maestro export where `id:`
+      // is matched as a regex (04 §6.2). Every other driver takes an `identifier` literally, so
+      // handing one `^Don.t Allow$` produces a hint that can never be satisfied — and a hint that
+      // always times out is worse than no hint at all, which is a bounded sleep. Fall through to
+      // the next locator, and if nothing is literally addressable answer `undefined`.
       if (typeof rl.label === 'string' && rl.label !== '' && def?.role !== undefined) return { by: 'role_label', role: def.role, label: rl.label };
     }
   }
