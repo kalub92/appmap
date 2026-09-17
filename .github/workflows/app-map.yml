@@ -46,7 +46,7 @@ jobs:
       contents: read
       pull-requests: write   # the 07 §4 intent_critical bot comment
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # intent-critical-diff walks from the PR base sha (07 §7); a depth-1 checkout has no base.
           fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
@@ -122,7 +122,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Unit tests (Debug — APP_MAP_DEBUG on)
         run: swift test --package-path instrumentation/ios/AppMapKit
       - name: Release gate (01 §4 — the debug surfaces must be compiled out)
@@ -140,7 +140,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -163,7 +163,7 @@ jobs:
       APP_MAP_SIMULATOR: ${{ vars.APP_MAP_SIMULATOR || 'iPhone 16' }}
       APP_MAP_CI_PARAMS: ${{ vars.APP_MAP_CI_PARAMS }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -238,7 +238,7 @@ jobs:
     env:
       APP_MAP_CI_PARAMS: ${{ vars.APP_MAP_CI_PARAMS }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -314,7 +314,7 @@ jobs:
       APP_MAP_SIMULATOR: ${{ vars.APP_MAP_SIMULATOR || 'iPhone 16' }}
       APP_MAP_CI_PARAMS: ${{ vars.APP_MAP_CI_PARAMS }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
@@ -364,7 +364,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v7
