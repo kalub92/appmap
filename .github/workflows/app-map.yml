@@ -127,6 +127,9 @@ jobs:
         run: swift test --package-path instrumentation/ios/AppMapKit
       - name: Release gate (01 §4 — the debug surfaces must be compiled out)
         run: swift test -c release --package-path instrumentation/ios/AppMapKit -Xswiftc -enable-testing
+      # 01 §4 for the agents' fixtures: instrument-agents.test.ts lints them on Linux, this is their only Swift parse (syntax only, no SDK typecheck).
+      - name: Syntax-check instrumentation fixtures
+        run: find tools/app-map-mcp/fixtures/instrument/ios -name '*.swift' -print0 | xargs -0 -n1 xcrun swiftc -parse
 
   android-instrumentation:
     # The library is an AGP module meant to be included from the host app's Gradle build, so the

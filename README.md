@@ -528,7 +528,7 @@ the table are elided. The two JSON rows are separate runs of that same stub with
 | `instrumentation/ios/AppMapKit/` · `android/appmap/` | Swift package and Gradle module: markers, deep links, router export, fixtures, debug probe | 01 |
 | `scripts/app-map/` | `gen-ids`, `router-export.sh`, `strings-export.sh`, `open-heal-pr.sh`, `ci-params.sh` | 01, 06, 07 |
 | `.mcp.json` | project-scoped MCP servers; the single source for the Cursor and Codex configs | 05 §2 |
-| `.claude/` | hooks (SessionStart, PostToolUse, PostToolUseFailure, Stop, PreCompact), the `app-nav` skill, the replayer agent | 05 |
+| `.claude/` | hooks (SessionStart, PostToolUse, PostToolUseFailure, Stop, PreCompact), the `app-nav` skill, the replayer agent, the `app-instrument` skill and its three instrumentation agents | 05 |
 | `.github/workflows/app-map.yml` | validate · ios/android-instrumentation · drift/gate (iOS, Android) · nightly-heal · router-import | 06 |
 | `CODEOWNERS` · `.gitattributes` | review policy · semantic YAML merge driver | 07 §7, 02 §9 |
 | `docs/specs/` · `docs/dev/` | the eight specs; toolchain, harness notes, rollout, architecture | — |

@@ -257,8 +257,11 @@ router registry. OS dialogs cannot carry your ids; the map stores their label si
 
 ## 8. Debug probe for the server (07 §3)
 
-iOS: call `AppMapDebugEndpoint.publish(sandbox: Environment.current == .sandbox)` at launch. It writes a
-build/environment record to `UserDefaults` (no network listener). The server reads it first through
+iOS: call `AppMapDebugEndpoint.publish()` at launch, after `exportIfRequested()` (nothing after the export
+call runs on an `-AppMapExport` launch). Bare `publish()` reads the `APP_MAP_SANDBOX` environment variable,
+then the Info.plist key `AppMapEnvironment`; pass `publish(sandbox: <expr>)` only from your own environment
+type — never `Environment.current`, which shadows SwiftUI's `Environment`. It writes a build/environment
+record to `UserDefaults` (no network listener). The server reads it first through
 `cfprefsd`:
 
 ```sh
@@ -319,6 +322,29 @@ git config core.hooksPath scripts/app-map/githooks
 source or an MCP config, and refuses the commit on any error. Bypass one commit with
 `APP_MAP_SKIP_PRECOMMIT=1 git commit` (or `git commit -n`). CI runs the same commands, so the hook
 only moves the feedback earlier — it is never the only gate.
+
+## 11. Letting the agents do §2–§8 (05 §5.1)
+
+The `app-instrument` skill (`.claude/skills/app-instrument/SKILL.md`; "instrument the app" or "make
+lint-ids pass" triggers it in a Claude Code session) does §2–§8 for an iOS app. It surveys the source
+through `app-instrument-surveyor`, adds what it finds to `app-map/ids.yaml`, runs `gen-ids`, and has
+`app-instrument-swiftui` / `app-instrument-uikit` add the `appMapScreen`/`appMapID` calls, the registry
+calls, the `#if APP_MAP_DEBUG` deep-link handler, a `DebugFixtures` stub whose bodies are
+`TODO(app-map fixture)` and the `publish()` call; then it runs `gen-ids --check`, `lint-ids
+--instrumented ios`, `validate`, `export --check` and, with Xcode present, `xcodebuild`. It never edits
+`project.pbxproj`, `Info.plist`, `.xcconfig`, `.storyboard`/`.xib`, `AppMapID.swift` or an existing id
+(a rename is `migrate-id`, shown as `--dry-run` first), so it ends with a decisions report (chat and
+`app-map/.local/instrument/report.md`) that hands you the remaining steps with the exact fragments:
+`-D APP_MAP_DEBUG` in the Debug `OTHER_SWIFT_FLAGS` of **every** module holding wiring or fixtures
+(§1, D0); `CFBundleURLTypes` in the Debug plist and, on a collision, the scheme in all three places
+(§5, D7); adding new Swift files to the target when the project is a classic `pbxproj` — the skill
+writes new files only into synchronized or generated projects and edits the `App`/`AppDelegate` inline
+otherwise (D7); and confirming each `intent_critical` (D1), the gate controls (D2), the TODO fixtures
+(D4) and the sandbox source for `publish()` — the `APP_MAP_SANDBOX`/`AppMapEnvironment` default or
+your own expression (§8, D8). The pilot instrumented exactly this way is
+`tools/app-map-mcp/fixtures/instrument/ios/{swiftui,uikit}`; `instrument-agents.test.ts` pins agents,
+references and fixtures to the AppMapKit API and to `lint-ids`, and CI parses the fixtures with
+`swiftc -parse` (syntax only, no iOS SDK typecheck — the report always says whether a compile ran).
 
 ## Answered
 

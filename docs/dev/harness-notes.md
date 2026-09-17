@@ -85,6 +85,30 @@ assume of the `app-map` CLI, and where the implementation deviates from the spec
   therefore Android/Maestro-only — `validate` warns on one in an `ios` recipe and the compiler
   writes `visible` instead (04 §10, issue #18). The `focused`/`enabled` fields `tree.ts` reads
   belong to the nested XCUITest-like shape and to Maestro's hierarchy, not to Argent.
+- **`tools:` grants `Bash` whole; Bash cannot be scoped per command in frontmatter.** The
+  sub-agents reference offers `tools`/`disallowedTools` by tool name and no per-command form, and a
+  `permissions.deny` rule in `.claude/settings.json` would be session-wide (and policy-checked,
+  07 §6). The instrumentation specialists (`app-instrument-swiftui`, `app-instrument-uikit`) are
+  therefore constrained by prompt — their safety rule 11 allows `lint-ids` and `git diff --stat`
+  only — and pinned by `instrument-agents.test.ts`, which also asserts that no instrumentation
+  agent is granted an `mcp__` tool (05 §5.1).
+- **No `skills:` on the instrumentation specialists.** The field preloads the named skills into
+  the subagent's context, so naming `app-instrument` there would feed the orchestrator's whole
+  SKILL.md into every specialist call; each specialist body names the one `reference/*.md` it
+  must `Read` first instead.
+- **Mixed-file ownership.** A file holding a `UIViewRepresentable`/`UIViewControllerRepresentable`
+  is a SwiftUI file (the id goes on the wrapped UIKit control inside `makeUIView`; the wrapper
+  gets nothing); a file holding a `UIHostingController` is a UIKit file with `hosts:` naming the
+  SwiftUI root, and the hosted screen is marked once, in SwiftUI (issue #15).
+- **`AppMapRoute.screenID` is the bare screen id** (`invoice_list`, the URL host);
+  `AppMapID.Screen.invoiceList` is the marker `screen.invoice_list`. Router mappings switch on bare
+  strings (`case "invoice_list":`) — legal literals, since `lint-ids` registers only the marker —
+  and never on `AppMapID.Screen.*`, which matches nothing.
+- **SwiftUI `.tabItem` ids are `verify_on_device`.** The id sits on the `Label` inside
+  `.tabItem { }`; whether the simulator's flat tree reports it on the tab bar button has not been
+  confirmed by a capture. Until one does, the plan marks the item `verify_on_device`, `ids.yaml`
+  keeps the `nav.<x>.tab` entry and the screen's locator falls back to `role_label`. Record the
+  outcome here.
 
 ## 3. Verified against https://code.claude.com/docs/en/skills
 
