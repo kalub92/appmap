@@ -137,6 +137,22 @@ The `app-nav` skill (`.claude/skills/app-nav/SKILL.md`) is the operating procedu
 the tree is empty, and `compile_recipe` when a new task succeeds. Never sleep between a step and its
 `report_step`; poll the step's `settle` hint instead.
 
+## Installing app-map in another repository
+
+The package in `tools/app-map-mcp/` publishes as `@kalub92/app-map`. An app repo runs
+`npm i -D @kalub92/app-map` then `npx app-map init`, which scaffolds the map skeleton, the skills, the
+agents, the hooks, `.mcp.json`, `.claude/settings.json`, `scripts/app-map/` and `app-map.config.json`
+(the per-repo paths `lint-ids` cannot guess: app source roots and the generated constants file, read by
+`src/repo-config.ts`). `init` merges rather than replaces, and reports a conflict instead of overwriting a
+file the consumer edited. Everything it writes addresses the CLI as `npx app-map`, never this repo's tree.
+
+`templates/` and `scripts/gen-ids` inside the package are generated at `prepack` by
+`scripts/build-templates.mjs` and git-ignored; npm cannot pack files from outside the package root, so the
+canonical schemas, skills, agents and scripts are staged there for the tarball. `npm run check:templates`
+fails when a source it names has moved. `src/test/init.test.ts` scaffolds a temp repo and asserts it passes
+`validate`, `policy-check` and `lint-ids`. Releasing, including the git tag the SwiftPM dependency needs, is
+`docs/dev/release.md`.
+
 ## Instrumenting an app
 
 The `app-instrument` skill (`.claude/skills/app-instrument/SKILL.md`) instruments an iOS app's source for 01 R1–R8:

@@ -1,28 +1,51 @@
 {
-  "name": "app-map-mcp",
+  "name": "@kalub92/app-map",
   "version": "0.1.0",
-  "private": true,
   "description": "App-map MCP server and CLI: screen identification, locator resolution, recipes, replay, healing.",
+  "license": "UNLICENSED",
   "type": "module",
   "engines": {
     "node": ">=22.18.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kalub92/appmap.git",
+    "directory": "tools/app-map-mcp"
+  },
+  "homepage": "https://github.com/kalub92/appmap#readme",
+  "bugs": {
+    "url": "https://github.com/kalub92/appmap/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "bin": {
     "app-map": "./bin/app-map"
   },
   "main": "./dist/index.js",
+  "files": [
+    "bin/",
+    "dist/",
+    "templates/",
+    "templates-src/",
+    "scripts/gen-ids",
+    "migrations/",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"src/test/**/*.test.ts\"",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test:dist": "npm run build && node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"dist/test/**/*.test.js\"",
-    "validate-pilot": "node scripts/validate-pilot.mjs"
+    "validate-pilot": "node scripts/validate-pilot.mjs",
+    "build:templates": "node scripts/build-templates.mjs",
+    "check:templates": "node scripts/build-templates.mjs --check",
+    "prepack": "npm run build && npm run build:templates"
   },
   "appMap": {
     "maestroVersion": ">=1.39.0"
   },
-  "license": "UNLICENSED",
   "devDependencies": {
     "@types/node": "22.20.2",
     "typescript": "7.0.2"

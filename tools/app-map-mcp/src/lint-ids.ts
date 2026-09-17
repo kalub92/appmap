@@ -43,7 +43,8 @@ import type { AppMapConfig, Platform } from './config.ts';
 import { PLATFORMS } from './config.ts';
 import type { ElementKind, IdsElement, IdsGate, IdsRegistry, IdsScreen, LintIdsResult } from './types.ts';
 import { ELEMENT_ID_REGEX, GATE_DISMISS_REGEX, GATE_ID_REGEX, ID_REGEX, MARKER_REGEX, SCREEN_ID_REGEX, markerOfScreen } from './types.ts';
-import { idsFile, stringsFile } from './paths.ts';
+import { PACKAGE_ROOT, idsFile, stringsFile } from './paths.ts';
+import { readRepoConfig } from './repo-config.ts';
 import { parseYamlFile } from './yaml/load.ts';
 
 export interface LintIdsOptions {
@@ -178,16 +179,25 @@ export function lintIds(config: Pick<AppMapConfig, 'dir'>, opts: LintIdsOptions)
   }
 
   // ---- source scan -------------------------------------------------------------------------
+  // `app-map.config.json` supplies the per-repo paths in a consuming app; an explicit option
+  // still wins, and a repo without the file keeps this repository's historical defaults.
+  const repoCfg = readRepoConfig(repoRoot);
   const generated = {
-    swift: absolutize(repoRoot, opts.generated?.swift ?? DEFAULT_GENERATED.swift),
-    kotlin: absolutize(repoRoot, opts.generated?.kotlin ?? DEFAULT_GENERATED.kotlin),
+    swift: absolutize(repoRoot, opts.generated?.swift ?? repoCfg.generated?.swift ?? DEFAULT_GENERATED.swift),
+    kotlin: absolutize(repoRoot, opts.generated?.kotlin ?? repoCfg.generated?.kotlin ?? DEFAULT_GENERATED.kotlin),
   };
   const generatedPaths = new Set([generated.swift, generated.kotlin]);
   const platforms = opts.platforms ?? [...PLATFORMS];
-  const dirsFor = (p: Platform): string[] => (p === 'ios' ? opts.iosDirs ?? [...DEFAULT_IOS_DIRS] : opts.androidDirs ?? [...DEFAULT_ANDROID_DIRS]);
+  const configuredDirs = repoCfg.appSrcDirs;
+  const dirsFor = (p: Platform): string[] => {
+    const explicit = p === 'ios' ? opts.iosDirs : opts.androidDirs;
+    if (explicit !== undefined) return explicit;
+    if (configuredDirs !== undefined) return [...configuredDirs];
+    return p === 'ios' ? [...DEFAULT_IOS_DIRS] : [...DEFAULT_ANDROID_DIRS];
+  };
   const extsFor = (p: Platform): ReadonlySet<string> => (p === 'ios' ? IOS_EXTENSIONS : ANDROID_EXTENSIONS);
 
-  const instrumented = new Set<Platform>(opts.instrumentedPlatforms ?? []);
+  const instrumented = new Set<Platform>(opts.instrumentedPlatforms ?? repoCfg.instrumentedPlatforms ?? []);
 
   const sources = new Map<Platform, ScannedSource[]>();
   for (const platform of platforms) {
@@ -338,7 +348,7 @@ function checkGeneratedInSync(
   registered: ReadonlySet<string>,
   generatedFiles: ReadonlyArray<{ path: string; platform: Platform }>,
 ): LintIdsResult['issues'] {
-  const script = absolutize(repoRoot, opts.genIdsScript ?? join('scripts', 'app-map', 'gen-ids'));
+  const script = opts.genIdsScript !== undefined ? absolutize(repoRoot, opts.genIdsScript) : resolveGenIds(repoRoot);
   if (existsSync(script) && generatedFiles.length === 2) {
     const r = spawnSync(process.execPath, [script, '--check', '--quiet', '--ids', join(config.dir, 'ids.yaml'), '--out-ios', generated.swift, '--out-android', generated.kotlin], {
       cwd: repoRoot, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
@@ -433,6 +443,17 @@ function absolutize(repoRoot: string, p: string): string {
 function relOf(repoRoot: string, abs: string): string {
   const r = relative(repoRoot, abs);
   return (r.startsWith('..') ? abs : r).split('\\').join('/');
+}
+
+/**
+ * `gen-ids` lives at `scripts/app-map/gen-ids` in this repository and inside the published
+ * package (`scripts/gen-ids`, put there by `scripts/build-templates.mjs`). An app repo installs
+ * the package and has no `scripts/` of its own, so the packaged copy is what runs there.
+ */
+export function resolveGenIds(repoRoot: string): string {
+  const inRepo = join(repoRoot, 'scripts', 'app-map', 'gen-ids');
+  if (existsSync(inRepo)) return inRepo;
+  return join(PACKAGE_ROOT, 'scripts', 'gen-ids');
 }
 
 /** every `*.swift|kt|java|m` under `dirs`, minus generated constants and test sources */

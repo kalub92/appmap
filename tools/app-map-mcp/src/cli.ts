@@ -41,6 +41,7 @@
  *
  * Layer: top.
  */
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { AppMapConfig, Platform } from './config.ts';
@@ -66,7 +67,9 @@ import { runAllHeadless, runHeadless } from './recipes/headless.ts';
 import { driftTour, formatDriftTable } from './drift.ts';
 import { formatReport, report as buildReport } from './report.ts';
 import { genConfigs } from './gen-configs.ts';
-import { DEFAULT_ANDROID_DIRS, DEFAULT_IOS_DIRS, lintIds } from './lint-ids.ts';
+import { DEFAULT_ANDROID_DIRS, DEFAULT_IOS_DIRS, lintIds, resolveGenIds } from './lint-ids.ts';
+import { formatInitResult, initRepo } from './init.ts';
+import { readRepoConfig } from './repo-config.ts';
 import { intentCriticalDiff, policyCheck } from './policy-check.ts';
 import { runMergeDriver } from './merge-driver.ts';
 import { migrateId } from './migrate-id.ts';
@@ -90,7 +93,7 @@ export const COMMANDS = [
   // the 03 §8 map tools, as CLI twins sharing the tools.ts bodies (issue #17)
   'identify-screen', 'get-screen', 'find-element', 'plan-path', 'name-screen', 'match-recipe', 'run-recipe', 'report-step',
   'import-router', 'compile', 'run', 'maestro-export', 'drift', 'report',
-  'gen-configs', 'lint-ids', 'policy-check', 'intent-critical-diff', 'mark', 'mark-screen', 'merge-driver', 'migrate-id', 'help',
+  'gen-configs', 'lint-ids', 'policy-check', 'intent-critical-diff', 'mark', 'mark-screen', 'merge-driver', 'migrate-id', 'init', 'gen-ids', 'help',
 ] as const;
 export type Command = (typeof COMMANDS)[number];
 
@@ -254,6 +257,8 @@ async function dispatch(args: ParsedArgs, io: CliIo): Promise<number> {
     case 'drift': return cmdDrift(args, io);
     case 'report': return cmdReport(args, io);
     case 'gen-configs': return cmdGenConfigs(args, io);
+    case 'init': return cmdInit(args, io);
+    case 'gen-ids': return cmdGenIds(args, io);
     case 'lint-ids': return cmdLintIds(args, io);
     case 'policy-check': return cmdPolicyCheck(args, io);
     case 'intent-critical-diff': return cmdIntentCriticalDiff(args, io);
@@ -918,6 +923,61 @@ function cmdGenConfigs(args: ParsedArgs, io: CliIo): number {
   return result.ok ? 0 : 1;
 }
 
+/**
+ * `init` — scaffold an app repository (map skeleton, skills, agents, hooks, MCP config). The only
+ * command that writes outside the map, and the only one that runs in a repo with no map yet.
+ */
+function cmdInit(args: ParsedArgs, io: CliIo): number {
+  // `--dir` is the GLOBAL map-directory flag, so the repo to scaffold is positional.
+  const target = args.positional.length > 0 ? absPath(io, args.positional[0] as string) : resolve(io.cwd);
+  const platform = str(args, 'platform');
+  if (platform !== undefined && !isPlatform(platform)) {
+    throw new UsageError(`--platform ${platform} is not one of ${PLATFORMS.join('|')}`);
+  }
+  const srcDirs = list(args, 'app-src');
+  const result = initRepo({
+    target,
+    ...(platform !== undefined ? { platform } : {}),
+    ...(srcDirs.length > 0 ? { appSrcDirs: srcDirs } : {}),
+    ...(str(args, 'generated-swift') !== undefined ? { generatedSwift: str(args, 'generated-swift') as string } : {}),
+    ...(str(args, 'generated-kotlin') !== undefined ? { generatedKotlin: str(args, 'generated-kotlin') as string } : {}),
+    ...(str(args, 'app-id') !== undefined ? { appId: str(args, 'app-id') as string } : {}),
+    ...(str(args, 'scheme') !== undefined ? { scheme: str(args, 'scheme') as string } : {}),
+    force: args.flags.force === true,
+    dryRun: args.flags['dry-run'] === true,
+  });
+  emit(io, args, result, formatInitResult(result));
+  return result.ok ? 0 : 1;
+}
+
+/**
+ * `gen-ids` — the 01 R1 generator, so a consuming repo needs no `scripts/` of its own. Paths come
+ * from `app-map.config.json` unless given; every other flag is passed through to the script.
+ */
+function cmdGenIds(args: ParsedArgs, io: CliIo): number {
+  const config = configFor(args, io);
+  const repoRoot = repoRootFor(io);
+  const repoCfg = readRepoConfig(repoRoot);
+  const script = resolveGenIds(repoRoot);
+  if (!existsSync(script)) {
+    throw new AppMapError(ERROR_CODES.BAD_INPUT, `gen-ids not found at ${script}`, 'reinstall the package');
+  }
+  const passthrough: string[] = ['--ids', join(config.dir, 'ids.yaml')];
+  const swift = str(args, 'out-ios') ?? repoCfg.generated?.swift;
+  const kotlin = str(args, 'out-android') ?? repoCfg.generated?.kotlin;
+  if (swift !== undefined) passthrough.push('--out-ios', absPath(io, swift));
+  if (kotlin !== undefined) passthrough.push('--out-android', absPath(io, kotlin));
+  const platforms = str(args, 'platforms') ?? str(args, 'platform');
+  if (platforms !== undefined) passthrough.push('--platforms', platforms);
+  if (args.flags.check === true) passthrough.push('--check');
+  if (args.flags.quiet === true) passthrough.push('--quiet');
+  const r = spawnSync(process.execPath, [script, ...passthrough], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  if (r.error !== undefined) throw new AppMapError(ERROR_CODES.BAD_INPUT, `could not run gen-ids: ${r.error.message}`, '');
+  if (r.stdout) io.stdout(r.stdout);
+  if (r.stderr) io.stderr(r.stderr);
+  return r.status ?? 1;
+}
+
 function cmdLintIds(args: ParsedArgs, io: CliIo): number {
   const config = configFor(args, io);
   const repoRoot = repoRootFor(io);
@@ -1056,6 +1116,8 @@ commands:
   drift [--build B] [--router path] [--out path]
   report [--since ISO|30d] [--artifacts-dir DIR] [--json]
   gen-configs [--check]
+  init [PATH] [--platform p] [--app-src DIR ...] [--app-id ID] [--scheme S] [--generated-swift PATH] [--generated-kotlin PATH] [--force] [--dry-run]
+  gen-ids [--check] [--platforms ios,android] [--out-ios PATH] [--out-android PATH]
   lint-ids [--platform ios,android] [--src dir ...] [--instrumented ios,android]
   policy-check [REPO_ROOT]
   intent-critical-diff <base-ref> [--markdown]
