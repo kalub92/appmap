@@ -136,3 +136,15 @@ The `app-nav` skill (`.claude/skills/app-nav/SKILL.md`) is the operating procedu
 `get_screen` before any tap, tap by `a11y_id`, enter via `plan_path` deep links, no screenshots unless
 the tree is empty, and `compile_recipe` when a new task succeeds. Never sleep between a step and its
 `report_step`; poll the step's `settle` hint instead.
+
+## Instrumenting an app
+
+The `app-instrument` skill (`.claude/skills/app-instrument/SKILL.md`) instruments an iOS app's source for 01 R1–R8:
+`app-instrument-surveyor` (read-only) returns a plan, `app-instrument-swiftui` and `app-instrument-uikit` apply it to
+their files, and only the skill — never a subagent — edits `app-map/ids.yaml` (plus the `deep_link_scheme` key of
+`app-map/ios/manifest.yaml`), runs `gen-ids`, `migrate-id` and `xcodebuild`, and verifies with `lint-ids`, `validate`
+and `export --check`. `gen-ids` runs for both platforms unless `AppMapId.kt` is absent, because `lint-ids` checks both
+outputs whenever both exist. The instrumented pilot under `tools/app-map-mcp/fixtures/instrument/ios/{swiftui,uikit}`
+is what the agents must produce; `src/test/instrument-agents.test.ts` pins the agents, the skill's `reference/*.md`
+and those fixtures to AppMapKit's public API, the generated constants and `lint-ids`, so prose and code cannot drift
+(05 §5.1).

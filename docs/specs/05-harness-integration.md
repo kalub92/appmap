@@ -107,6 +107,18 @@ The tool names above are the ones `@swmansion/argent@0.25.0` actually registers,
 
 `await-ui-element` is the fifth, and the one grant that is not a step verb. Every step the server hands out may carry a `settle` hint — the postcondition `report_step` is about to check anyway — and the replayer polls for it instead of sleeping between the action and the report (04 §5, issue #26). Without the grant the instruction is inert and the subagent falls back to a fixed sleep, which measured ~1.8× slower across a real suite and is *less* reliable, since a slow network outruns a hard-coded wait. It stays compatible with §6 rule 1: the poll answers a boolean about one selector, it does not read the tree, so it is not perception and costs no tokens. `verbs.ts` classifies it `lifecycle`, and `verbs.test.ts` admits it by name rather than by kind so no other non-step tool can arrive with it. The `tools` field accepts `mcp__argent` (whole server) and `mcp__argent__*` (all of a server's tools) but no per-tool glob, so the list stays explicit — and narrow, per §6 rule 6. `tools/app-map-mcp/src/recipes/verbs.ts` (`ARGENT_VERBS`) is the machine-readable copy of the same table, and `verbs.test.ts` pins this block and the subagent file to it so neither can drift back to a name the driver does not answer to.
 
+### 5.1 Instrumentation subagents
+
+The `app-instrument` skill (`.claude/skills/app-instrument/SKILL.md`) does 01 R1–R8 on an app's source through three subagents. The skill runs on the main agent and owns everything that touches the map: it is the only editor of `app-map/ids.yaml` (and of the `deep_link_scheme` key in `app-map/ios/manifest.yaml`), the only caller of `gen-ids`, `migrate-id` and `xcodebuild`, and it runs `lint-ids`, `validate` and `export --check` after every dispatch round. The subagents see app source only. Their frontmatter grants, verbatim:
+
+| file | grant | role |
+|---|---|---|
+| `.claude/agents/app-instrument-surveyor.md` | `tools: Read, Grep, Glob` | reads one slice of source and returns a plan slice as JSON; never edits |
+| `.claude/agents/app-instrument-swiftui.md` | `tools: Read, Edit, Write, Grep, Glob, Bash` | applies plan items to SwiftUI files; owns the SwiftUI `App` debug wiring |
+| `.claude/agents/app-instrument-uikit.md` | `tools: Read, Edit, Write, Grep, Glob, Bash` | applies plan items to UIKit files; owns the `AppDelegate`/`SceneDelegate` wiring |
+
+None of the three is granted an `mcp__argent__*` or `mcp__app-map__*` tool: instrumentation edits source and never drives the app. `Bash` is granted whole because a subagent's `tools:` has no per-command scoping (harness-notes §2), so the specialists are constrained by prompt — their safety rules allow the `lint-ids` self-check and `git diff --stat` only — and pinned by `tools/app-map-mcp/src/test/instrument-agents.test.ts`, which also holds the three `tools:` lines above to the files exactly as `verbs.test.ts` holds the replayer's. The plan contract is `.claude/skills/app-instrument/reference/survey-plan.md`; the merged plan lives in `app-map/.local/instrument/plan.json`. Dispatch is serial, one specialist at a time: parallel specialists would lint the same `--src` root mid-edit. The §5 model-routing lever is deliberately not pulled here — all three agents are `model: inherit`. The surveyor stays on the session model because its precision gates every downstream edit (a missed element is a silent gap the driver only discovers at run time) and the survey runs once per app; the specialists edit source, which is never cheap-model territory.
+
 ## 6. Token rules for exploration
 
 Enforced by the skill and, where the harness allows, by hooks:
