@@ -1,6 +1,6 @@
 {
   "name": "@kalub92/app-map",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "App-map MCP server and CLI: screen identification, locator resolution, recipes, replay, healing.",
   "license": "UNLICENSED",
   "type": "module",
