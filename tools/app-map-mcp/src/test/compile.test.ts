@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { parse } from 'yaml';
 import type { AppMapContext } from '../context.ts';
@@ -13,7 +14,7 @@ import type { CompileRecipeInput, Expect, Observation, RecipeFile, RecipeParam, 
 import { STEP_ACTIONS, UNKNOWN_SCREEN, now } from '../types.ts';
 import { AppMapError, ERROR_CODES } from '../errors.ts';
 import { readEvents } from '../events.ts';
-import { schemaDir, screenFile, trajectoriesDir, trajectoryFile } from '../paths.ts';
+import { PACKAGE_ROOT, schemaDir, screenFile, trajectoriesDir, trajectoryFile } from '../paths.ts';
 import { buildScrubPolicy, scrub } from '../scrub.ts';
 import { observedSignature } from '../signature.ts';
 import { normalizeTree } from '../tree.ts';
@@ -106,7 +107,11 @@ describe('compileRecipe — 04 §9: the pilot session compiles to create_invoice
     assert.deepEqual(recipe.preconditions, [{ auth: 'logged_in' }]);
     assert.deepEqual(recipe.params, PARAMS);
     assert.deepEqual(recipe.verify, { screen: 'invoice_detail' });
-    assert.deepEqual(recipe.provenance, { compiled_from: SESSION, compiled_by: 'app-map-mcp@0.1.0' });
+    // `compiled_by` stamps the tool that compiled the recipe, and `compiledBy()` reads the package
+    // version, so this tracks package.json rather than freezing a number every release would break.
+    const pkgVersion = (JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')) as { version: string }).version;
+    assert.match(pkgVersion, /^[0-9]+\.[0-9]+\.[0-9]+/, 'the package must declare a semver version');
+    assert.deepEqual(recipe.provenance, { compiled_from: SESSION, compiled_by: `app-map-mcp@${pkgVersion}` });
     assert.equal(recipe.last_verified_build, undefined);
     // the LLM still owns the prose (04 §3.8). The draft's placeholders come from the recipe ID,
     // never the task text, so the draft itself satisfies 02 §10.8 / validate rule 8.
