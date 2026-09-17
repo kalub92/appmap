@@ -1,10 +1,22 @@
 #!/usr/bin/env sh
 # app-map CLI shim. Prefers the built dist/; falls back to running TypeScript source
-# directly (Node ≥ 22.18 type stripping) so hooks work on a fresh clone before `npm run build`.
+# directly (Node ≥ 22.18 type stripping) so a fresh clone works before `npm run build`.
 # --disable-warning=ExperimentalWarning hides Node's `node:sqlite` ExperimentalWarning, which is
 # printed to stderr on every invocation otherwise. Hooks relay CLI stderr into the session
 # (docs/dev/harness-notes.md §4), so it must stay on BOTH branches (issue #21, docs/dev/toolchain.md).
-DIR=$(cd "$(dirname "$0")" && pwd)
+#
+# $0 is resolved through symlinks first: `npm install` links this shim into `node_modules/.bin/`,
+# and taking `dirname` of the LINK put dist/ one directory above node_modules — so an installed
+# package fell through to the source branch and died on a `src/` the tarball does not ship.
+SELF=$0
+while [ -L "$SELF" ]; do
+  link=$(readlink "$SELF") || break
+  case $link in
+    /*) SELF=$link ;;
+    *) SELF=$(dirname "$SELF")/$link ;;
+  esac
+done
+DIR=$(cd "$(dirname "$SELF")" && pwd)
 if [ -f "$DIR/../dist/cli.js" ]; then
   exec node --disable-warning=ExperimentalWarning "$DIR/../dist/cli.js" "$@"
 else

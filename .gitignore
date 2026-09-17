@@ -8,3 +8,8 @@ node_modules/
 tools/app-map-mcp/dist/
 *.log
 .DS_Store
+
+# staged by tools/app-map-mcp/scripts/build-templates.mjs at prepack (canonical copies live in the repo)
+tools/app-map-mcp/templates/
+tools/app-map-mcp/scripts/gen-ids
+*.tgz

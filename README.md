@@ -72,6 +72,35 @@ The CLI is `tools/app-map-mcp/bin/app-map`; there is no `bin/` at the repository
 clone, install the semantic YAML merge driver from `.gitattributes` so two agents editing the same screen
 file do not conflict.
 
+## Using app-map in your own app repository
+
+The above is for working **on** app-map. To use it **in** an app, install the package there and scaffold:
+
+```sh
+cd path/to/your-app
+npm i -D @kalub92/app-map        # the MCP server, the CLI and the templates
+npx app-map init                 # writes the map skeleton, skills, agents, hooks and MCP config
+```
+
+`init` writes a complete, already-canonical setup: `app-map/` (an empty `ids.yaml`, the vendored schemas, the
+policy allowlist, a starter `manifest.yaml`), `.claude/skills/{app-nav,app-instrument}/`,
+`.claude/agents/`, `.claude/hooks/`, `scripts/app-map/` and an `app-map.config.json` recording where your app's
+source and generated constants live. `.mcp.json` and `.claude/settings.json` are **merged**, never replaced —
+a server or hook you already declare is left exactly as it is. Re-running changes nothing, and a file you have
+edited is reported as a conflict rather than overwritten (`--force` overrides, `--dry-run` shows the plan).
+
+Everything it writes addresses the CLI as `npx app-map …`, which resolves the devDependency with no network.
+The scaffolded repo passes `npx app-map validate`, `export --check`, `policy-check` and `lint-ids` immediately;
+`src/test/init.test.ts` asserts exactly that, so the claim cannot rot.
+
+Then, in a Claude Code session in your app repo, run the `app-instrument` skill: it surveys your source, fills
+`ids.yaml`, generates the `AppMapID` constants and has the SwiftUI and UIKit agents add the markers and the
+debug-only wiring. `init` prints the handful of steps it cannot do for you — adding
+[AppMapKit](instrumentation/README.md) as a Swift package dependency, `-D APP_MAP_DEBUG` in the Debug
+configuration, and the `appmap://` URL type in the Debug Info.plist.
+
+Publishing a new version of the package is [docs/dev/release.md](docs/dev/release.md).
+
 ---
 
 # Examples

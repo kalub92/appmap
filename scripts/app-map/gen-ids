@@ -17,8 +17,22 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const require = createRequire(new URL('../../tools/app-map-mcp/package.json', import.meta.url));
-const { parse: parseYaml } = require('yaml');
+// Resolved from whichever tree this copy sits in: scripts/app-map/gen-ids in the app-map
+// repository, or scripts/gen-ids inside the published package, where yaml is a dependency of
+// the package itself (tools/app-map-mcp/scripts/build-templates.mjs puts it there).
+const parseYaml = (() => {
+  for (const base of ['../../tools/app-map-mcp/package.json', './package.json', '../package.json']) {
+    try {
+      return createRequire(new URL(base, import.meta.url))('yaml').parse;
+    } catch { /* try the next layout */ }
+  }
+  try {
+    return createRequire(import.meta.url)('yaml').parse;
+  } catch (e) {
+    console.error('gen-ids: cannot resolve the yaml package from ' + import.meta.url + ': ' + e.message);
+    process.exit(1);
+  }
+})();
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // 01 R1 ships one file per platform. An iOS-only repo has nowhere to put the Kotlin one, and
