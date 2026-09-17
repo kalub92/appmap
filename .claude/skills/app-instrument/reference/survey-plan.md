@@ -10,6 +10,12 @@ derives one (an item with `constant: null` is refused, status `blocked`, note `n
 contract; the test suite compiles it with Ajv and validates `tools/app-map-mcp/fixtures/instrument/plan.pilot.json`
 against it, so a field that is not here does not exist.
 
+`plan.pilot.json` is a worked example of a plan as the skill hands it to a specialist: a *pre-instrumentation* survey
+of the pilot app, every item `status: todo` and `already_marked: false`. Its anchors were re-taken from the finished
+fixtures under `tools/app-map-mcp/fixtures/instrument/ios/swiftui/`, which already carry every call the plan asks for,
+so it is a shape to copy and never a plan to apply: run against those files it would double-mark them. A real survey
+of an instrumented file sets `already_marked: true` with `existing_id`, and the specialist skips the item.
+
 ## Schema
 
 Draft-07, `additionalProperties: false` on every object. The root is the full plan; `definitions/plan_slice` is what the

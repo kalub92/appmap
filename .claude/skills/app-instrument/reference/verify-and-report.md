@@ -36,7 +36,7 @@ for (const line of gen.split("\n")) {
 }
 let missing = 0;
 for (const file of process.argv.slice(2)) {
-  const src = fs.readFileSync(file, "utf8").replace(/\/\/[^\n]*/g, "");
+  const src = fs.readFileSync(file, "utf8").replace(/"(?:[^"\\\n]|\\.)*"/g, '""').replace(/\/\/[^\n]*/g, "");
   for (const m of src.matchAll(/\bAppMapID\.((?:Screen|Element|Gate\.Dismiss|Gate\.Control|Gate)\.[A-Za-z_]\w*)/g)) {
     if (!have.has(m[1])) { missing++; console.log(`${file}: AppMapID.${m[1]} is not generated`); }
   }
@@ -61,7 +61,7 @@ done
 
 ```sh
 for f in $(find <src_root…> -name '*.swift' -not -path '*/.build/*' -not -path '*/DerivedData/*' -not -path '*/Pods/*'); do
-  awk '{ sub(/\/\/.*$/, "") }
+  awk '{ sub(/^[[:space:]]*\/\/.*$/, ""); sub(/[[:space:]]\/\/.*$/, "") }   # a comment, never the // of a URL
        /^[[:space:]]*#if[[:space:]]/     { s[++d] = ($0 ~ /APP_MAP_DEBUG/ && $0 !~ /!APP_MAP_DEBUG/) ? 1 : 0; next }
        /^[[:space:]]*#elseif[[:space:]]/ { s[d]   = ($0 ~ /APP_MAP_DEBUG/ && $0 !~ /!APP_MAP_DEBUG/) ? 1 : 0; next }
        /^[[:space:]]*#else/              { s[d] = 0; next }

@@ -81,7 +81,7 @@ The detection list. The test pins the `kind` column to the registry's kinds plus
 
 | Construct (SwiftUI) | Construct (UIKit) | kind | note |
 |---|---|---|---|
-| `Button`, `ToolbarItem { Button }`, `.swipeActions` button, `Menu` (root) | `UIButton`, `UIBarButtonItem`, view with `UITapGestureRecognizer` | `button` | `Menu` items are system elements (no id) |
+| `Button`, `ToolbarItem { Button }`, `.swipeActions` button, `Menu` (root) | `UIButton`, `UIBarButtonItem` | `button` | `Menu` items are system elements (no id); a gesture-bearing plain `UIView`/`UIImageView` qualifies only where the source already sets `isAccessibilityElement = true` — otherwise no id and an `a11y_hazard` decision (the identifier would never reach the tree, and rule 3 forbids setting the flag) |
 | `TextField`, `SecureField`, `TextEditor` | `UITextField`, `UITextView` (editable), `UISearchBar.searchTextField` | `field` | `.searchable` → no id, decision `system_element` |
 | — | `UITableView`, `UICollectionView` | `list` | `dynamic: true`; SwiftUI has no list element |
 | row content / `NavigationLink` inside `List`/`ForEach` | `UITableViewCell`, `UICollectionViewCell` | `cell` | `dynamic: true`; one id per cell kind |

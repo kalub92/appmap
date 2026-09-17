@@ -387,6 +387,10 @@ its label signature is recorded by a later capture session. Never give an alert 
 
 Never add, remove or move `.accessibilityElement(children:)`, `.accessibilityHidden`, `.accessibilityLabel` (rule 3).
 
+The first shape below is the only case where an id lands on a layout container, and it does not breach rule 2: the
+pre-existing `.combine` has already made the `HStack` the single accessibility element, so there is no child id to
+clobber and nothing else can carry the id. Without a `.combine` above it the same line is forbidden.
+
 ```swift
 // Sole action under a pre-existing .combine: the id moves to the combined element, placed AFTER the combine.
 HStack {

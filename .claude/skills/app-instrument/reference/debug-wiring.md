@@ -68,8 +68,10 @@ site, never a second `publish()` (rule 12). A screen the router cannot reach reg
 
 ## Lifecycle shapes — `kind: handler`
 
-The handler is one `AppMapDeepLinkHandler`, created once, kept for the app's lifetime, called from every URL entry
-point the lifecycle has, and always followed by the app's own handling when it returns `false`. The property is named
+There is one `AppMapDeepLinkHandler` site, called from every URL entry point the lifecycle has and always followed by
+the app's own handling when it returns `false`. It is normally a stored property created once and kept for the app's
+lifetime; where there is nowhere to store one it may be built inside the entry point itself, because `handle` copies
+`fixtures` and the route closure into locals before its `Task`, so the handler need not outlive the call. The property is named
 `debugLinks` (app-side names never start with `AppMap`/`appMap`). Never a second handler, never a second `.onOpenURL`
 (rule 12).
 
@@ -117,8 +119,25 @@ struct InvoicesApp: App {
 
 When the app already exposes its router as `static let shared`, the closure calls `AppRouter.shared.open(...)` and
 `init` captures nothing; never introduce a singleton, a new `init` or a `@StateObject` into an app that has none
-(rule 3) — then the handler is a `private let` created in the existing `init`, or a `private static let` when there
-is no `init` to extend. An app with no `.onOpenURL` gets one whose body is only the `#if` block.
+(rule 3) — then the handler is a `private let` created in the existing `init`.
+
+An `App` with no `init` and no singleton is the common case and takes neither: a `private static let` cannot reach
+`@StateObject private var router` (a static initializer has no instance), and adding an `init` is rule 3. Build the
+handler inside the one `.onOpenURL` instead — still a single handler site, so rule 12 holds:
+
+```swift
+.onOpenURL { url in
+    #if APP_MAP_DEBUG
+    let debugLinks = AppMapDeepLinkHandler(fixtures: DebugFixtures()) { route in
+        router.open(screenID: route.screenID, params: route.params)   // the view-tree instance
+    }
+    if debugLinks.handle(url) { return }
+    #endif
+    router.handle(url)
+}
+```
+
+An app with no `.onOpenURL` gets one whose body is only the `#if` block.
 
 ### `uikit_scene`
 
@@ -152,10 +171,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.rootViewController = AppRouter.shared.rootViewController   // the app's existing root setup, unchanged
         self.window = window
         window.makeKeyAndVisible()
-        #if APP_MAP_DEBUG
-        if connectionOptions.urlContexts.contains(where: { debugLinks.handle($0.url) }) { return }   // cold start
-        #endif
-        for context in connectionOptions.urlContexts { AppRouter.shared.handle(context.url) }        // existing handling, unchanged
+        for context in connectionOptions.urlContexts {                    // a cold start may carry several
+            #if APP_MAP_DEBUG
+            if debugLinks.handle(context.url) { continue }                // an app-map link ends here
+            #endif
+            AppRouter.shared.handle(context.url)                          // existing handling, unchanged
+        }
     }
 
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
