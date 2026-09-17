@@ -1,28 +1,50 @@
 {
   "schema_version": 1,
   "app": {
-    "src_roots": ["tools/app-map-mcp/fixtures/instrument/ios/swiftui"],
+    "src_roots": [
+      "tools/app-map-mcp/fixtures/instrument/ios/swiftui"
+    ],
     "bundle_id": null,
     "module": "Invoices",
     "lifecycle": "swiftui_app",
-    "entry_point": { "file": "tools/app-map-mcp/fixtures/instrument/ios/swiftui/InvoicesApp.swift", "type": "InvoicesApp" },
-    "url_entry_points": ["InvoicesApp.body WindowGroup .onOpenURL"],
+    "entry_point": {
+      "file": "tools/app-map-mcp/fixtures/instrument/ios/swiftui/InvoicesApp.swift",
+      "type": "InvoicesApp"
+    },
+    "url_entry_points": [
+      "InvoicesApp.body WindowGroup .onOpenURL"
+    ],
     "router": {
       "file": "tools/app-map-mcp/fixtures/instrument/ios/swiftui/AppRouter.swift",
       "type": "AppRouter",
       "shape": "observable_path",
       "route_enum": "Route"
     },
-    "flags": { "app_map_debug_defined": false, "where": "unknown", "modules_missing": ["Invoices"] },
+    "flags": {
+      "app_map_debug_defined": false,
+      "where": "unknown",
+      "modules_missing": [
+        "Invoices"
+      ]
+    },
     "project_style": "generated",
     "wiring_placement": "new_files",
-    "wiring_existing": { "handler": false, "registry": false, "endpoint": false, "scheme": false, "debug_block": false },
+    "wiring_existing": {
+      "handler": false,
+      "registry": false,
+      "endpoint": false,
+      "scheme": false,
+      "debug_block": false
+    },
     "scheme": "appmap",
     "layout": {
       "repo_root": ".",
       "generated_swift": "instrumentation/ios/AppMapKit/Sources/AppMapKit/AppMapID.swift",
       "kotlin_present": true,
-      "default_scan_dirs": ["instrumentation/ios", "ios"]
+      "default_scan_dirs": [
+        "instrumentation/ios",
+        "ios"
+      ]
     },
     "xcode": false
   },
@@ -34,9 +56,17 @@
         {
           "role": "wiring",
           "decl": "InvoicesApp",
-          "anchor": { "line": 8, "snippet": "struct InvoicesApp: App {" },
+          "anchor": {
+            "line": 8,
+            "snippet": "struct InvoicesApp: App {"
+          },
           "screen": null,
-          "wiring": { "kind": "registry", "new_files": ["tools/app-map-mcp/fixtures/instrument/ios/swiftui/AppMapWiring.swift"] },
+          "wiring": {
+            "kind": "registry",
+            "new_files": [
+              "tools/app-map-mcp/fixtures/instrument/ios/swiftui/AppMapWiring.swift"
+            ]
+          },
           "already_wired": false,
           "status": "todo",
           "note": "registerAll() from App.init, outside #if: five register calls on bare ids, two registerGate, then exportIfRequested (01 R6)"
@@ -44,9 +74,15 @@
         {
           "role": "wiring",
           "decl": "InvoicesApp",
-          "anchor": { "line": 14, "snippet": "init() {" },
+          "anchor": {
+            "line": 14,
+            "snippet": "init() {"
+          },
           "screen": null,
-          "wiring": { "kind": "handler", "new_files": [] },
+          "wiring": {
+            "kind": "handler",
+            "new_files": []
+          },
           "already_wired": false,
           "status": "todo",
           "note": "capture the router instance in init, hold the handler under #if APP_MAP_DEBUG, call handle(url) first inside .onOpenURL and fall through to router.handle(url) (01 R5)"
@@ -54,9 +90,17 @@
         {
           "role": "wiring",
           "decl": "InvoicesApp",
-          "anchor": { "line": 8, "snippet": "struct InvoicesApp: App {" },
+          "anchor": {
+            "line": 8,
+            "snippet": "struct InvoicesApp: App {"
+          },
           "screen": null,
-          "wiring": { "kind": "fixtures", "new_files": ["tools/app-map-mcp/fixtures/instrument/ios/swiftui/DebugFixtures.swift"] },
+          "wiring": {
+            "kind": "fixtures",
+            "new_files": [
+              "tools/app-map-mcp/fixtures/instrument/ios/swiftui/DebugFixtures.swift"
+            ]
+          },
           "already_wired": false,
           "status": "todo",
           "note": "names = every fixtures_needed[].name; each known case is a TODO(app-map fixture) body; default throws unknown(name:)"
@@ -64,12 +108,20 @@
         {
           "role": "wiring",
           "decl": "InvoicesApp",
-          "anchor": { "line": 8, "snippet": "struct InvoicesApp: App {" },
+          "anchor": {
+            "line": 8,
+            "snippet": "struct InvoicesApp: App {"
+          },
           "screen": null,
-          "wiring": { "kind": "endpoint", "new_files": ["tools/app-map-mcp/fixtures/instrument/ios/swiftui/AppMapWiring.swift"] },
+          "wiring": {
+            "kind": "endpoint",
+            "new_files": [
+              "tools/app-map-mcp/fixtures/instrument/ios/swiftui/AppMapWiring.swift"
+            ]
+          },
           "already_wired": false,
           "status": "todo",
-          "note": "publish() with no argument, under #if APP_MAP_DEBUG, after exportIfRequested (07 §3; sandbox source is decision D8)"
+          "note": "publish() with no argument, under #if APP_MAP_DEBUG, after exportIfRequested (07 \u00a73; sandbox source is decision D8)"
         }
       ]
     },
@@ -80,9 +132,17 @@
         {
           "role": "wiring",
           "decl": "AppRouter",
-          "anchor": { "line": 12, "snippet": "final class AppRouter: ObservableObject {" },
+          "anchor": {
+            "line": 12,
+            "snippet": "final class AppRouter: ObservableObject {"
+          },
           "screen": null,
-          "wiring": { "kind": "router_mapping", "new_files": ["tools/app-map-mcp/fixtures/instrument/ios/swiftui/AppRouter+AppMap.swift"] },
+          "wiring": {
+            "kind": "router_mapping",
+            "new_files": [
+              "tools/app-map-mcp/fixtures/instrument/ios/swiftui/AppRouter+AppMap.swift"
+            ]
+          },
           "already_wired": false,
           "status": "todo",
           "note": "#if APP_MAP_DEBUG extension switching on bare screen ids through showInvoices() / showInvoiceDetail(_:) / sheet / needsLogin; client_picker falls to default"
@@ -96,7 +156,10 @@
         {
           "role": "tab",
           "decl": "RootView",
-          "anchor": { "line": 13, "snippet": ".tabItem { Label(\"Invoices\", systemImage: \"doc.text\").appMapID(AppMapID.Element.navInvoicesTab) }" },
+          "anchor": {
+            "line": 13,
+            "snippet": ".tabItem { Label(\"Invoices\", systemImage: \"doc.text\").appMapID(AppMapID.Element.navInvoicesTab) }"
+          },
           "screen": null,
           "proposed_id": "nav.invoices.tab",
           "existing_id": null,
@@ -114,7 +177,10 @@
         {
           "role": "tab",
           "decl": "RootView",
-          "anchor": { "line": 16, "snippet": ".tabItem { Label(\"Clients\", systemImage: \"person.2\").appMapID(AppMapID.Element.navClientsTab) }" },
+          "anchor": {
+            "line": 16,
+            "snippet": ".tabItem { Label(\"Clients\", systemImage: \"person.2\").appMapID(AppMapID.Element.navClientsTab) }"
+          },
           "screen": null,
           "proposed_id": "nav.clients.tab",
           "existing_id": null,
@@ -131,7 +197,10 @@
         {
           "role": "tab",
           "decl": "RootView",
-          "anchor": { "line": 19, "snippet": ".tabItem { Label(\"Settings\", systemImage: \"gearshape\").appMapID(AppMapID.Element.navSettingsTab) }" },
+          "anchor": {
+            "line": 19,
+            "snippet": ".tabItem { Label(\"Settings\", systemImage: \"gearshape\").appMapID(AppMapID.Element.navSettingsTab) }"
+          },
           "screen": null,
           "proposed_id": "nav.settings.tab",
           "existing_id": null,
@@ -154,7 +223,10 @@
         {
           "role": "screen",
           "decl": "LoginView",
-          "anchor": { "line": 17, "snippet": "NavigationStack {" },
+          "anchor": {
+            "line": 17,
+            "snippet": "NavigationStack {"
+          },
           "screen": "login",
           "proposed_id": "login",
           "existing_id": null,
@@ -168,9 +240,17 @@
           "hosted_by": null,
           "title": "Sign In",
           "deep_link": "proposed",
-          "deep_link_needs": { "params": [], "fixture": null },
+          "deep_link_needs": {
+            "params": [],
+            "fixture": null
+          },
           "route_case": null,
-          "static_edges": [{ "element": "login.submit.button", "to": "invoice_list" }],
+          "static_edges": [
+            {
+              "element": "login.submit.button",
+              "to": "invoice_list"
+            }
+          ],
           "already_marked": false,
           "status": "todo",
           "note": "presented by RootView's .fullScreenCover(isPresented: $router.needsLogin); the cover content marks itself, the presenting modifier gets nothing (01 R3)"
@@ -178,7 +258,10 @@
         {
           "role": "element",
           "decl": "LoginView",
-          "anchor": { "line": 19, "snippet": "TextField(\"Email\", text: $email)" },
+          "anchor": {
+            "line": 19,
+            "snippet": "TextField(\"Email\", text: $email)"
+          },
           "screen": "login",
           "proposed_id": "login.email.field",
           "existing_id": null,
@@ -196,7 +279,10 @@
         {
           "role": "element",
           "decl": "LoginView",
-          "anchor": { "line": 25, "snippet": "SecureField(\"Password\", text: $password)" },
+          "anchor": {
+            "line": 25,
+            "snippet": "SecureField(\"Password\", text: $password)"
+          },
           "screen": "login",
           "proposed_id": "login.password.field",
           "existing_id": null,
@@ -214,7 +300,10 @@
         {
           "role": "element",
           "decl": "LoginView",
-          "anchor": { "line": 30, "snippet": "Text(errorMessage)" },
+          "anchor": {
+            "line": 30,
+            "snippet": "Text(errorMessage)"
+          },
           "screen": "login",
           "proposed_id": "login.error.text",
           "existing_id": null,
@@ -232,7 +321,10 @@
         {
           "role": "element",
           "decl": "LoginView",
-          "anchor": { "line": 35, "snippet": "Button(action: submit) {" },
+          "anchor": {
+            "line": 35,
+            "snippet": "Button(action: submit) {"
+          },
           "screen": "login",
           "proposed_id": "login.submit.button",
           "existing_id": null,
@@ -246,12 +338,15 @@
           "existing_literal": null,
           "already_marked": false,
           "status": "todo",
-          "note": "signing in commits nothing: intent_critical stays false (pilot precedent, id-rules §E)"
+          "note": "signing in commits nothing: intent_critical stays false (pilot precedent, id-rules \u00a7E)"
         },
         {
           "role": "element",
           "decl": "LoginView",
-          "anchor": { "line": 41, "snippet": "Button(action: submitWithBiometrics) {" },
+          "anchor": {
+            "line": 41,
+            "snippet": "Button(action: submitWithBiometrics) {"
+          },
           "screen": "login",
           "proposed_id": "login.biometric.button",
           "existing_id": null,
@@ -270,7 +365,10 @@
         {
           "role": "element",
           "decl": "LoginView",
-          "anchor": { "line": 45, "snippet": "Link(\"Forgot your password?\", destination: resetURL)" },
+          "anchor": {
+            "line": 45,
+            "snippet": "Link(\"Forgot your password?\", destination: resetURL)"
+          },
           "screen": "login",
           "proposed_id": "login.forgot.link",
           "existing_id": null,
@@ -288,7 +386,10 @@
         {
           "role": "gate",
           "decl": "LoginView",
-          "anchor": { "line": 66, "snippet": "context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: \"Sign in to Invoices\") { success, _ in" },
+          "anchor": {
+            "line": 66,
+            "snippet": "context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: \"Sign in to Invoices\") { success, _ in"
+          },
           "screen": "login",
           "proposed_id": "gate.biometric_prompt",
           "existing_id": null,
@@ -308,7 +409,10 @@
         {
           "role": "gate",
           "decl": "LoginView",
-          "anchor": { "line": 75, "snippet": "UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }" },
+          "anchor": {
+            "line": 75,
+            "snippet": "UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }"
+          },
           "screen": "login",
           "proposed_id": "gate.push_permission",
           "existing_id": null,
@@ -334,7 +438,10 @@
         {
           "role": "screen",
           "decl": "InvoiceListView",
-          "anchor": { "line": 28, "snippet": "NavigationStack(path: $router.path) {" },
+          "anchor": {
+            "line": 28,
+            "snippet": "NavigationStack(path: $router.path) {"
+          },
           "screen": "invoice_list",
           "proposed_id": "invoice_list",
           "existing_id": null,
@@ -348,11 +455,20 @@
           "hosted_by": null,
           "title": "Invoices",
           "deep_link": "proposed",
-          "deep_link_needs": { "params": [], "fixture": "logged_in" },
+          "deep_link_needs": {
+            "params": [],
+            "fixture": "logged_in"
+          },
           "route_case": null,
           "static_edges": [
-            { "element": "invoice.add.button", "to": "invoice_new" },
-            { "element": "invoice.list.cell", "to": "invoice_detail" }
+            {
+              "element": "invoice.add.button",
+              "to": "invoice_new"
+            },
+            {
+              "element": "invoice.list.cell",
+              "to": "invoice_detail"
+            }
           ],
           "already_marked": false,
           "status": "todo",
@@ -361,7 +477,10 @@
         {
           "role": "element",
           "decl": "InvoiceListView",
-          "anchor": { "line": 32, "snippet": "NavigationLink(value: Route.invoiceDetail(invoice.id)) {" },
+          "anchor": {
+            "line": 32,
+            "snippet": "NavigationLink(value: Route.invoiceDetail(invoice.id)) {"
+          },
           "screen": "invoice_list",
           "proposed_id": "invoice.list.cell",
           "existing_id": null,
@@ -380,7 +499,10 @@
         {
           "role": "element",
           "decl": "InvoiceListView",
-          "anchor": { "line": 45, "snippet": "Button(action: { router.sheet = .invoiceNew }) {" },
+          "anchor": {
+            "line": 45,
+            "snippet": "Button(action: { router.sheet = .invoiceNew }) {"
+          },
           "screen": "invoice_list",
           "proposed_id": "invoice.add.button",
           "existing_id": null,
@@ -405,7 +527,10 @@
         {
           "role": "element",
           "decl": "FilterButtonRepresentable",
-          "anchor": { "line": 12, "snippet": "let button = UIButton(type: .system)" },
+          "anchor": {
+            "line": 12,
+            "snippet": "let button = UIButton(type: .system)"
+          },
           "screen": "invoice_list",
           "proposed_id": "invoice.filter.button",
           "existing_id": null,
@@ -430,7 +555,10 @@
         {
           "role": "screen",
           "decl": "InvoiceNewView",
-          "anchor": { "line": 16, "snippet": "NavigationStack {" },
+          "anchor": {
+            "line": 16,
+            "snippet": "NavigationStack {"
+          },
           "screen": "invoice_new",
           "proposed_id": "invoice_new",
           "existing_id": null,
@@ -444,12 +572,24 @@
           "hosted_by": null,
           "title": "New Invoice",
           "deep_link": "proposed",
-          "deep_link_needs": { "params": [], "fixture": "logged_in" },
+          "deep_link_needs": {
+            "params": [],
+            "fixture": "logged_in"
+          },
           "route_case": "AppRouter.Sheet.invoiceNew",
           "static_edges": [
-            { "element": "invoice.client.picker", "to": "client_picker" },
-            { "element": "invoice.save.button", "to": "invoice_detail" },
-            { "element": "invoice.cancel.button", "to": "invoice_list" }
+            {
+              "element": "invoice.client.picker",
+              "to": "client_picker"
+            },
+            {
+              "element": "invoice.save.button",
+              "to": "invoice_detail"
+            },
+            {
+              "element": "invoice.cancel.button",
+              "to": "invoice_list"
+            }
           ],
           "already_marked": false,
           "status": "todo",
@@ -458,7 +598,10 @@
         {
           "role": "element",
           "decl": "InvoiceNewView",
-          "anchor": { "line": 18, "snippet": "TextField(\"Amount\", text: $amount)" },
+          "anchor": {
+            "line": 18,
+            "snippet": "TextField(\"Amount\", text: $amount)"
+          },
           "screen": "invoice_new",
           "proposed_id": "invoice.amount.field",
           "existing_id": null,
@@ -476,7 +619,10 @@
         {
           "role": "element",
           "decl": "InvoiceNewView",
-          "anchor": { "line": 21, "snippet": "Button(action: { showsClientPicker = true }) {" },
+          "anchor": {
+            "line": 21,
+            "snippet": "Button(action: { showsClientPicker = true }) {"
+          },
           "screen": "invoice_new",
           "proposed_id": "invoice.client.picker",
           "existing_id": null,
@@ -495,7 +641,10 @@
         {
           "role": "element",
           "decl": "InvoiceNewView",
-          "anchor": { "line": 30, "snippet": "DatePicker(\"Due\", selection: $due, displayedComponents: .date)" },
+          "anchor": {
+            "line": 30,
+            "snippet": "DatePicker(\"Due\", selection: $due, displayedComponents: .date)"
+          },
           "screen": "invoice_new",
           "proposed_id": "invoice.due.picker",
           "existing_id": null,
@@ -514,7 +663,10 @@
         {
           "role": "element",
           "decl": "InvoiceNewView",
-          "anchor": { "line": 32, "snippet": "TextField(\"Note\", text: $note)" },
+          "anchor": {
+            "line": 32,
+            "snippet": "TextField(\"Note\", text: $note)"
+          },
           "screen": "invoice_new",
           "proposed_id": "invoice.note.field",
           "existing_id": null,
@@ -532,7 +684,10 @@
         {
           "role": "element",
           "decl": "InvoiceNewView",
-          "anchor": { "line": 38, "snippet": "Button(\"Cancel\") { router.sheet = nil }" },
+          "anchor": {
+            "line": 38,
+            "snippet": "Button(\"Cancel\") { router.sheet = nil }"
+          },
           "screen": "invoice_new",
           "proposed_id": "invoice.cancel.button",
           "existing_id": null,
@@ -550,7 +705,10 @@
         {
           "role": "element",
           "decl": "InvoiceNewView",
-          "anchor": { "line": 42, "snippet": "Button(\"Save\", action: save)" },
+          "anchor": {
+            "line": 42,
+            "snippet": "Button(\"Save\", action: save)"
+          },
           "screen": "invoice_new",
           "proposed_id": "invoice.save.button",
           "existing_id": null,
@@ -569,7 +727,10 @@
         {
           "role": "risk",
           "decl": "InvoiceNewView",
-          "anchor": { "line": 21, "snippet": "Button(action: { showsClientPicker = true }) {" },
+          "anchor": {
+            "line": 21,
+            "snippet": "Button(action: { showsClientPicker = true }) {"
+          },
           "screen": "invoice_new",
           "kind": "none",
           "construct": "Button label with a data-bound Text",
@@ -593,7 +754,10 @@
         {
           "role": "screen",
           "decl": "ClientPickerView",
-          "anchor": { "line": 27, "snippet": "NavigationStack {                                                    // the sheet's top-level view carries the marker" },
+          "anchor": {
+            "line": 27,
+            "snippet": "NavigationStack {                                                    // the sheet's top-level view carries the marker"
+          },
           "screen": "client_picker",
           "proposed_id": "client_picker",
           "existing_id": null,
@@ -607,9 +771,17 @@
           "hosted_by": null,
           "title": "Choose Client",
           "deep_link": "none",
-          "deep_link_needs": { "params": [], "fixture": null },
+          "deep_link_needs": {
+            "params": [],
+            "fixture": null
+          },
           "route_case": null,
-          "static_edges": [{ "element": "client.picker.cancel.button", "to": "invoice_new" }],
+          "static_edges": [
+            {
+              "element": "client.picker.cancel.button",
+              "to": "invoice_new"
+            }
+          ],
           "already_marked": false,
           "status": "todo",
           "note": "presented by InvoiceNewView's .sheet(isPresented: $showsClientPicker); only reachable over the draft it fills in, so deep_link none (decision D3)"
@@ -617,7 +789,10 @@
         {
           "role": "element",
           "decl": "ClientPickerView",
-          "anchor": { "line": 29, "snippet": "TextField(\"Search\", text: $query)" },
+          "anchor": {
+            "line": 29,
+            "snippet": "TextField(\"Search\", text: $query)"
+          },
           "screen": "client_picker",
           "proposed_id": "client.picker.search.field",
           "existing_id": null,
@@ -636,7 +811,10 @@
         {
           "role": "element",
           "decl": "ClientPickerView",
-          "anchor": { "line": 34, "snippet": "Button(action: { selection = client; dismiss() }) {" },
+          "anchor": {
+            "line": 34,
+            "snippet": "Button(action: { selection = client; dismiss() }) {"
+          },
           "screen": "client_picker",
           "proposed_id": "client.picker.cell",
           "existing_id": null,
@@ -655,7 +833,10 @@
         {
           "role": "element",
           "decl": "ClientPickerView",
-          "anchor": { "line": 44, "snippet": "Button(\"Cancel\", action: dismiss)" },
+          "anchor": {
+            "line": 44,
+            "snippet": "Button(\"Cancel\", action: dismiss)"
+          },
           "screen": "client_picker",
           "proposed_id": "client.picker.cancel.button",
           "existing_id": null,
@@ -679,7 +860,10 @@
         {
           "role": "screen",
           "decl": "InvoiceDetailView",
-          "anchor": { "line": 39, "snippet": "List {" },
+          "anchor": {
+            "line": 39,
+            "snippet": "List {"
+          },
           "screen": "invoice_detail",
           "proposed_id": "invoice_detail",
           "existing_id": null,
@@ -693,20 +877,34 @@
           "hosted_by": null,
           "title": "Invoice",
           "deep_link": "proposed",
-          "deep_link_needs": { "params": ["invoice_id"], "fixture": "one_draft_invoice" },
+          "deep_link_needs": {
+            "params": [
+              "invoice_id"
+            ],
+            "fixture": "one_draft_invoice"
+          },
           "route_case": "Route.invoiceDetail",
           "static_edges": [
-            { "element": "invoice.detail.back.button", "to": "invoice_list" },
-            { "element": "invoice.detail.edit.button", "to": "invoice_new" }
+            {
+              "element": "invoice.detail.back.button",
+              "to": "invoice_list"
+            },
+            {
+              "element": "invoice.detail.edit.button",
+              "to": "invoice_new"
+            }
           ],
           "already_marked": false,
           "status": "todo",
-          "note": "marker last on the outermost expression, after .confirmationDialog; the List root is the screen root, the modifier does not put an id on the List (issue #19)"
+          "note": "marker last on the outermost expression, after .confirmationDialog; the List root is the screen root, so it carries the SCREEN marker and its 1pt element; no ELEMENT id is ever put on a List (issue #19)"
         },
         {
           "role": "element",
           "decl": "InvoiceDetailView",
-          "anchor": { "line": 41, "snippet": "Text(model.amount)" },
+          "anchor": {
+            "line": 41,
+            "snippet": "Text(model.amount)"
+          },
           "screen": "invoice_detail",
           "proposed_id": "invoice.detail.amount.text",
           "existing_id": null,
@@ -724,7 +922,10 @@
         {
           "role": "element",
           "decl": "InvoiceDetailView",
-          "anchor": { "line": 44, "snippet": "Text(model.client)" },
+          "anchor": {
+            "line": 44,
+            "snippet": "Text(model.client)"
+          },
           "screen": "invoice_detail",
           "proposed_id": "invoice.detail.client.text",
           "existing_id": null,
@@ -742,7 +943,10 @@
         {
           "role": "element",
           "decl": "InvoiceDetailView",
-          "anchor": { "line": 46, "snippet": "Text(model.status)" },
+          "anchor": {
+            "line": 46,
+            "snippet": "Text(model.status)"
+          },
           "screen": "invoice_detail",
           "proposed_id": "invoice.detail.status.text",
           "existing_id": null,
@@ -760,7 +964,10 @@
         {
           "role": "element",
           "decl": "InvoiceDetailView",
-          "anchor": { "line": 52, "snippet": "InvoiceItemRow(item: item)" },
+          "anchor": {
+            "line": 52,
+            "snippet": "InvoiceItemRow(item: item)"
+          },
           "screen": "invoice_detail",
           "proposed_id": "invoice.detail.item.cell",
           "existing_id": null,
@@ -779,7 +986,10 @@
         {
           "role": "element",
           "decl": "InvoiceDetailView",
-          "anchor": { "line": 61, "snippet": "Button(action: { router.path.removeLast() }) {" },
+          "anchor": {
+            "line": 61,
+            "snippet": "Button(action: { router.path.removeLast() }) {"
+          },
           "screen": "invoice_detail",
           "proposed_id": "invoice.detail.back.button",
           "existing_id": null,
@@ -798,7 +1008,10 @@
         {
           "role": "element",
           "decl": "InvoiceDetailView",
-          "anchor": { "line": 67, "snippet": "Button(action: { confirmSend = true }) {" },
+          "anchor": {
+            "line": 67,
+            "snippet": "Button(action: { confirmSend = true }) {"
+          },
           "screen": "invoice_detail",
           "proposed_id": "invoice.detail.send.button",
           "existing_id": null,
@@ -817,7 +1030,10 @@
         {
           "role": "element",
           "decl": "InvoiceDetailView",
-          "anchor": { "line": 73, "snippet": "Button(action: { router.sheet = .invoiceNew }) {" },
+          "anchor": {
+            "line": 73,
+            "snippet": "Button(action: { router.sheet = .invoiceNew }) {"
+          },
           "screen": "invoice_detail",
           "proposed_id": "invoice.detail.edit.button",
           "existing_id": null,
@@ -840,41 +1056,181 @@
     "gates_add": [],
     "elements_add": [],
     "reuse": [
-      { "id": "login", "decl": "LoginView", "reason": "exact" },
-      { "id": "invoice_list", "decl": "InvoiceListView", "reason": "exact" },
-      { "id": "invoice_new", "decl": "InvoiceNewView", "reason": "exact" },
-      { "id": "client_picker", "decl": "ClientPickerView", "reason": "exact" },
-      { "id": "invoice_detail", "decl": "InvoiceDetailView", "reason": "exact" },
-      { "id": "gate.biometric_prompt", "decl": "LoginView", "reason": "exact" },
-      { "id": "gate.push_permission", "decl": "LoginView", "reason": "exact" },
-      { "id": "nav.invoices.tab", "decl": "RootView", "reason": "exact" },
-      { "id": "nav.clients.tab", "decl": "RootView", "reason": "exact" },
-      { "id": "nav.settings.tab", "decl": "RootView", "reason": "exact" },
-      { "id": "login.email.field", "decl": "LoginView", "reason": "exact" },
-      { "id": "login.password.field", "decl": "LoginView", "reason": "exact" },
-      { "id": "login.error.text", "decl": "LoginView", "reason": "exact" },
-      { "id": "login.submit.button", "decl": "LoginView", "reason": "exact" },
-      { "id": "login.biometric.button", "decl": "LoginView", "reason": "exact" },
-      { "id": "login.forgot.link", "decl": "LoginView", "reason": "exact" },
-      { "id": "invoice.list.cell", "decl": "InvoiceListView", "reason": "exact" },
-      { "id": "invoice.add.button", "decl": "InvoiceListView", "reason": "exact" },
-      { "id": "invoice.filter.button", "decl": "FilterButtonRepresentable", "reason": "exact" },
-      { "id": "invoice.amount.field", "decl": "InvoiceNewView", "reason": "exact" },
-      { "id": "invoice.client.picker", "decl": "InvoiceNewView", "reason": "exact" },
-      { "id": "invoice.due.picker", "decl": "InvoiceNewView", "reason": "exact" },
-      { "id": "invoice.note.field", "decl": "InvoiceNewView", "reason": "exact" },
-      { "id": "invoice.cancel.button", "decl": "InvoiceNewView", "reason": "exact" },
-      { "id": "invoice.save.button", "decl": "InvoiceNewView", "reason": "exact" },
-      { "id": "client.picker.search.field", "decl": "ClientPickerView", "reason": "exact" },
-      { "id": "client.picker.cell", "decl": "ClientPickerView", "reason": "exact" },
-      { "id": "client.picker.cancel.button", "decl": "ClientPickerView", "reason": "exact" },
-      { "id": "invoice.detail.amount.text", "decl": "InvoiceDetailView", "reason": "exact" },
-      { "id": "invoice.detail.client.text", "decl": "InvoiceDetailView", "reason": "exact" },
-      { "id": "invoice.detail.status.text", "decl": "InvoiceDetailView", "reason": "exact" },
-      { "id": "invoice.detail.item.cell", "decl": "InvoiceDetailView", "reason": "exact" },
-      { "id": "invoice.detail.back.button", "decl": "InvoiceDetailView", "reason": "exact" },
-      { "id": "invoice.detail.send.button", "decl": "InvoiceDetailView", "reason": "exact" },
-      { "id": "invoice.detail.edit.button", "decl": "InvoiceDetailView", "reason": "exact" }
+      {
+        "id": "login",
+        "decl": "LoginView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice_list",
+        "decl": "InvoiceListView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice_new",
+        "decl": "InvoiceNewView",
+        "reason": "exact"
+      },
+      {
+        "id": "client_picker",
+        "decl": "ClientPickerView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice_detail",
+        "decl": "InvoiceDetailView",
+        "reason": "exact"
+      },
+      {
+        "id": "gate.biometric_prompt",
+        "decl": "LoginView",
+        "reason": "exact"
+      },
+      {
+        "id": "gate.push_permission",
+        "decl": "LoginView",
+        "reason": "exact"
+      },
+      {
+        "id": "nav.invoices.tab",
+        "decl": "RootView",
+        "reason": "exact"
+      },
+      {
+        "id": "nav.clients.tab",
+        "decl": "RootView",
+        "reason": "exact"
+      },
+      {
+        "id": "nav.settings.tab",
+        "decl": "RootView",
+        "reason": "exact"
+      },
+      {
+        "id": "login.email.field",
+        "decl": "LoginView",
+        "reason": "exact"
+      },
+      {
+        "id": "login.password.field",
+        "decl": "LoginView",
+        "reason": "exact"
+      },
+      {
+        "id": "login.error.text",
+        "decl": "LoginView",
+        "reason": "exact"
+      },
+      {
+        "id": "login.submit.button",
+        "decl": "LoginView",
+        "reason": "exact"
+      },
+      {
+        "id": "login.biometric.button",
+        "decl": "LoginView",
+        "reason": "exact"
+      },
+      {
+        "id": "login.forgot.link",
+        "decl": "LoginView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.list.cell",
+        "decl": "InvoiceListView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.add.button",
+        "decl": "InvoiceListView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.filter.button",
+        "decl": "FilterButtonRepresentable",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.amount.field",
+        "decl": "InvoiceNewView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.client.picker",
+        "decl": "InvoiceNewView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.due.picker",
+        "decl": "InvoiceNewView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.note.field",
+        "decl": "InvoiceNewView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.cancel.button",
+        "decl": "InvoiceNewView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.save.button",
+        "decl": "InvoiceNewView",
+        "reason": "exact"
+      },
+      {
+        "id": "client.picker.search.field",
+        "decl": "ClientPickerView",
+        "reason": "exact"
+      },
+      {
+        "id": "client.picker.cell",
+        "decl": "ClientPickerView",
+        "reason": "exact"
+      },
+      {
+        "id": "client.picker.cancel.button",
+        "decl": "ClientPickerView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.detail.amount.text",
+        "decl": "InvoiceDetailView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.detail.client.text",
+        "decl": "InvoiceDetailView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.detail.status.text",
+        "decl": "InvoiceDetailView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.detail.item.cell",
+        "decl": "InvoiceDetailView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.detail.back.button",
+        "decl": "InvoiceDetailView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.detail.send.button",
+        "decl": "InvoiceDetailView",
+        "reason": "exact"
+      },
+      {
+        "id": "invoice.detail.edit.button",
+        "decl": "InvoiceDetailView",
+        "reason": "exact"
+      }
     ],
     "rename_candidates": [],
     "conflicts": []
@@ -882,12 +1238,18 @@
   "fixtures_needed": [
     {
       "name": "logged_in",
-      "for_screens": ["invoice_list", "invoice_new", "invoice_detail"],
+      "for_screens": [
+        "invoice_list",
+        "invoice_new",
+        "invoice_detail"
+      ],
       "hint": "sign in with the sandbox test account through the app's real session API so router.needsLogin becomes false"
     },
     {
       "name": "one_draft_invoice",
-      "for_screens": ["invoice_detail"],
+      "for_screens": [
+        "invoice_detail"
+      ],
       "hint": "after logged_in, create one draft invoice through the app's store so the link can address it by invoice_id"
     }
   ],
@@ -929,7 +1291,7 @@
     {
       "kind": "gate_control",
       "ref": "InvoiceDetailView .confirmationDialog",
-      "text": "a native confirmation dialog sits behind invoice.detail.send.button (Send / Cancel); it is not in the pilot registry, so no gate item or controls were proposed this run - register gate.<name> with a cancel dismiss and a send control (intent_critical true), or leave it to a later capture session that records the label signature",
+      "text": "a native confirmation dialog sits behind invoice.detail.send.button (Send / Cancel). .confirmationDialog is always a native gate, so a real survey emits a role: gate item with gate.native: true and a registry_delta.gates_add[] entry; this worked example carries only ids already in the pilot registry, which has no such gate - register gate.<name> with its dismiss and an explicit intent_critical on the confirm control (01 R7, issue #24)",
       "default": "not registered this run"
     },
     {
@@ -953,7 +1315,7 @@
     {
       "kind": "flags_missing",
       "ref": null,
-      "text": "no project file was found under the source root, so -D APP_MAP_DEBUG could not be confirmed for the Invoices module; add it to the Debug OTHER_SWIFT_FLAGS of every module holding wiring, fixtures or the router mapping (D0)",
+      "text": "this is a generated-project layout (project.yml / Project.swift / SwiftPM), so -D APP_MAP_DEBUG could not be confirmed by grepping a checked-in pbxproj; add it to the Debug OTHER_SWIFT_FLAGS of every module holding wiring, fixtures or the probe (01 \u00a72)",
       "default": "not edited; reported"
     },
     {

@@ -12,7 +12,8 @@ never written into source — the plan carries the constant the skill filled aft
 
 Deterministic, from the type name of `marker_owner`:
 
-1. Strip one trailing suffix from `ViewController | VC | Controller | View | Screen | Page`.
+1. Strip one trailing suffix, trying them longest first so `InvoiceListViewController` loses `ViewController`
+   rather than `Controller`: `ViewController`, `Controller`, `Screen`, `View`, `Page`, `VC`.
 2. Split CamelCase into lowercase tokens.
 3. If the first token is one of `new, edit, create, add, choose, select, pick` and there are two or more tokens, move it
    to the end (`NewInvoice` → `invoice_new`, `EditClient` → `client_edit`). `Picker`, `Sheet` and `Filter` tokens stay

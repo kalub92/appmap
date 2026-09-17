@@ -13,7 +13,7 @@ tools/app-map-mcp/bin/app-map export --check
 ```
 
 `--src` extends the default scan roots (`instrumentation/ios` and `ios` under the repo root); the report names every
-root scanned. `--instrumented ios` makes a screen whose marker constant is referenced nowhere an error instead of a
+root scanned. `--instrumented ios` makes a source tree that references NO marker at all fail per screen, instead of raising the single "not instrumented yet" warning; a tree that references some already errors per missing screen. It is a
 warning. `--json` prints `{ ok, issues: [{ rule, severity, message, platform?, file?, line? }] }`; `file` is
 repo-relative, and only `severity: error` counts against the exit criteria.
 
