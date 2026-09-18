@@ -78,7 +78,7 @@ The above is for working **on** app-map. To use it **in** an app, install the pa
 
 ```sh
 cd path/to/your-app
-npm i -D @kalub92/app-map        # the MCP server, the CLI and the templates
+npm i -D @gurucaleb/app-map        # the MCP server, the CLI and the templates
 npx app-map init                 # writes the map skeleton, skills, agents, hooks and MCP config
 ```
 

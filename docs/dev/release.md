@@ -1,6 +1,6 @@
-# Releasing `@kalub92/app-map`
+# Releasing `@gurucaleb/app-map`
 
-The package in `tools/app-map-mcp/` is what an app repository installs (`npm i -D @kalub92/app-map`)
+The package in `tools/app-map-mcp/` is what an app repository installs (`npm i -D @gurucaleb/app-map`)
 to get the MCP server, the `app-map` CLI and the templates `app-map init` scaffolds. This is how a
 version of it reaches a consumer, and what has to move together.
 

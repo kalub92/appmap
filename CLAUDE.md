@@ -139,8 +139,8 @@ the tree is empty, and `compile_recipe` when a new task succeeds. Never sleep be
 
 ## Installing app-map in another repository
 
-The package in `tools/app-map-mcp/` publishes as `@kalub92/app-map`. An app repo runs
-`npm i -D @kalub92/app-map` then `npx app-map init`, which scaffolds the map skeleton, the skills, the
+The package in `tools/app-map-mcp/` publishes as `@gurucaleb/app-map`. An app repo runs
+`npm i -D @gurucaleb/app-map` then `npx app-map init`, which scaffolds the map skeleton, the skills, the
 agents, the hooks, `.mcp.json`, `.claude/settings.json`, `scripts/app-map/` and `app-map.config.json`
 (the per-repo paths `lint-ids` cannot guess: app source roots and the generated constants file, read by
 `src/repo-config.ts`). `init` merges rather than replaces, and reports a conflict instead of overwriting a

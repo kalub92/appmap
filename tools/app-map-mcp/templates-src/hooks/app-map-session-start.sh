@@ -1,7 +1,7 @@
 #!/bin/sh
 # .claude/hooks/app-map-session-start.sh — SessionStart hook (05 §3); also wired to PreCompact.
 #
-# Written by `app-map init` for a repo that installs @kalub92/app-map as a devDependency. Reads the
+# Written by `app-map init` for a repo that installs @gurucaleb/app-map as a devDependency. Reads the
 # hook payload on stdin, runs `app-map summary --max-tokens 600 --hook-json`, and prints
 #   {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"<summary + preamble>"}}
 # Never fails the hook: on any error it injects a one-line "app-map is unavailable" note and exits 0.
@@ -57,7 +57,7 @@ if [ "$status" = ok ] && [ -n "$envelope" ]; then
   exit 0
 fi
 
-context="app-map is unavailable in this session (app-map summary: $status). Run: npm install (the repo needs the @kalub92/app-map devDependency). Until then drive the simulator without the map and do not call mcp__app-map__* tools."
+context="app-map is unavailable in this session (app-map summary: $status). Run: npm install (the repo needs the @gurucaleb/app-map devDependency). Until then drive the simulator without the map and do not call mcp__app-map__* tools."
 if command -v node >/dev/null 2>&1; then
   printf '%s' "$context" | node -e '
 let s = "";
