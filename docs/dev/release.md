@@ -35,12 +35,17 @@ an `init` that half-scaffolds.
    exactly which build was approved (07 §6).
 3. Verify the tarball rather than trusting `files`:
    ```sh
-   npm pack --dry-run --prefix tools/app-map-mcp
+   npm pack --dry-run ./tools/app-map-mcp
    ```
+   Note the folder is a **positional argument, not `--prefix`**. `npm ci`, `npm test` and
+   `npm run` all honour `--prefix`, but `npm pack` and `npm publish` do not: they read
+   `package.json` from the current directory (or from a folder given positionally) and
+   `--prefix` leaves them looking at the repository root, which has no `package.json`. The
+   symptom is `ENOENT: no such file or directory, open '<repo root>/package.json'`.
    Check that `templates/.claude/skills/app-instrument/`, `templates/app-map/schema/`,
    `templates/hooks/` and `scripts/gen-ids` are all in the listing. `prepack` builds them, so a
    `--dry-run` from a clean checkout is the honest test.
-4. Publish: `npm publish --prefix tools/app-map-mcp` (the package is `publishConfig.access: public`;
+4. Publish: `npm publish ./tools/app-map-mcp` (positional, for the reason in step 3; the package is `publishConfig.access: public`;
    `license` is still `UNLICENSED`, which is a deliberate hole for the owner to decide before a
    public publish).
 5. **Tag the repository with the same version**, because the Swift half is consumed from git:
