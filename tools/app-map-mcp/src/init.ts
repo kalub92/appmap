@@ -2,7 +2,7 @@
  * [D2] `app-map init` — scaffold an app repository so a Claude Code session there has the map,
  * the skills, the instrumentation agents, the hooks and the MCP servers (01 R1, 05 §2–§5.1).
  *
- * The package is installed in the app repo as a devDependency (`npm i -D @kalub92/app-map`), so
+ * The package is installed in the app repo as a devDependency (`npm i -D @gurucaleb/app-map`), so
  * everything this writes addresses the CLI as `npx app-map …`, which resolves the local bin with
  * no network. Nothing it writes points back into the app-map repository.
  *
@@ -35,7 +35,7 @@ import { canonicalYaml } from './yaml/canonical.ts';
 import { CONFIG_FILE, type RepoConfig } from './repo-config.ts';
 
 /** The npm package name the scaffolded files refer to (`.mcp.json`, the hooks' npx fallback). */
-export const PACKAGE_NAME = '@kalub92/app-map';
+export const PACKAGE_NAME = '@gurucaleb/app-map';
 /** Where the installed server lives in the app repo, for `.mcp.json` and the allowlist. */
 export const SERVER_ENTRY = `node_modules/${PACKAGE_NAME}/dist/index.js`;
 
