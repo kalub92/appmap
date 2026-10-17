@@ -18,6 +18,17 @@ updates:
       # one PR for the routine patch/minor noise; majors stay individual so they get read
       app-map-mcp-minor:
         update-types: [minor, patch]
+    ignore:
+      # @types/node ships one release line per Node major, and its npm `latest` tag tracks the
+      # current LTS line, not the newest major. A major bump here does not follow the runtime —
+      # it describes a DIFFERENT runtime, and the compiler then green-lights calls that do not
+      # exist in production: under the 26.x typings `new DatabaseSync(':memory:').setAuthorizer()`
+      # compiles clean and throws `TypeError: ... is not a function` on Node 22, and
+      # `import { BoundSocket } from 'node:net'` fails at module load. src/store/db.ts imports
+      # exactly those modules. Keep this pinned to the major that `engines.node` and the
+      # workflow's `node-version` agree on, and lift the ignore only when both move together.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     labels:
       - dependencies
       - app-map
